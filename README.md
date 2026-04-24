@@ -99,7 +99,19 @@ Models can be deployed across multiple GPUs, run on CPU-only, or both — multip
 
 ## Quick Start
 
-The fastest way to try Modelship: run a quantized 7B chat model on a laptop — no GPU required. Copy-paste this block and you'll have an OpenAI-compatible API on `http://localhost:8000` in a few minutes (first run downloads ~4.5 GB of weights into `./models-cache`).
+### GPU (one command)
+
+If you have an NVIDIA GPU with 8, 16, or 24 GB of VRAM, run:
+
+```bash
+./easy-run.sh
+```
+
+It detects your VRAM, picks the matching preset from `config/examples/gpu-{8,16,24}gb.yaml`, and starts the stack via Docker Compose. See [docs/quickstart.md](docs/quickstart.md) for details.
+
+### CPU (no GPU required)
+
+The fastest way to try Modelship without a GPU: run a quantized 7B chat model on a laptop. Copy-paste this block and you'll have an OpenAI-compatible API on `http://localhost:8000` in a few minutes (first run downloads ~4.5 GB of weights into `./models-cache`).
 
 ```bash
 mkdir -p models-cache && cat > models.yaml <<'EOF'
@@ -143,9 +155,9 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
-### GPU (vLLM, Diffusers)
+### GPU (manual Docker)
 
-For high-throughput GPU inference, use the standard image and add `--gpus all`. You'll also need the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and an `HF_TOKEN` for gated models. Example `models.yaml` entries for vLLM, Diffusers, and multi-GPU setups live in [docs/model-configuration.md](docs/model-configuration.md); ready-to-run configs are in [config/examples/](config/examples/).
+`easy-run.sh` is the recommended path. To run the GPU image by hand instead, use the standard image and add `--gpus all`. You'll also need the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and an `HF_TOKEN` for gated models. Example `models.yaml` entries for vLLM, Diffusers, and multi-GPU setups live in [docs/model-configuration.md](docs/model-configuration.md); ready-to-run configs are in [config/examples/](config/examples/).
 
 ```bash
 docker run --rm --shm-size=8g --gpus all \
@@ -183,6 +195,7 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 
 ## Documentation
 
+- [Quick Start (GPU)](docs/quickstart.md) — one-command launcher with auto-detected VRAM preset
 - [Development](docs/development.md) — dev environment setup, building, and running locally
 - [Model Configuration](docs/model-configuration.md) — full `models.yaml` reference, GPU pinning, environment variables
 - [Architecture](docs/architecture.md) — system design, request lifecycle, plugin loading

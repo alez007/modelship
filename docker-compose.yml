@@ -1,0 +1,45 @@
+# Docker Compose bundle for running Modelship on a single NVIDIA GPU.
+#
+# Fastest path:
+#   ./easy-run.sh              # auto-detects VRAM and picks a config
+#
+# Manual path:
+#   cp config/examples/gpu-16gb.yaml config/models.yaml
+#   export HF_TOKEN=...        # only needed for gated models
+#   docker compose up
+#
+# Requirements:
+#   - Docker + Docker Compose v2
+#   - NVIDIA Container Toolkit (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+#
+# The container auto-syncs plugin extras from MSHIP_PLUGINS on startup. First run
+# downloads model weights into ./models-cache (persisted across restarts).
+
+services:
+  modelship:
+    image: ghcr.io/alez007/modelship:latest
+    container_name: modelship
+    shm_size: "8gb"
+    ports:
+      - "8000:8000"   # OpenAI-compatible API
+      - "8079:8079"   # Prometheus metrics
+      - "8265:8265"   # Ray dashboard
+    environment:
+      # Plugins required by the preset configs (Kokoro TTS). Add others comma-separated:
+      # e.g. MSHIP_PLUGINS=kokoroonnx,whispercpp
+      MSHIP_PLUGINS: "${MSHIP_PLUGINS:-kokoroonnx}"
+      # Number of GPUs Ray should register. 1 is correct for the preset configs.
+      RAY_HEAD_GPU_NUM: "${RAY_HEAD_GPU_NUM:-1}"
+      # Required only for gated HuggingFace models (most presets don't need this).
+      HF_TOKEN: "${HF_TOKEN:-}"
+    volumes:
+      - ./config/models.yaml:/modelship/config/models.yaml:ro
+      - ./models-cache:/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

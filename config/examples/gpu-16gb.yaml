@@ -1,0 +1,43 @@
+# Full AI stack tuned for a 16 GB NVIDIA GPU (e.g. RTX 4060 Ti 16GB, 4070 Ti Super, A4000).
+# Budget: 7B chat (~6 GB) + Whisper small (~2 GB) + TTS (~0.5 GB) + embeddings (~0.5 GB).
+# Plugins required: MSHIP_PLUGINS=kokoroonnx (or `uv sync --extra kokoroonnx`).
+
+models:
+  # Chat — 7B AWQ with tool calling and a generous context window.
+  - name: "llm"
+    model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    usecase: "generate"
+    loader: "vllm"
+    num_gpus: 0.55
+    vllm_engine_kwargs:
+      max_model_len: 16000
+      enable_auto_tool_choice: true
+      tool_call_parser: "hermes"
+
+  # TTS — Kokoro on GPU via ONNX.
+  - name: "kokoro"
+    model: "hexgrad/Kokoro-82M"
+    usecase: "tts"
+    loader: "custom"
+    plugin: "kokoroonnx"
+    num_gpus: 0.07
+    plugin_config:
+      onnx_provider: "CUDAExecutionProvider"
+
+  # STT — Whisper small (English + multilingual, ~240 M params).
+  - name: "whisper"
+    model: "openai/whisper-small"
+    usecase: "transcription"
+    loader: "vllm"
+    num_gpus: 0.15
+    vllm_engine_kwargs:
+      trust_remote_code: true
+
+  # Embeddings.
+  - name: "nomic-embed"
+    model: "nomic-ai/nomic-embed-text-v1.5"
+    usecase: "embed"
+    loader: "vllm"
+    num_gpus: 0.10
+    vllm_engine_kwargs:
+      trust_remote_code: true
