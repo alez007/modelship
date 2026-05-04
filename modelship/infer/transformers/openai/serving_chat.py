@@ -206,6 +206,7 @@ class OpenAIServingChat(OpenAIServing):
         *,
         include_usage: bool,
     ) -> AsyncGenerator[str, None]:
+        created_time = int(time.time())
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)  # type: ignore[arg-type]
 
         kwargs = {**self.config.pipeline_kwargs}
@@ -233,14 +234,14 @@ class OpenAIServingChat(OpenAIServing):
         accumulated: list[str] = []
         try:
             # Per OpenAI spec, the first delta carries `role` only.
-            yield self._delta_chunk(request_id, DeltaMessage(role="assistant"))
+            yield self._delta_chunk(request_id, DeltaMessage(role="assistant"), created_time)
 
             for text_chunk in streamer:
                 if not text_chunk:
                     continue
                 accumulated.append(text_chunk)
                 if tool_call_streamer is None:
-                    yield self._delta_chunk(request_id, DeltaMessage(content=text_chunk))
+                    yield self._delta_chunk(request_id, DeltaMessage(content=text_chunk), created_time)
                     await asyncio.sleep(0)
                     continue
                 # Re-parse the cumulative text and emit any new content / tool-call
@@ -248,13 +249,13 @@ class OpenAIServingChat(OpenAIServing):
                 # the client never sees a half-formed `<tool_call>` opening tag.
                 delta = tool_call_streamer.extract_streaming("".join(accumulated))
                 if delta is not None:
-                    yield self._delta_chunk(request_id, delta)
+                    yield self._delta_chunk(request_id, delta, created_time)
                 await asyncio.sleep(0)
 
             if tool_call_streamer is not None:
                 final = tool_call_streamer.finalize()
                 if final is not None:
-                    yield self._delta_chunk(request_id, final)
+                    yield self._delta_chunk(request_id, final, created_time)
                 parsed = tool_call_streamer.result
             else:
                 parsed = ParsedToolCalls("".join(accumulated), [])
@@ -274,7 +275,7 @@ class OpenAIServingChat(OpenAIServing):
                             finish_reason=finish_reason,
                         )
                     ],
-                    created=int(time.time()),
+                    created=created_time,
                 )
             )
 
@@ -290,7 +291,7 @@ class OpenAIServingChat(OpenAIServing):
                             completion_tokens=completion_tokens,
                             total_tokens=prompt_tokens + completion_tokens,
                         ),
-                        created=int(time.time()),
+                        created=created_time,
                     )
                 )
 
@@ -298,7 +299,7 @@ class OpenAIServingChat(OpenAIServing):
         finally:
             thread.join()
 
-    def _delta_chunk(self, request_id: str, delta: DeltaMessage) -> str:
+    def _delta_chunk(self, request_id: str, delta: DeltaMessage, created_time: int) -> str:
         return self._encode_chunk(
             ChatCompletionStreamResponse(
                 id=request_id,
@@ -306,7 +307,7 @@ class OpenAIServingChat(OpenAIServing):
                 choices=[
                     ChatCompletionResponseStreamChoice(index=0, delta=delta),
                 ],
-                created=int(time.time()),
+                created=created_time,
             )
         )
 
