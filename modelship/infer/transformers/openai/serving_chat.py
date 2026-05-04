@@ -24,7 +24,7 @@ from modelship.openai.protocol import (
     UsageInfo,
     create_error_response,
 )
-from modelship.openai.tool_calling import ParsedToolCalls, get_parser, resolve_tools_for_request
+from modelship.openai.tool_calling import ParsedToolCalls, ToolCallStreamer, get_parser, resolve_tools_for_request
 from modelship.utils import base_request_id
 
 logger = get_logger("infer.transformers.chat")
@@ -214,8 +214,10 @@ class OpenAIServingChat(OpenAIServing):
 
         if tools:
             prompt: Any = self._render_prompt(messages, tools)
+            tool_call_streamer: ToolCallStreamer | None = ToolCallStreamer(get_parser(self.config.tool_call_parser))
         else:
             prompt = messages
+            tool_call_streamer = None
 
         thread = Thread(
             target=self.pipeline,
@@ -231,55 +233,34 @@ class OpenAIServingChat(OpenAIServing):
         accumulated: list[str] = []
         try:
             # Per OpenAI spec, the first delta carries `role` only.
-            yield self._encode_chunk(
-                ChatCompletionStreamResponse(
-                    id=request_id,
-                    model=self.model_name,
-                    choices=[
-                        ChatCompletionResponseStreamChoice(
-                            index=0,
-                            delta=DeltaMessage(role="assistant"),
-                        )
-                    ],
-                    created=int(time.time()),
-                )
-            )
+            yield self._delta_chunk(request_id, DeltaMessage(role="assistant"))
 
             for text_chunk in streamer:
                 if not text_chunk:
                     continue
                 accumulated.append(text_chunk)
-                # When tools are in play we cannot stream content incrementally
-                # without risking emitting fragments of a `<tool_call>` block as
-                # if they were assistant prose. Buffer until generation is done
-                # and emit the resolved shape as a single delta below.
-                if tools:
+                if tool_call_streamer is None:
+                    yield self._delta_chunk(request_id, DeltaMessage(content=text_chunk))
+                    await asyncio.sleep(0)
                     continue
-                yield self._encode_chunk(
-                    ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=self.model_name,
-                        choices=[
-                            ChatCompletionResponseStreamChoice(
-                                index=0,
-                                delta=DeltaMessage(content=text_chunk),
-                            )
-                        ],
-                        created=int(time.time()),
-                    )
-                )
+                # Re-parse the cumulative text and emit any new content / tool-call
+                # fragments. Bounded held-back tail (length of the start marker) so
+                # the client never sees a half-formed `<tool_call>` opening tag.
+                delta = tool_call_streamer.extract_streaming("".join(accumulated))
+                if delta is not None:
+                    yield self._delta_chunk(request_id, delta)
                 await asyncio.sleep(0)
+
+            if tool_call_streamer is not None:
+                final = tool_call_streamer.finalize()
+                if final is not None:
+                    yield self._delta_chunk(request_id, final)
+                parsed = tool_call_streamer.result
+            else:
+                parsed = ParsedToolCalls("".join(accumulated), [])
 
             completion_text = "".join(accumulated)
             completion_tokens = len(self.tokenizer.encode(completion_text, add_special_tokens=False))
-
-            if tools:
-                parsed = self._parse_tool_calls(completion_text)
-                async for chunk in self._emit_buffered_final_delta(request_id, parsed):
-                    yield chunk
-            else:
-                parsed = ParsedToolCalls(completion_text, [])
-
             finish_reason = self._finish_reason(parsed, completion_tokens, max_tokens)
 
             yield self._encode_chunk(
@@ -317,46 +298,17 @@ class OpenAIServingChat(OpenAIServing):
         finally:
             thread.join()
 
-    async def _emit_buffered_final_delta(self, request_id: str, parsed: ParsedToolCalls) -> AsyncGenerator[str, None]:
-        if parsed.has_tool_calls:
-            from modelship.openai.protocol import DeltaFunctionCall, DeltaToolCall
-
-            deltas = [
-                DeltaToolCall(
-                    index=i,
-                    id=tc.id,
-                    type="function",
-                    function=DeltaFunctionCall(name=tc.function.name, arguments=tc.function.arguments),
-                )
-                for i, tc in enumerate(parsed.tool_calls)
-            ]
-            yield self._encode_chunk(
-                ChatCompletionStreamResponse(
-                    id=request_id,
-                    model=self.model_name,
-                    choices=[
-                        ChatCompletionResponseStreamChoice(
-                            index=0,
-                            delta=DeltaMessage(tool_calls=deltas),
-                        )
-                    ],
-                    created=int(time.time()),
-                )
+    def _delta_chunk(self, request_id: str, delta: DeltaMessage) -> str:
+        return self._encode_chunk(
+            ChatCompletionStreamResponse(
+                id=request_id,
+                model=self.model_name,
+                choices=[
+                    ChatCompletionResponseStreamChoice(index=0, delta=delta),
+                ],
+                created=int(time.time()),
             )
-        elif parsed.content:
-            yield self._encode_chunk(
-                ChatCompletionStreamResponse(
-                    id=request_id,
-                    model=self.model_name,
-                    choices=[
-                        ChatCompletionResponseStreamChoice(
-                            index=0,
-                            delta=DeltaMessage(content=parsed.content),
-                        )
-                    ],
-                    created=int(time.time()),
-                )
-            )
+        )
 
     @staticmethod
     def _encode_chunk(chunk: ChatCompletionStreamResponse) -> str:

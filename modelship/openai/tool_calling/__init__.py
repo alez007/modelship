@@ -8,12 +8,13 @@ chat handler) bypass it.
 """
 
 from modelship.openai.tool_calling.input import resolve_tools_for_request
-from modelship.openai.tool_calling.parsers import ParsedToolCalls, ToolCallParser
+from modelship.openai.tool_calling.parsers import ParsedToolCalls, ToolCallParser, ToolCallStreamer
 from modelship.openai.tool_calling.registry import available_parsers, get_parser, register_parser
 
 __all__ = [
     "ParsedToolCalls",
     "ToolCallParser",
+    "ToolCallStreamer",
     "available_parsers",
     "get_parser",
     "register_parser",

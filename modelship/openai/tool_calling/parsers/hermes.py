@@ -8,42 +8,37 @@ tags ``<tool_call>`` / ``</tool_call>`` around a JSON object of the shape
 
 from __future__ import annotations
 
-import json
 import re
 
-from modelship.openai.protocol import FunctionCall, ToolCall
-from modelship.openai.tool_calling.parsers.base import ParsedToolCalls, ToolCallParser
-
-_TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+from modelship.openai.tool_calling.parsers.base import ToolCallParser
 
 
 class HermesToolCallParser(ToolCallParser):
     name = "hermes"
+    start_marker = "<tool_call>"
+    end_marker = "</tool_call>"
 
-    def parse(self, text: str) -> ParsedToolCalls:
-        matches = list(_TOOL_CALL_RE.finditer(text))
-        if not matches:
-            return ParsedToolCalls(content=text, tool_calls=[])
+    _NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"')
+    _ARGS_RE = re.compile(r'"arguments"\s*:\s*')
 
-        tool_calls: list[ToolCall] = []
-        for m in matches:
-            try:
-                payload = json.loads(m.group(1).strip())
-            except json.JSONDecodeError:
-                # Malformed block — leave the text in residual, skip this call.
-                continue
-            if not isinstance(payload, dict):
-                continue
-            name = payload.get("name")
-            if not isinstance(name, str) or not name:
-                continue
-            arguments = payload.get("arguments", {})
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments)
-            tool_calls.append(ToolCall(function=FunctionCall(name=name, arguments=arguments)))
+    def extract_partial_name(self, partial_payload: str) -> str | None:
+        m = self._NAME_RE.search(partial_payload)
+        return m.group(1) if m else None
 
-        if not tool_calls:
-            return ParsedToolCalls(content=text, tool_calls=[])
-
-        residual = _TOOL_CALL_RE.sub("", text).strip()
-        return ParsedToolCalls(content=residual or None, tool_calls=tool_calls)
+    def extract_partial_args(self, partial_payload: str) -> str | None:
+        m = self._ARGS_RE.search(partial_payload)
+        if m is None:
+            return None
+        args = partial_payload[m.end() :].rstrip()
+        if args.endswith("}"):
+            # The block envelope is `{"name":"x","arguments":<args>}`. The
+            # closing brace of the envelope arrives in the byte stream before
+            # `</tool_call>` does, so we cannot tell whether any given
+            # trailing `}` belongs to the args object or to the envelope.
+            # Withholding one trailing `}` keeps the args stream well-formed:
+            # if the model goes on to emit more args bytes, the held brace is
+            # recovered on the next pass; if instead it goes on to emit
+            # `</tool_call>`, the held brace was the envelope closer and
+            # discarding it was correct.
+            args = args[:-1].rstrip()
+        return args or None

@@ -1,3 +1,4 @@
+import json
 import subprocess
 import time
 
@@ -247,6 +248,146 @@ def test_tool_calling_transformers_loader(client):
     assert tool_calls[0].function.name == "get_weather"
     assert "Paris" in tool_calls[0].function.arguments
     assert completion.choices[0].finish_reason == "tool_calls"
+
+
+def _collect_streaming_tool_call(stream) -> dict:
+    """Drain an OpenAI streaming response and rebuild the assistant message.
+
+    Returns a dict with: ``content`` (concatenated content deltas),
+    ``tool_calls`` (per-index dict of ``{id, name, arguments}`` — arguments
+    concatenated across all fragments), ``finish_reason``, ``name_deltas``
+    and ``args_deltas`` (counts, used to assert that streaming was actually
+    incremental rather than a single buffered emission).
+    """
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict] = {}
+    finish_reason: str | None = None
+    name_deltas = 0
+    args_deltas = 0
+    chunks_with_tool_calls = 0
+
+    for chunk in stream:
+        choice = chunk.choices[0]
+        delta = choice.delta
+        if delta.content:
+            content_parts.append(delta.content)
+        if delta.tool_calls:
+            chunks_with_tool_calls += 1
+            for tc in delta.tool_calls:
+                slot = tool_calls.setdefault(tc.index, {"id": None, "name": None, "arguments": ""})
+                if tc.id is not None:
+                    slot["id"] = tc.id
+                if tc.function and tc.function.name:
+                    slot["name"] = tc.function.name
+                    name_deltas += 1
+                if tc.function and tc.function.arguments:
+                    slot["arguments"] += tc.function.arguments
+                    args_deltas += 1
+        if choice.finish_reason is not None:
+            finish_reason = choice.finish_reason
+
+    return {
+        "content": "".join(content_parts),
+        "tool_calls": tool_calls,
+        "finish_reason": finish_reason,
+        "name_deltas": name_deltas,
+        "args_deltas": args_deltas,
+        "chunks_with_tool_calls": chunks_with_tool_calls,
+    }
+
+
+@pytest.mark.integration
+def test_tool_calling_streaming_transformers_loader(client):
+    """Stream a tool call through the transformers loader and verify the
+    delta sequence matches the OpenAI streaming contract.
+
+    Asserts:
+    - the function name arrives in exactly one delta;
+    - arguments arrive across multiple deltas (incremental, not buffered);
+    - concatenated arguments form valid JSON containing the expected key;
+    - the final delta carries ``finish_reason="tool_calls"``.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    stream = client.chat.completions.create(
+        model="chat-transformers",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=tools,
+        tool_choice="auto",
+        max_tokens=128,
+        stream=True,
+    )
+
+    collected = _collect_streaming_tool_call(stream)
+
+    assert collected["tool_calls"], f"expected at least one streamed tool call; got content={collected['content']!r}"
+    call_0 = collected["tool_calls"][0]
+    assert call_0["id"], "expected an id on the first tool-call delta"
+    assert call_0["name"] == "get_weather"
+    # Name must be sent exactly once (not on every delta).
+    assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
+    # Arguments must arrive incrementally across multiple deltas — that's the
+    # whole point of switching from block-level buffering to vLLM-style
+    # diff streaming. Exact count depends on the model, but it must be > 1.
+    assert collected["args_deltas"] >= 2, (
+        f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
+    )
+    # Concatenated args must form valid JSON containing the city.
+    parsed_args = json.loads(call_0["arguments"])
+    assert parsed_args.get("city")
+    assert "Paris" in parsed_args["city"]
+    assert collected["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.integration
+def test_tool_calling_streaming_vllm_loader(client):
+    """Smoke-test that vLLM streaming + tool calling still works through
+    the gateway. vLLM emits its own per-token deltas; we only verify that
+    the gateway forwards them and that the final assistant message rebuilds
+    correctly.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    stream = client.chat.completions.create(
+        model="chat-capable",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=tools,
+        tool_choice="required",
+        stream=True,
+    )
+
+    collected = _collect_streaming_tool_call(stream)
+
+    assert collected["tool_calls"], "vLLM should have streamed at least one tool call"
+    call_0 = collected["tool_calls"][0]
+    assert call_0["name"] == "get_weather"
+    parsed_args = json.loads(call_0["arguments"])
+    assert "Paris" in parsed_args.get("city", "")
+    assert collected["finish_reason"] == "tool_calls"
 
 
 @pytest.mark.integration
