@@ -232,6 +232,7 @@ class OpenAIServingChat(OpenAIServing):
         thread.start()
 
         accumulated: list[str] = []
+        accumulated_str = ""
         try:
             # Per OpenAI spec, the first delta carries `role` only.
             yield self._delta_chunk(request_id, DeltaMessage(role="assistant"), created_time)
@@ -240,6 +241,7 @@ class OpenAIServingChat(OpenAIServing):
                 if not text_chunk:
                     continue
                 accumulated.append(text_chunk)
+                accumulated_str += text_chunk
                 if tool_call_streamer is None:
                     yield self._delta_chunk(request_id, DeltaMessage(content=text_chunk), created_time)
                     await asyncio.sleep(0)
@@ -247,7 +249,7 @@ class OpenAIServingChat(OpenAIServing):
                 # Re-parse the cumulative text and emit any new content / tool-call
                 # fragments. Bounded held-back tail (length of the start marker) so
                 # the client never sees a half-formed `<tool_call>` opening tag.
-                delta = tool_call_streamer.extract_streaming("".join(accumulated))
+                delta = tool_call_streamer.extract_streaming(accumulated_str)
                 if delta is not None:
                     yield self._delta_chunk(request_id, delta, created_time)
                 await asyncio.sleep(0)
@@ -258,10 +260,9 @@ class OpenAIServingChat(OpenAIServing):
                     yield self._delta_chunk(request_id, final, created_time)
                 parsed = tool_call_streamer.result
             else:
-                parsed = ParsedToolCalls("".join(accumulated), [])
+                parsed = ParsedToolCalls(accumulated_str, [])
 
-            completion_text = "".join(accumulated)
-            completion_tokens = len(self.tokenizer.encode(completion_text, add_special_tokens=False))
+            completion_tokens = len(self.tokenizer.encode(accumulated_str, add_special_tokens=False))
             finish_reason = self._finish_reason(parsed, completion_tokens, max_tokens)
 
             yield self._encode_chunk(
