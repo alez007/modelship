@@ -98,6 +98,7 @@ class ToolCallStreamer:
       and id deltas have been emitted.
     - ``_sent_args`` per tool index — number of arguments chars already
       shipped (the suffix-diff cursor).
+    - ``_finalized_indices`` — set of block indices that have been finalized.
     - ``_finalized_calls`` — :class:`ToolCall` objects accumulated for blocks
       that have closed, used to populate :attr:`result` for the non-streaming
       path and for the final ``finish_reason``.
@@ -111,6 +112,7 @@ class ToolCallStreamer:
         self._sent_name: list[bool] = []
         self._sent_id: list[str] = []
         self._sent_args: list[str] = []
+        self._finalized_indices: set[int] = set()
         self._finalized_calls: list[ToolCall] = []
         self._content_parts_len = 0  # bookkeeping for `result.content`
         self._last_text = ""
@@ -192,8 +194,12 @@ class ToolCallStreamer:
             if not self._sent_name[i]:
                 name = self._parser.extract_partial_name(payload)
                 if name is None:
-                    # Per OpenAI streaming convention the name is sent first;
-                    # don't advance to a later block until this one has one.
+                    if is_complete:
+                        # This block is finished but has no extractable name (malformed).
+                        # Skip it so we can potentially process later blocks.
+                        continue
+                    # Mid-stream and no name yet; per OpenAI convention we don't
+                    # advance to later blocks until the current one has a name.
                     break
                 tool_id = f"chatcmpl-tool-{random_uuid()}"
                 self._sent_name[i] = True
@@ -218,7 +224,8 @@ class ToolCallStreamer:
                     )
                 )
 
-            if is_complete and i == len(self._finalized_calls) and self._sent_name[i]:
+            if is_complete and i not in self._finalized_indices and self._sent_name[i]:
+                self._finalized_indices.add(i)
                 self._finalized_calls.append(
                     ToolCall(
                         id=self._sent_id[i],

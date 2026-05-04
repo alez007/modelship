@@ -234,6 +234,16 @@ class TestToolCallStreamer:
         streamer, _ = self._feed([text])
         assert streamer.result.tool_calls == []
 
+    def test_skipped_malformed_block_does_not_block_subsequent_finalization(self):
+        # If the first tool-call block is malformed (missing name), it should be
+        # skipped, but the SECOND block (if valid) should still be finalized.
+        text = (
+            '<tool_call>{"arguments": {"skipped": true}}</tool_call>'
+            '<tool_call>{"name": "valid", "arguments": {"x": 1}}</tool_call>'
+        )
+        streamer, _ = self._feed([text])
+        assert [tc.function.name for tc in streamer.result.tool_calls] == ["valid"]
+
 
 class TestResolveToolsForRequest:
     tools: ClassVar = [
