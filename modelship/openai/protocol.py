@@ -180,7 +180,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
     temperature: float | None = None
     top_p: float | None = None
     tools: list[dict[str, Any]] | None = None
-    tool_choice: str | dict[str, Any] | None = "none"
+    tool_choice: str | dict[str, Any] | None = None
     reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     parallel_tool_calls: bool | None = True
     user: str | None = None

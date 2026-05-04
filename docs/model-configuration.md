@@ -219,6 +219,7 @@ The `transformers` loader uses PyTorch with HuggingFace Transformers. Supports c
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the model constructor |
 | `pipeline_kwargs` | object | `{}` | Extra keyword arguments passed to the pipeline at inference time |
+| `tool_call_parser` | string | `hermes` | Parser used to turn raw model output into OpenAI `tool_calls`. Currently supported: `hermes` (Hermes-2-Pro / Qwen2.5-Instruct / many community fine-tunes that emit `<tool_call>{...}</tool_call>` markers). |
 
 ### Chat / Text Generation (CPU)
 
@@ -231,6 +232,25 @@ models:
     num_gpus: 0
     transformers_config:
       device: "cpu"
+```
+
+### Chat with Tool Calling (CPU)
+
+The transformers loader renders `tools` into the prompt via the model's chat
+template and parses the output back into OpenAI `tool_calls`. The model must
+have been trained on a Hermes-style tool format (Qwen2.5-Instruct, Hermes-2,
+many community fine-tunes); the parser is selected via `tool_call_parser`.
+
+```yaml
+models:
+  - name: qwen-tools
+    model: Qwen/Qwen2.5-0.5B-Instruct
+    usecase: generate
+    loader: transformers
+    num_cpus: 2
+    transformers_config:
+      device: "cpu"
+      tool_call_parser: hermes  # this is the default; shown for clarity
 ```
 
 ### Speech-to-Text (CPU)
