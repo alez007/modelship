@@ -114,7 +114,6 @@ class ToolCallStreamer:
         self._sent_args: list[str] = []
         self._finalized_indices: set[int] = set()
         self._finalized_calls: list[ToolCall] = []
-        self._content_parts_len = 0  # bookkeeping for `result.content`
         self._last_text = ""
 
     def extract_streaming(self, current_text: str) -> DeltaMessage | None:
