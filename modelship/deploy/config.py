@@ -10,11 +10,6 @@ from modelship.logging import get_logger
 from modelship.openai.tool_calling.registry import available_parsers
 from modelship.openai.tool_calling.utils import detect_tool_parser
 
-# Tool-call formats `detect_tool_parser` can identify but for which a parser
-# may or may not yet be registered. Used to differentiate "format unknown" from
-# "format known but parser not implemented yet" in the auto-detect warning.
-_KNOWN_TOOL_FORMATS = frozenset({"hermes", "mistral", "llama3_json"})
-
 # Loaders that emit raw model text and rely on the tool_calling registry to
 # parse tool calls. vLLM and llama.cpp have native tool-call handling and are
 # excluded; diffusers/custom don't do chat completion through this path.
@@ -122,12 +117,10 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             )
             continue
         if detected not in registered:
-            known_note = "" if detected in _KNOWN_TOOL_FORMATS else " (format not in known list)"
             logger.warning(
-                "Model '%s' uses tool format %r%s but no parser is registered; tool calling disabled.",
+                "Model '%s' uses tool format %r but no parser is registered; tool calling disabled.",
                 cfg.name,
                 detected,
-                known_note,
             )
             continue
         cfg._resolved_tool_call_parser = detected

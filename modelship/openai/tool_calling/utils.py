@@ -33,9 +33,9 @@ def detect_tool_parser(model_path: str | Path) -> str | None:
         return None
 
     try:
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.warning("Failed to load %s for tool detection: %s", config_path, e)
         return None
 
