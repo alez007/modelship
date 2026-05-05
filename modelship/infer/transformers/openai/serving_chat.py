@@ -39,17 +39,22 @@ class OpenAIServingChat(OpenAIServing):
         model_name: str,
         config: TransformersConfig,
         capabilities: TransformersCapabilities,
+        tool_call_parser: str | None,
     ):
         self.pipeline = pipeline
         self.model_name = model_name
         self.config = config
         self.capabilities = capabilities
+        self.tool_call_parser = tool_call_parser
         assert pipeline.tokenizer is not None, "text-generation pipeline must have a tokenizer"
         self.tokenizer: PreTrainedTokenizerBase = pipeline.tokenizer
         self._lock = asyncio.Lock()
         # Validate the configured parser at startup so misconfiguration surfaces
-        # before the first request rather than mid-generation.
-        get_parser(self.config.tool_call_parser)
+        # before the first request rather than mid-generation. None means
+        # auto-detection found no usable parser; tool calls in requests will be
+        # dropped with a warning at request time.
+        if tool_call_parser is not None:
+            get_parser(tool_call_parser)
 
     async def warmup(self) -> None:
         logger.info("Warming up chat model: %s", self.model_name)
@@ -81,6 +86,14 @@ class OpenAIServingChat(OpenAIServing):
             return create_error_response(e)
 
         tools = resolve_tools_for_request(request.tools, request.tool_choice)
+        if tools and self.tool_call_parser is None:
+            logger.warning(
+                "chat request %s asks for %d tool(s) but model %r has no usable tool-call parser; ignoring tools",
+                request_id,
+                len(tools),
+                self.model_name,
+            )
+            tools = None
 
         max_tokens = request.max_tokens
         if max_tokens is None and request.max_completion_tokens is not None:
@@ -137,7 +150,9 @@ class OpenAIServingChat(OpenAIServing):
         return response
 
     def _parse_tool_calls(self, text: str) -> ParsedToolCalls:
-        return get_parser(self.config.tool_call_parser).parse(text)
+        parser_name = self.tool_call_parser
+        assert parser_name is not None  # guarded by the tools-drop in create_chat_completion
+        return get_parser(parser_name).parse(text)
 
     @staticmethod
     def _finish_reason(parsed: ParsedToolCalls, completion_tokens: int, max_tokens: int | None) -> str:
@@ -214,8 +229,10 @@ class OpenAIServingChat(OpenAIServing):
             kwargs["max_new_tokens"] = max_tokens
 
         if tools:
+            parser_name = self.tool_call_parser
+            assert parser_name is not None  # guarded by the tools-drop in create_chat_completion
             prompt: Any = self._render_prompt(messages, tools)
-            tool_call_streamer: ToolCallStreamer | None = ToolCallStreamer(get_parser(self.config.tool_call_parser))
+            tool_call_streamer: ToolCallStreamer | None = ToolCallStreamer(get_parser(parser_name))
         else:
             prompt = messages
             tool_call_streamer = None

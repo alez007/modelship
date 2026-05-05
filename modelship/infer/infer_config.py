@@ -67,7 +67,7 @@ class TransformersConfig(BaseModel):
     trust_remote_code: bool = False
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
     pipeline_kwargs: dict[str, Any] = Field(default_factory=dict)
-    tool_call_parser: str = "hermes"
+    tool_call_parser: str | None = None
 
 
 class DiffusersConfig(BaseModel):
@@ -100,6 +100,7 @@ class ModelshipModelConfig(BaseModel):
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
 
     _resolved_path: str | None = PrivateAttr(default=None)
+    _resolved_tool_call_parser: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def check_custom_requires_plugin(self):

@@ -46,13 +46,14 @@ class _FakePipeline:
         return [{"generated_text": self.generated_text}]
 
 
-def _make_serving(generated: str) -> tuple[OpenAIServingChat, _FakePipeline]:
+def _make_serving(generated: str, tool_call_parser: str | None = "hermes") -> tuple[OpenAIServingChat, _FakePipeline]:
     pipe = _FakePipeline(generated)
     serving = OpenAIServingChat(
         pipeline=pipe,  # type: ignore[arg-type]
         model_name="test-model",
         config=TransformersConfig(),
         capabilities=TransformersCapabilities(supports_image=False, supports_audio=False),
+        tool_call_parser=tool_call_parser,
     )
     return serving, pipe
 
@@ -158,6 +159,7 @@ async def test_unknown_parser_at_init_raises():
         OpenAIServingChat(
             pipeline=pipe,  # type: ignore[arg-type]
             model_name="test-model",
-            config=TransformersConfig(tool_call_parser="not-a-real-parser"),
+            config=TransformersConfig(),
             capabilities=TransformersCapabilities(supports_image=False, supports_audio=False),
+            tool_call_parser="not-a-real-parser",
         )
