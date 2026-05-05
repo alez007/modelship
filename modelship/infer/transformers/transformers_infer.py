@@ -84,7 +84,10 @@ class TransformersInfer(BaseInfer):
             capabilities = TransformersCapabilities.detect(pipe)
             if capabilities.supports_image:
                 logger.info("Multimodal (vision) capability detected for model: %s", self.model_config.name)
-            self.serving_chat = OpenAIServingChat(pipe, self.model_config.name, self.config, capabilities)
+            tool_call_parser = self.config.tool_call_parser or self.model_config._resolved_tool_call_parser
+            self.serving_chat = OpenAIServingChat(
+                pipe, self.model_config.name, self.config, capabilities, tool_call_parser
+            )
             self._serving.append(self.serving_chat)
 
         elif usecase is ModelUsecase.embed:
