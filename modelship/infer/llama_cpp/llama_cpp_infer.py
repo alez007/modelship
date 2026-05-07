@@ -9,6 +9,7 @@ from modelship.infer.infer_config import LlamaCppConfig, ModelshipModelConfig, M
 from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.openai.serving_chat import OpenAIServingChat
 from modelship.infer.llama_cpp.openai.serving_embedding import OpenAIServingEmbedding
+from modelship.infer.llama_cpp.utils import build_tool_call_renderer
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -94,7 +95,20 @@ class LlamaCppInfer(BaseInfer):
             logger.info("Multimodal (vision) capability detected for model: %s", self.model_config.name)
 
         if self.model_config.usecase == ModelUsecase.generate:
-            self.serving_chat = OpenAIServingChat(self.llamacpp, self.model_config.name, capabilities)
+            parser_name = self.model_config._resolved_tool_call_parser
+            renderer = None
+            if parser_name is not None:
+                # Driver invariant: parser_name is only set when the template was
+                # successfully read, so _resolved_chat_template is non-None here.
+                assert self.model_config._resolved_chat_template is not None
+                renderer = build_tool_call_renderer(self.llamacpp, self.model_config._resolved_chat_template)
+            self.serving_chat = OpenAIServingChat(
+                self.llamacpp,
+                self.model_config.name,
+                capabilities,
+                tool_call_parser=parser_name,
+                renderer=renderer,
+            )
         elif self.model_config.usecase == ModelUsecase.embed:
             self.serving_embedding = OpenAIServingEmbedding(self.llamacpp, self.model_config.name)
 

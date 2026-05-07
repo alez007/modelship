@@ -68,6 +68,9 @@ class TransformersConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
     pipeline_kwargs: dict[str, Any] = Field(default_factory=dict)
     tool_call_parser: str | None = None
+    # Explicit opt-out from auto-detected tool calling. None -> auto-detect; False -> disabled
+    # even if the model's chat template advertises tools; True is a no-op (auto runs anyway).
+    tool_calls_enabled: bool | None = None
 
 
 class DiffusersConfig(BaseModel):
@@ -82,6 +85,7 @@ class LlamaCppConfig(BaseModel):
     n_batch: int = 512
     chat_format: str | None = None
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
+    tool_calls_enabled: bool | None = None
 
 
 class ModelshipModelConfig(BaseModel):
@@ -101,6 +105,7 @@ class ModelshipModelConfig(BaseModel):
 
     _resolved_path: str | None = PrivateAttr(default=None)
     _resolved_tool_call_parser: str | None = PrivateAttr(default=None)
+    _resolved_chat_template: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def check_custom_requires_plugin(self):

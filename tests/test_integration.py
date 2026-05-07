@@ -13,6 +13,7 @@ OPENAI_API_BASE = "http://localhost:8000/v1"
 EXPECTED_MODELS = {
     "chat-capable",
     "chat-limited",
+    "chat-llama-mship",
     "chat-transformers",
     "embed-model",
     "stt-model",
@@ -52,11 +53,18 @@ def mship_cluster(tmp_path_factory):
                 "usecase": "generate",
                 "loader": "llama_cpp",
                 "num_cpus": 1,
+                "llama_cpp_config": {
+                    "tool_calls_enabled": False,
+                },
             },
             {
-                # Same Qwen2.5-Instruct family as `chat-capable` so we exercise
-                # the transformers loader against a model trained to emit
-                # Hermes-style `<tool_call>{...}</tool_call>` markers.
+                "name": "chat-llama-mship",
+                "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
+                "usecase": "generate",
+                "loader": "llama_cpp",
+                "num_cpus": 1,
+            },
+            {
                 "name": "chat-transformers",
                 "model": "Qwen/Qwen2.5-0.5B-Instruct",
                 "usecase": "generate",
@@ -391,8 +399,8 @@ def test_tool_calling_streaming_vllm_loader(client):
 
 
 @pytest.mark.integration
-def test_tool_calling_unsupported_loader(client):
-    """Verifies that loaders without tool support (like llama_cpp) don't return tool calls."""
+def test_tool_calling_explicit_opt_out(client):
+    """Verifies that ``tool_calls_enabled: false`` disables tools even when the model's chat template supports them."""
     tools = [
         {
             "type": "function",
@@ -402,11 +410,95 @@ def test_tool_calling_unsupported_loader(client):
             },
         }
     ]
-    # Loader currently ignores the tools param
     completion = client.chat.completions.create(
         model="chat-limited", messages=[{"role": "user", "content": "Weather in London?"}], tools=tools
     )
     assert not completion.choices[0].message.tool_calls
+
+
+@pytest.mark.integration
+def test_tool_calling_llama_cpp_loader(client):
+    """Round-trip a Hermes-style tool call through the llama_cpp loader.
+
+    Same Qwen2.5-0.5B-Instruct weights as `chat-capable` (vLLM) and
+    `chat-transformers`, but in GGUF form via llama-cpp-python. Auto-detected
+    hermes parser renders the prompt with `tools=...` and parses the
+    `<tool_call>{...}</tool_call>` markers out of raw completion output.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    completion = client.chat.completions.create(
+        model="chat-llama-mship",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=tools,
+        tool_choice="auto",
+        max_tokens=128,
+    )
+    tool_calls = completion.choices[0].message.tool_calls
+    assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
+    assert tool_calls[0].function.name == "get_weather"
+    assert "Paris" in tool_calls[0].function.arguments
+    assert completion.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.integration
+def test_tool_calling_streaming_llama_cpp_loader(client):
+    """Stream a tool call through the llama_cpp loader and verify the
+    delta sequence matches the OpenAI streaming contract.
+
+    Same shape as `test_tool_calling_streaming_transformers_loader` —
+    asserts a single name delta, multiple incremental argument deltas,
+    valid JSON on concatenation, and final ``finish_reason="tool_calls"``.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    stream = client.chat.completions.create(
+        model="chat-llama-mship",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=tools,
+        tool_choice="auto",
+        max_tokens=128,
+        stream=True,
+    )
+
+    collected = _collect_streaming_tool_call(stream)
+
+    assert collected["tool_calls"], f"expected at least one streamed tool call; got content={collected['content']!r}"
+    call_0 = collected["tool_calls"][0]
+    assert call_0["id"], "expected an id on the first tool-call delta"
+    assert call_0["name"] == "get_weather"
+    assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
+    assert collected["args_deltas"] >= 2, (
+        f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
+    )
+    parsed_args = json.loads(call_0["arguments"])
+    assert parsed_args.get("city")
+    assert "Paris" in parsed_args["city"]
+    assert collected["finish_reason"] == "tool_calls"
 
 
 @pytest.mark.integration
