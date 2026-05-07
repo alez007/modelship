@@ -8,14 +8,35 @@ from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsec
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
 from modelship.openai.tool_calling.registry import available_parsers
-from modelship.openai.tool_calling.utils import detect_tool_parser
-
-# Loaders that emit raw model text and rely on the tool_calling registry to
-# parse tool calls. vLLM and llama.cpp have native tool-call handling and are
-# excluded; diffusers/custom don't do chat completion through this path.
-_LOADERS_USING_TEXT_PARSER = frozenset({ModelLoader.transformers})
+from modelship.openai.tool_calling.utils import classify_template, read_chat_template
 
 logger = get_logger("startup")
+
+
+def _is_explicit_tool_opt_out(cfg) -> bool:
+    """Loader-specific explicit "no auto-detection" signal.
+
+    Auto-detection is skipped when the user has signalled an explicit choice
+    that excludes our parser:
+
+    - vllm: ``enable_auto_tool_choice: false`` — user disabled tool calling.
+    - transformers: ``tool_calls_enabled: false`` — user disabled tool calling.
+    - llama_cpp: ``tool_calls_enabled: false`` (disabled) OR ``chat_format`` set
+      (user wants llama-cpp-python's own function-calling handler — we must not
+      also wire up our parser).
+    """
+    if cfg.loader == ModelLoader.vllm:
+        return cfg.vllm_engine_kwargs is not None and cfg.vllm_engine_kwargs.enable_auto_tool_choice is False
+    if cfg.loader == ModelLoader.transformers:
+        return cfg.transformers_config is not None and cfg.transformers_config.tool_calls_enabled is False
+    if cfg.loader == ModelLoader.llama_cpp:
+        if cfg.llama_cpp_config is None:
+            return False
+        if cfg.llama_cpp_config.tool_calls_enabled is False:
+            return True
+        if cfg.llama_cpp_config.chat_format is not None:
+            return True
+    return False
 
 
 def resolve_config_path(arg_path: str | None) -> str:
@@ -69,17 +90,23 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
 
 
 def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
-    """Pre-flight: pick a tool-call parser for each text-parser loader model.
+    """Pre-flight: auto-detect a tool-call parser for each generative model.
 
     Runs after `resolve_all_model_sources` so `_resolved_path` is populated.
-    Inspects the model's `tokenizer_config.json` chat template and stores the
-    result on `_resolved_tool_call_parser`. Effective parser at request time
-    is `transformers_config.tool_call_parser or _resolved_tool_call_parser`,
-    so an explicit user setting always wins.
+    Reads the model's chat template once (from GGUF metadata or
+    `tokenizer_config.json`), stores it on `_resolved_chat_template`, and
+    classifies it onto `_resolved_tool_call_parser`. Per-loader code reads
+    these as a fallback when the loader-specific parser/format field is
+    unset, so an explicit user setting always wins.
 
-    Behavior:
-    - Explicit parser configured: validated against the registry; raises if
-      the name is unknown so misconfiguration fails startup, not mid-request.
+    Auto-detection runs for vllm, transformers, and llama_cpp. diffusers has
+    no chat path; custom is plugin-managed.
+
+    Behavior per model:
+    - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): skipped.
+    - Explicit parser name configured (vllm/transformers `tool_call_parser`):
+      validated against the registry; raises if unknown so misconfiguration
+      fails startup, not mid-request.
     - Auto-detected, registered: stored on `_resolved_tool_call_parser`.
     - Auto-detected, known format but no parser implemented yet: warn, leave
       unset — tool calling will be disabled for this model.
@@ -90,12 +117,20 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     """
     registered = set(available_parsers())
     for cfg in yml_conf.models:
-        if cfg.loader not in _LOADERS_USING_TEXT_PARSER:
+        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue
+        if _is_explicit_tool_opt_out(cfg):
+            logger.info("Tool-call auto-detection skipped for '%s' (explicit opt-out).", cfg.name)
+            continue
 
-        explicit = cfg.transformers_config.tool_call_parser if cfg.transformers_config else None
+        explicit = None
+        if cfg.loader == ModelLoader.transformers and cfg.transformers_config:
+            explicit = cfg.transformers_config.tool_call_parser
+        elif cfg.loader == ModelLoader.vllm and cfg.vllm_engine_kwargs:
+            explicit = cfg.vllm_engine_kwargs.tool_call_parser
+
         if explicit is not None:
             if explicit not in registered:
                 raise ValueError(
@@ -106,7 +141,12 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             continue
 
         assert cfg._resolved_path is not None  # populated by resolve_all_model_sources
-        detected = detect_tool_parser(cfg._resolved_path)
+        template = read_chat_template(cfg._resolved_path)
+        if template is None:
+            logger.info("No chat template found for '%s'; tool-call detection skipped.", cfg.name)
+            continue
+        cfg._resolved_chat_template = template
+        detected = classify_template(template)
         if detected is None:
             logger.info("No tool-calling support detected for '%s'; tools disabled.", cfg.name)
             continue

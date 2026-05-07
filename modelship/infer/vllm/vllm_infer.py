@@ -214,6 +214,20 @@ class VllmInfer(BaseInfer):
             base_model_paths=[BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)],
         )
 
+        enable_tools = False
+        tool_parser_name = None
+        if self.vllm_engine_kwargs.enable_auto_tool_choice is True:
+            enable_tools = True
+            tool_parser_name = self.vllm_engine_kwargs.tool_call_parser
+        elif self.vllm_engine_kwargs.enable_auto_tool_choice is not False:  # None implies auto
+            if self.model_config._resolved_tool_call_parser:
+                enable_tools = True
+                tool_parser_name = self.model_config._resolved_tool_call_parser
+            elif self.vllm_engine_kwargs.tool_call_parser:
+                # fallback if user sets parser but leaves enable_auto_tool_choice as None
+                enable_tools = True
+                tool_parser_name = self.vllm_engine_kwargs.tool_call_parser
+
         openai_serving_render = OpenAIServingRender(
             model_config=self.engine.model_config,
             renderer=self.engine.renderer,
@@ -221,10 +235,8 @@ class VllmInfer(BaseInfer):
             request_logger=RequestLogger(max_log_len=None),
             chat_template=None,
             chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
-            enable_auto_tools=self.vllm_engine_kwargs.enable_auto_tool_choice is not None,
-            tool_parser=self.vllm_engine_kwargs.tool_call_parser
-            if self.vllm_engine_kwargs.tool_call_parser is not None
-            else None,
+            enable_auto_tools=enable_tools,
+            tool_parser=tool_parser_name,
         )
 
         return OpenAIServingChat(
@@ -235,10 +247,8 @@ class VllmInfer(BaseInfer):
             request_logger=RequestLogger(max_log_len=None),
             chat_template=None,
             chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
-            enable_auto_tools=self.vllm_engine_kwargs.enable_auto_tool_choice is not None,
-            tool_parser=self.vllm_engine_kwargs.tool_call_parser
-            if self.vllm_engine_kwargs.tool_call_parser is not None
-            else None,
+            enable_auto_tools=enable_tools,
+            tool_parser=tool_parser_name,
         )
 
     async def init_serving_embeding(self) -> ServingEmbedding | None:
