@@ -7,6 +7,7 @@ from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsecase
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
+from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning_template
 from modelship.openai.parsers.tool_calling.registry import available_parsers
 from modelship.openai.parsers.tool_calling.utils import classify_template
 from modelship.openai.parsers.utils import read_chat_template
@@ -91,30 +92,24 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
 
 
 def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
-    """Pre-flight: auto-detect a tool-call parser for each generative model.
+    """Pre-flight: resolve the final tool-call parser name per generative model.
 
     Runs after `resolve_all_model_sources` so `_resolved_path` is populated.
-    Reads the model's chat template once (from GGUF metadata or
-    `tokenizer_config.json`), stores it on `_resolved_chat_template`, and
-    classifies it onto `_resolved_tool_call_parser`. Per-loader code reads
-    these as a fallback when the loader-specific parser/format field is
-    unset, so an explicit user setting always wins.
+    Captures the FINAL parser name (explicit user setting or auto-detection)
+    onto `_resolved_tool_call_parser` so loader code has a single source of
+    truth and never re-implements the precedence.
 
     Auto-detection runs for vllm, transformers, and llama_cpp. diffusers has
     no chat path; custom is plugin-managed.
 
     Behavior per model:
-    - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): skipped.
-    - Explicit parser name configured (vllm/transformers `tool_call_parser`):
-      validated against the registry; raises if unknown so misconfiguration
-      fails startup, not mid-request.
+    - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): leaves
+      `_resolved_tool_call_parser` as None.
+    - Explicit parser name configured: validated against the registry,
+      stored on `_resolved_tool_call_parser`. Raises if unknown.
     - Auto-detected, registered: stored on `_resolved_tool_call_parser`.
-    - Auto-detected, known format but no parser implemented yet: warn, leave
-      unset — tool calling will be disabled for this model.
-    - Auto-detected as `unknown` (template uses tools but no recognized
-      markers): warn, leave unset.
-    - Not detected: tool calling silently disabled (model has no template
-      tool-call affordance to begin with).
+    - Auto-detected as `unknown` / known-but-unregistered: warn, leave None.
+    - Not detected: leave None (no template tool-call affordance).
     """
     registered = set(available_parsers())
     for cfg in yml_conf.models:
@@ -123,7 +118,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
         if cfg.usecase != ModelUsecase.generate:
             continue
         if _is_explicit_tool_opt_out(cfg):
-            logger.info("Tool-call auto-detection skipped for '%s' (explicit opt-out).", cfg.name)
+            logger.info("Tool-call resolution skipped for '%s' (explicit opt-out).", cfg.name)
             continue
 
         explicit = None
@@ -138,6 +133,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
                     f"Model '{cfg.name}' configures tool_call_parser={explicit!r} "
                     f"which is not registered. Available: {sorted(registered) or '(none)'}."
                 )
+            cfg._resolved_tool_call_parser = explicit
             logger.info("Using explicit tool_call_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -166,3 +162,60 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             continue
         cfg._resolved_tool_call_parser = detected
         logger.info("Auto-detected tool_call_parser=%r for '%s'", detected, cfg.name)
+
+
+def _is_explicit_reasoning_opt_out(cfg) -> bool:
+    """Loader-specific explicit "no reasoning auto-detection" signal.
+
+    - vllm: ``enable_reasoning: false`` — user disabled reasoning.
+    """
+    if cfg.loader == ModelLoader.vllm:
+        return cfg.vllm_engine_kwargs is not None and cfg.vllm_engine_kwargs.enable_reasoning is False
+    return False
+
+
+def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
+    """Pre-flight: resolve the final reasoning parser name per generative model.
+
+    Mirrors `resolve_all_tool_parsers`: captures the FINAL parser name onto
+    `_resolved_reasoning_parser` so loader code has a single source of truth.
+    Reuses `_resolved_chat_template` if populated by the tool-parser pass.
+
+    Behavior per model:
+    - Loader-specific opt-out: leaves `_resolved_reasoning_parser` as None.
+    - Explicit ``reasoning_parser`` on the loader config: stored as-is.
+    - Auto-detected from chat template: stored.
+    - Not detected: leaves None (reasoning disabled).
+    """
+    for cfg in yml_conf.models:
+        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
+            continue
+        if cfg.usecase != ModelUsecase.generate:
+            continue
+        if _is_explicit_reasoning_opt_out(cfg):
+            logger.info("Reasoning resolution skipped for '%s' (explicit opt-out).", cfg.name)
+            continue
+
+        explicit = None
+        if cfg.loader == ModelLoader.vllm and cfg.vllm_engine_kwargs:
+            explicit = cfg.vllm_engine_kwargs.reasoning_parser
+
+        if explicit is not None:
+            cfg._resolved_reasoning_parser = explicit
+            logger.info("Using explicit reasoning_parser=%r for '%s'", explicit, cfg.name)
+            continue
+
+        template = cfg._resolved_chat_template
+        if template is None:
+            assert cfg._resolved_path is not None  # populated by resolve_all_model_sources
+            template = read_chat_template(cfg._resolved_path)
+            if template is None:
+                logger.info("No chat template found for '%s'; reasoning detection skipped.", cfg.name)
+                continue
+            cfg._resolved_chat_template = template
+
+        detected = classify_reasoning_template(template)
+        if detected is None:
+            continue
+        cfg._resolved_reasoning_parser = detected
+        logger.info("Auto-detected reasoning_parser=%r for '%s'", detected, cfg.name)
