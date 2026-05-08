@@ -61,7 +61,7 @@ Under `tests/`, `pytest-asyncio` for async. Tests **mock out Ray Serve** — the
 
 ## Sharp edges
 
-- `vllm==0.20.0` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
+- `vllm==0.20.1` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
 - Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables.
 - `TRACE` is a custom log level below `DEBUG`; it logs full request/response payloads.
 - Docker CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a `:latest-cpu` tag suffix.
