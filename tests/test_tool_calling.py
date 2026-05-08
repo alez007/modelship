@@ -7,14 +7,14 @@ from typing import ClassVar
 
 import pytest
 
-from modelship.openai.tool_calling import (
+from modelship.openai.parsers.tool_calling import (
     ToolCallStreamer,
     available_parsers,
     get_parser,
     register_parser,
     resolve_tools_for_request,
 )
-from modelship.openai.tool_calling.parsers import HermesToolCallParser, ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, ToolCallParser
 
 
 class TestRegistry:
@@ -47,7 +47,7 @@ class TestRegistry:
             assert get_parser("stub-test-parser").name == "stub-test-parser"
         finally:
             # Clean up so other tests don't see the stub.
-            from modelship.openai.tool_calling import registry
+            from modelship.openai.parsers.tool_calling import registry
 
             registry._PARSERS.pop("stub-test-parser", None)
 

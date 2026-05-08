@@ -13,17 +13,17 @@ from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
 from modelship.logging import get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.parsers.tool_calling import (
+    build_chat_completion_response,
+    get_parser,
+    resolve_tools_for_request,
+    stream_chat_completion,
+)
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ErrorResponse,
     create_error_response,
-)
-from modelship.openai.tool_calling import (
-    build_chat_completion_response,
-    get_parser,
-    resolve_tools_for_request,
-    stream_chat_completion,
 )
 from modelship.utils import base_request_id
 

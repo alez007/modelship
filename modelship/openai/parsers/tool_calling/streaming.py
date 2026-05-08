@@ -21,6 +21,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 
+from modelship.openai.parsers.tool_calling.parsers import ParsedToolCalls, ToolCallStreamer
+from modelship.openai.parsers.tool_calling.registry import get_parser
 from modelship.openai.protocol import (
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
@@ -30,8 +32,6 @@ from modelship.openai.protocol import (
     DeltaMessage,
     UsageInfo,
 )
-from modelship.openai.tool_calling.parsers import ParsedToolCalls, ToolCallStreamer
-from modelship.openai.tool_calling.registry import get_parser
 
 
 def finish_reason_for(parsed: ParsedToolCalls, completion_tokens: int, max_tokens: int | None) -> str:
