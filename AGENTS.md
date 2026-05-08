@@ -81,7 +81,7 @@ Commit messages matter: use Conventional Commits prefixes so the changelog gener
 ## Gotchas
 
 - `config/models.yaml` is gitignored; `mship_deploy.py` errors out with a pointer to `config/examples/` if missing.
-- vLLM version is pinned (`vllm==0.20.0`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
+- vLLM version is pinned (`vllm==0.20.1`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
 - `llama_cpp` loader is CPU-only today; `num_gpus > 0` is silently warned and forced to 0 in `mship_deploy.py:build_actor_options`.
 - Metrics are on by default on port **8079** (not 8000). Disable with `--no-metrics` or `MSHIP_METRICS=false`.
 - Log level `TRACE` (below `DEBUG`) is a custom level and logs full request/response payloads.
