@@ -19,7 +19,7 @@ def read_chat_template(model_path: str | Path) -> str | None:
     directly.
     """
     path = Path(model_path)
-    if path.is_file() and path.suffix == ".gguf":
+    if path.is_file() and path.suffix.lower() == ".gguf":
         template = _read_chat_template_from_gguf(path)
         if template is not None:
             return template
