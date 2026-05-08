@@ -214,19 +214,12 @@ class VllmInfer(BaseInfer):
             base_model_paths=[BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)],
         )
 
-        enable_tools = False
-        tool_parser_name = None
-        if self.vllm_engine_kwargs.enable_auto_tool_choice is True:
-            enable_tools = True
-            tool_parser_name = self.vllm_engine_kwargs.tool_call_parser
-        elif self.vllm_engine_kwargs.enable_auto_tool_choice is not False:  # None implies auto
-            if self.model_config._resolved_tool_call_parser:
-                enable_tools = True
-                tool_parser_name = self.model_config._resolved_tool_call_parser
-            elif self.vllm_engine_kwargs.tool_call_parser:
-                # fallback if user sets parser but leaves enable_auto_tool_choice as None
-                enable_tools = True
-                tool_parser_name = self.vllm_engine_kwargs.tool_call_parser
+        # Driver-side `resolve_all_{tool,reasoning}_parsers` populated these
+        # with the final parser name (explicit user setting or auto-detected),
+        # or left them None to signal "disabled". Don't redo the precedence here.
+        tool_parser_name = self.model_config._resolved_tool_call_parser
+        enable_tools = tool_parser_name is not None
+        reasoning_parser_name = self.model_config._resolved_reasoning_parser or ""
 
         openai_serving_render = OpenAIServingRender(
             model_config=self.engine.model_config,
@@ -249,6 +242,7 @@ class VllmInfer(BaseInfer):
             chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
             enable_auto_tools=enable_tools,
             tool_parser=tool_parser_name,
+            reasoning_parser=reasoning_parser_name,
         )
 
     async def init_serving_embeding(self) -> ServingEmbedding | None:

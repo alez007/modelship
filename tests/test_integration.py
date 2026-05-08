@@ -30,6 +30,22 @@ MODEL_CONFIGS: dict[str, dict] = {
             "tool_call_parser": "hermes",
         },
     },
+    "chat-reasoning": {
+        "name": "chat-reasoning",
+        # Qwen3-0.6B is the smallest reasoning-capable model in the Qwen3
+        # family; it natively emits `<think>...</think>`. Reasoning chains
+        # need headroom so `max_model_len` is bumped.
+        "model": "Qwen/Qwen3-0.6B",
+        "usecase": "generate",
+        "loader": "vllm",
+        "num_gpus": 0.5,
+        "vllm_engine_kwargs": {
+            "max_model_len": 4096,
+            "enforce_eager": True,
+            "enable_reasoning": True,
+            "reasoning_parser": "deepseek_r1",
+        },
+    },
     "chat-limited": {
         "name": "chat-limited",
         "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
@@ -323,6 +339,77 @@ class TestChatCapable:
         parsed_args = json.loads(call_0["arguments"])
         assert "Paris" in parsed_args.get("city", "")
         assert collected["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.integration
+class TestChatReasoning:
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-reasoning")
+
+    def test_reasoning_completion(self):
+        """Non-streaming: vLLM's deepseek_r1 reasoning parser routes the
+        `<think>...</think>` block to `message.reasoning` and leaves the
+        final answer in `message.content`. Verifies end-to-end wiring of
+        `reasoning_parser` through the modelship gateway.
+        """
+        # Use httpx so we read the raw `reasoning` field — the OpenAI Python
+        # SDK doesn't always surface it as a typed attribute.
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 512,
+            },
+            timeout=120,
+        )
+        assert response.status_code == 200, response.text
+        message = response.json()["choices"][0]["message"]
+        assert message.get("reasoning"), f"expected reasoning content, got {message!r}"
+        # `<think>` markers must be stripped from both fields.
+        assert "<think>" not in (message.get("content") or "")
+        assert "<think>" not in message["reasoning"]
+
+    def test_reasoning_streaming(self):
+        """Streaming: at least one delta carries `reasoning` and the
+        concatenated reasoning text is non-empty when the stream ends.
+        Markers must not leak into either field.
+        """
+        with httpx.stream(
+            "POST",
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 512,
+                "stream": True,
+            },
+            timeout=120,
+        ) as response:
+            assert response.status_code == 200
+            reasoning_parts: list[str] = []
+            content_parts: list[str] = []
+            reasoning_deltas = 0
+            for line in response.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[len("data: ") :]
+                if payload == "[DONE]":
+                    break
+                chunk = json.loads(payload)
+                delta = chunk["choices"][0].get("delta") or {}
+                if delta.get("reasoning"):
+                    reasoning_parts.append(delta["reasoning"])
+                    reasoning_deltas += 1
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+
+        assert reasoning_deltas >= 1, "expected at least one reasoning delta"
+        assert "".join(reasoning_parts).strip(), "expected non-empty reasoning content"
+        # Reasoning markers must not leak into either stream.
+        assert "<think>" not in "".join(reasoning_parts)
+        assert "<think>" not in "".join(content_parts)
 
 
 @pytest.mark.integration

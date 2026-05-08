@@ -56,6 +56,8 @@ class VllmEngineConfig(BaseModel):
     quantization: str | None = None
     enable_auto_tool_choice: bool | None = None
     tool_call_parser: str | None = None
+    enable_reasoning: bool | None = None
+    reasoning_parser: str | None = None
     chat_template_content_format: ChatTemplateContentFormatOption = "auto"
     enforce_eager: bool | None = None
     max_num_batched_tokens: int | None = None
@@ -105,6 +107,7 @@ class ModelshipModelConfig(BaseModel):
 
     _resolved_path: str | None = PrivateAttr(default=None)
     _resolved_tool_call_parser: str | None = PrivateAttr(default=None)
+    _resolved_reasoning_parser: str | None = PrivateAttr(default=None)
     _resolved_chat_template: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
