@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from modelship.openai.tool_calling.parsers.base import ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers.base import ToolCallParser
 
 
 class HermesToolCallParser(ToolCallParser):

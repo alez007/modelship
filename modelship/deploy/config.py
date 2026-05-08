@@ -7,8 +7,9 @@ from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsecase
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
-from modelship.openai.tool_calling.registry import available_parsers
-from modelship.openai.tool_calling.utils import classify_template, read_chat_template
+from modelship.openai.parsers.tool_calling.registry import available_parsers
+from modelship.openai.parsers.tool_calling.utils import classify_template
+from modelship.openai.parsers.utils import read_chat_template
 
 logger = get_logger("startup")
 
