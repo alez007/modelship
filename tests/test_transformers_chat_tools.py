@@ -148,7 +148,7 @@ async def test_tool_call_with_trailing_text_preserves_content():
 
     assert isinstance(resp, ChatCompletionResponse)
     msg = resp.choices[0].message
-    assert msg.content == "Calling now."
+    assert msg.content == "Calling now.\n"
     assert len(msg.tool_calls) == 1
 
 

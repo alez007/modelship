@@ -78,10 +78,18 @@ class TestHermesParser:
         assert [tc.function.name for tc in result.tool_calls] == ["a", "b"]
 
     def test_tool_call_with_residual_text(self):
+        # Trailing whitespace in the preamble is preserved — only an
+        # all-whitespace residual gets nulled out alongside tool_calls.
         text = 'Sure, calling that.\n<tool_call>{"name": "ping", "arguments": {}}</tool_call>'
         result = self.parser.parse(text)
         assert len(result.tool_calls) == 1
-        assert result.content == "Sure, calling that."
+        assert result.content == "Sure, calling that.\n"
+
+    def test_whitespace_only_preamble_nulls_content(self):
+        text = '   \n<tool_call>{"name": "ping", "arguments": {}}</tool_call>'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.content is None
 
     def test_string_arguments_forwarded_verbatim(self):
         # vLLM-style: the streamer forwards the raw bytes of the arguments

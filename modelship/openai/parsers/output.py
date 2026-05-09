@@ -122,7 +122,7 @@ class ChatOutputStreamer:
         regions = self._scan(self._last_text, hold_marker_tail=False)
         content_view = "".join(payload for kind, payload, _ in regions if kind == "content")
         reasoning_view = "".join(payload for kind, payload, _ in regions if kind == "reasoning")
-        content = (content_view.strip() or None) if self._finalized_calls else (content_view or None)
+        content = (content_view if content_view.strip() else None) if self._finalized_calls else (content_view or None)
         return ParsedChatOutput(
             content=content,
             reasoning=reasoning_view or None,
