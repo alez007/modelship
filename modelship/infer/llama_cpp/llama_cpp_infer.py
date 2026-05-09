@@ -96,17 +96,38 @@ class LlamaCppInfer(BaseInfer):
 
         if self.model_config.usecase == ModelUsecase.generate:
             parser_name = self.model_config._resolved_tool_call_parser
-            renderer = None
-            if parser_name is not None:
-                # Driver invariant: parser_name is only set when the template was
-                # successfully read, so _resolved_chat_template is non-None here.
-                assert self.model_config._resolved_chat_template is not None
-                renderer = build_tool_call_renderer(self.llamacpp, self.model_config._resolved_chat_template)
+            reasoning_name = self.model_config._resolved_reasoning_parser
+            template = self.model_config._resolved_chat_template
+            # Default to driving the model through raw `create_completion`
+            # so reasoning + tool-call markers in the model's output are
+            # visible to ChatOutputStreamer regardless of whether parsers
+            # are configured for this request. Fall back to llama-cpp's
+            # native chat handler only when:
+            #   - the user explicitly set `chat_format` (presumed opt-in
+            #     to llama-cpp's templating; our parsers are bypassed), or
+            #   - no chat template was resolvable (we'd have nothing to
+            #     render with).
+            if self.config.chat_format is None and template is not None:
+                renderer = build_tool_call_renderer(self.llamacpp, template)
+            else:
+                renderer = None
+                if parser_name is not None or reasoning_name is not None:
+                    logger.warning(
+                        "model '%s' has parsers resolved (tool=%s, reasoning=%s) but `chat_format` is set "
+                        "or no chat template is available; falling back to llama-cpp's native chat handler "
+                        "and our parsers will not run.",
+                        self.model_config.name,
+                        parser_name,
+                        reasoning_name,
+                    )
+                    parser_name = None
+                    reasoning_name = None
             self.serving_chat = OpenAIServingChat(
                 self.llamacpp,
                 self.model_config.name,
                 capabilities,
                 tool_call_parser=parser_name,
+                reasoning_parser=reasoning_name,
                 renderer=renderer,
             )
         elif self.model_config.usecase == ModelUsecase.embed:
