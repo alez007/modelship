@@ -4,38 +4,30 @@ High-level view of where Modelship is headed. If something here interests you, o
 
 ## Recently Shipped
 
-- **Dynamic wheel-based plugins** (v0.1.32-dev) — plugin packages build into standalone wheels and are injected into Ray workers at deployment via `runtime_env`. `MSHIP_PLUGINS` is deprecated; plugins resolve automatically from `models.yaml`.
-- **Unified Dockerfile** (v0.1.32-dev) — single `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu|gpu`; `Dockerfile.cpu` removed.
-- **Auto-detected Ray resources** (v0.1.32-dev) — `RAY_HEAD_CPU_NUM` / `RAY_HEAD_GPU_NUM` are now optional overrides; Ray auto-detects CPUs and GPUs from the host or container cgroups.
-- **CPU inference backends** — `transformers` (v0.1.22) and `llama_cpp` (v0.1.24) loaders cover chat, embeddings, STT, and TTS without a GPU.
-- **Cluster-wide deploy coordinator** (v0.1.30) — retry-pass deploy loop and `/status` readiness endpoint with per-model load timings.
-- **Observability** — Prometheus metrics, Grafana dashboard, structured JSON logging, syslog and OpenTelemetry export, alerting rules.
+- **Reasoning content support** (v0.1.35) — Native `<think>` block extraction and OpenAI-compatible `reasoning_content` field for vLLM, llama_cpp, and transformers loaders.
+- **Tool calling support** (v0.1.35) — Cross-loader tool-call parsing and auto-detection for transformers and llama_cpp (GGUF) models.
+- **Integration testing suite** (v0.1.35) — Comprehensive HTTP-level tests for chat, reasoning, tool-calling, embeddings, and streaming across all major loaders using real (small) models.
+- **Cluster-wide deploy coordinator** (v0.1.35) — Mutex-backed deployment to prevent VRAM races and `--reconcile` support for zero-downtime model hot-reloads.
+- **Centralized model resolution** (v0.1.35) — Driver-side resolution of Hugging Face models and GGUF files to simplify worker environment setup.
+- **Dynamic wheel-based plugins** (v0.1.32) — plugin packages build into standalone wheels and are injected into Ray workers at deployment via `runtime_env`.
 
 ## Up Next
 
-### Testing
-- API endpoint tests for all `/v1/` routes
-- Integration tests with real model loading (small models)
-- Streaming (SSE) correctness tests
-- Plugin lifecycle tests (wheel build, runtime_env injection, fallback paths)
-
 ### Core Improvements
-- Detailed health checks — `/health` should verify model state, GPU status, and Ray cluster connectivity per model
-- Model hot-reload — apply `models.yaml` changes without full server restart
-- Docker Compose for simpler non-K8s deployments
-- Helm chart and Kubernetes manifests with proper GPU scheduling, probes, and resource limits
+- **Detailed health checks** — `/health` should verify model state, GPU status, and Ray cluster connectivity per model
+- **Docker Compose** — for simpler non-K8s deployments
+- **Helm chart** — Kubernetes manifests with proper GPU scheduling, probes, and resource limits
+- **Multi-node Ray cluster setup** — head + workers, networking, failure handling
 
 ### Plugin Ecosystem
-- More TTS / STT backends (community-contributed)
-- Plugin template / scaffolding CLI for faster plugin development
-- Broader plugin types beyond TTS/STT (e.g. custom pre/post-processing, custom loaders)
-- Plugin sandboxing or signature verification (plugins currently run with full server privileges)
+- **More TTS / STT backends** — (community-contributed)
+- **Plugin template / scaffolding CLI** — for faster plugin development
+- **Plugin sandboxing** — signature verification or restricted execution environments
 
 ### Documentation
-- OpenAPI/Swagger spec for the API
-- Performance tuning guide (vLLM engine kwargs, batch sizes, KV cache)
-- Capacity planning guide — model co-location recommendations per GPU size
-- Multi-node Ray cluster setup (head + workers, networking, failure handling)
+- **OpenAPI/Swagger spec** — formal API reference
+- **Performance tuning guide** — vLLM engine kwargs, batch sizes, KV cache
+- **Capacity planning guide** — model co-location recommendations per GPU size
 
 ## Contributing
 

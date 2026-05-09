@@ -75,15 +75,15 @@ Models can be deployed across multiple GPUs, run on CPU-only, or both — multip
 - **Multi-model, multi-GPU** — run chat, embedding, STT, TTS, and image generation models simultaneously across one or more GPUs with tunable per-model GPU memory allocation
 - **CPU-only support** — run models without a GPU using the Transformers backend (chat, embeddings, transcription, TTS). Useful for development, testing, or small models that don't need GPU acceleration
 - **Multiple inference backends** — vLLM for high-throughput GPU inference, HuggingFace Transformers for CPU and lightweight GPU workloads, Diffusers for image generation, and a plugin system for custom backends
+- **Zero-downtime hot-reloads** — modify your `models.yaml` and run a cluster reconcile; changes are applied incrementally without interrupting the API gateway or unchanged models
+- **Advanced agentic capabilities** — native support for DeepSeek-style reasoning (`<think>` blocks parsed into `reasoning_content`) and universal tool/function calling across vLLM, GGUF (llama.cpp), and Transformers backends
 - **Per-model isolated deployments** — each model runs in its own Ray Serve deployment with independent lifecycle, health checks, failure isolation, and configurable replica count
 - **OpenAI-compatible API** — drop-in replacement for any OpenAI SDK client
 - **Streaming** — SSE streaming for chat completions and TTS audio
-- **Tool/function calling** — auto tool choice with configurable parsers
 - **Plugin system** — opt-in TTS and STT backends installed as isolated uv workspace packages
 - **Multi-GPU & hybrid routing** — assign models to specific GPUs or run them on CPU-only; deploy the same model on both GPU and CPU and requests are load-balanced via round-robin; full tensor parallelism support for large models spanning multiple GPUs
 - **Client disconnect detection** — cancels in-flight inference when the client disconnects, freeing GPU resources immediately
-- **Prometheus metrics & Grafana dashboard** — built-in observability with custom `modelship:*` metrics, vLLM engine stats, and Ray cluster metrics on a single scrape endpoint; pre-built Grafana dashboard included
-- **Ray dashboard** — monitor deployments, resources, and request logs
+- **Built-in observability** — Prometheus metrics, custom `modelship:*` metrics, vLLM engine stats, Ray cluster metrics, structured JSON logging, and OpenTelemetry log export; pre-built Grafana dashboard and alerting rules included
 
 ## Supported OpenAI Endpoints
 
@@ -99,16 +99,18 @@ Models can be deployed across multiple GPUs, run on CPU-only, or both — multip
 
 ## Quick Start
 
-The fastest way to try Modelship: run a quantized 7B chat model on a laptop — no GPU required. Copy-paste this block and you'll have an OpenAI-compatible API on `http://localhost:8000` in a few minutes (first run downloads ~4.5 GB of weights into `./models-cache`).
+The fastest way to try Modelship: run a tiny reasoning model on a laptop — no GPU required. Copy-paste this block and you'll have an OpenAI-compatible API on `http://localhost:8000` in a few minutes.
 
 ```bash
 mkdir -p models-cache && cat > models.yaml <<'EOF'
 models:
-  - name: qwen
-    model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+  - name: reasoning-qwen
+    model: "lmstudio-community/Qwen3-0.6B-GGUF:*Q4_K_M.gguf"
     usecase: generate
     loader: llama_cpp
     num_cpus: 3
+    llama_cpp_config:
+      n_ctx: 4096  # Give reasoning space to think
 EOF
 
 docker run --rm --shm-size=8g \
@@ -120,25 +122,15 @@ docker run --rm --shm-size=8g \
 
 Images are multi-arch (amd64 + arm64), so this works on Apple Silicon and ARM Linux hosts too.
 
-Once the server is up (look for `Deployed app 'modelship api' successfully`), call it:
+Once the server is up (look for `Deployed app 'modelship api' successfully`), call it and watch the model think:
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen", "messages": [{"role": "user", "content": "Hello!"}]}'
-```
-
-Or point any OpenAI SDK at it — no code changes, just swap `base_url`:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
-resp = client.chat.completions.create(
-    model="qwen",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(resp.choices[0].message.content)
+  -d '{
+    "model": "reasoning-qwen",
+    "messages": [{"role": "user", "content": "Which is larger, 9.11 or 9.9?"}]
+  }'
 ```
 
 ### GPU (vLLM, Diffusers)
@@ -153,6 +145,9 @@ docker run --rm --shm-size=8g --gpus all \
   -p 8000:8000 \
   ghcr.io/alez007/modelship:latest
 ```
+
+> [!TIP]
+> Always set `--shm-size=8g` (or higher) when running the docker container to prevent PyTorch from hitting shared memory limits during multi-process operations.
 
 Hitting an error? Check [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -174,7 +169,7 @@ uv sync --extra kokoroonnx
 uv sync --extra kokoroonnx --extra whispercpp  # multiple plugins
 ```
 
-For deployment, plugins are automatically loaded from wheels via Ray's `runtime_env` when referenced in `models.yaml`.
+For deployment, plugins are automatically loaded from standalone Python wheels via Ray's `runtime_env` when referenced in `models.yaml`. This ensures that complex backend dependencies don't pollute the main API gateway or other deployments.
 
 For a full guide on writing your own plugin, see [Plugin Development](docs/plugins.md).
 
@@ -191,7 +186,7 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 
 ## Monitoring
 
-Modelship exposes Prometheus metrics (Ray cluster, Ray Serve, vLLM, and custom `modelship:*` metrics) through a single scrape endpoint on port 8079. Metrics are **enabled by default** — set `MSHIP_METRICS=false` to disable. A pre-built Grafana dashboard is included.
+Modelship exposes Prometheus metrics (Ray cluster, Ray Serve, vLLM, and custom `modelship:*` metrics) through a single scrape endpoint on port 8079. Metrics are **enabled by default** — set `MSHIP_METRICS=false` to disable. A pre-built [Grafana dashboard](docs/grafana-dashboard.json) and [Prometheus alerting rules](docs/prometheus-alerts.yml) are included in the repository.
 
 Logging supports structured JSON output (`MSHIP_LOG_FORMAT=json`) and request ID correlation across Ray actor boundaries. Logs can be shipped to a remote syslog server (`--log-target syslog://host:514`) or an OpenTelemetry collector (`--otel-endpoint http://collector:4317`). Set `MSHIP_LOG_LEVEL` to `TRACE` for full request/response payloads, or `DEBUG` for detailed diagnostics without payloads.
 
@@ -199,7 +194,14 @@ See [Monitoring & Logging](docs/monitoring.md) for full details.
 
 ## Production Readiness
 
-Modelship is actively used but not yet hardened for production. Key gaps today: no rate limiting, `/health` is a no-op, thin test coverage, no Helm chart, no Prometheus alerting rules. See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
+Modelship is actively used and designed for stability in multi-tenant setups. Key guarantees include:
+
+- **Mutex-backed deployments:** A cluster-wide deploy coordinator prevents VRAM exhaustion by ensuring models are never loaded concurrently if resources are tight.
+- **Comprehensive HTTP-level tests:** The `tests/test_integration.py` suite validates chat, reasoning, tool-calling, and streaming across all loaders using real (small) models.
+- **Payload & concurrency limits:** Built-in safeguards against large payloads (`MSHIP_MAX_REQUEST_BODY_BYTES`) and configurable limits per backend.
+- **Observability:** Deep integration with Prometheus, OpenTelemetry, and structured logging.
+
+We are currently working towards Kubernetes-native hardening (Helm charts, GPU-aware probes) and rate-limiting. See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
 
 ## Contributing
 
