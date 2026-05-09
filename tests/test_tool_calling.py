@@ -14,12 +14,15 @@ from modelship.openai.parsers.tool_calling import (
     register_parser,
     resolve_tools_for_request,
 )
-from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, MistralToolCallParser, ToolCallParser
 
 
 class TestRegistry:
     def test_default_registry_includes_hermes(self):
         assert "hermes" in available_parsers()
+
+    def test_default_registry_includes_mistral(self):
+        assert "mistral" in available_parsers()
 
     def test_get_parser_returns_singleton(self):
         a = get_parser("hermes")
@@ -292,3 +295,153 @@ class TestResolveToolsForRequest:
     def test_unrecognized_choice_falls_back_to_all(self):
         result = resolve_tools_for_request(self.tools, "weird-mode")
         assert result == self.tools
+
+
+class TestMistralParser:
+    parser = MistralToolCallParser()
+
+    def test_no_tool_calls_returns_text_unchanged(self):
+        result = self.parser.parse("just a regular response")
+        assert result.tool_calls == []
+        assert result.content == "just a regular response"
+        assert result.has_tool_calls is False
+
+    def test_single_tool_call(self):
+        text = '[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "Paris"}}]'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {"city": "Paris"}
+        assert result.content is None
+
+    def test_multiple_tool_calls_in_one_envelope(self):
+        # The defining feature of Mistral: multiple calls share one
+        # `[TOOL_CALLS]` envelope, separated by commas inside a JSON array.
+        text = '[TOOL_CALLS][{"name": "a", "arguments": {"x": 1}}, {"name": "b", "arguments": {"y": 2}}]'
+        result = self.parser.parse(text)
+        assert [tc.function.name for tc in result.tool_calls] == ["a", "b"]
+        assert json.loads(result.tool_calls[0].function.arguments) == {"x": 1}
+        assert json.loads(result.tool_calls[1].function.arguments) == {"y": 2}
+
+    def test_tool_call_with_residual_text(self):
+        text = 'Sure, calling that.\n[TOOL_CALLS][{"name": "ping", "arguments": {}}]'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.content == "Sure, calling that.\n"
+
+    def test_whitespace_only_preamble_nulls_content(self):
+        text = '   \n[TOOL_CALLS][{"name": "ping", "arguments": {}}]'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.content is None
+
+    def test_object_arguments_passed_through(self):
+        text = '[TOOL_CALLS][{"name": "x", "arguments": {"a": 1, "b": [2, 3]}}]'
+        result = self.parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"a": 1, "b": [2, 3]}
+
+    def test_string_arguments_forwarded_verbatim(self):
+        text = '[TOOL_CALLS][{"name": "x", "arguments": "{\\"a\\": 1}"}]'
+        result = self.parser.parse(text)
+        assert result.tool_calls[0].function.arguments == '"{\\"a\\": 1}"'
+
+    def test_braces_inside_string_args_do_not_break_split(self):
+        # The split walker tracks string state; literal `{` / `}` inside
+        # string values must not move the brace-depth counter.
+        text = '[TOOL_CALLS][{"name": "x", "arguments": {"q": "}{ literal"}}]'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert json.loads(result.tool_calls[0].function.arguments) == {"q": "}{ literal"}
+
+    def test_block_without_extractable_name_is_dropped(self):
+        text = "[TOOL_CALLS][{not valid json}]"
+        result = self.parser.parse(text)
+        assert result.tool_calls == []
+
+    def test_missing_name_drops_call(self):
+        text = '[TOOL_CALLS][{"arguments": {}}]'
+        result = self.parser.parse(text)
+        assert result.tool_calls == []
+
+    def test_each_tool_call_gets_unique_id(self):
+        text = '[TOOL_CALLS][{"name": "a", "arguments": {}}, {"name": "b", "arguments": {}}]'
+        result = self.parser.parse(text)
+        assert result.tool_calls[0].id != result.tool_calls[1].id
+
+
+class TestMistralStreamer:
+    """Stream a Mistral envelope incrementally and verify deltas.
+
+    Mistral's region is EOS-bounded (empty `end_marker`), so completion
+    happens at finalize time. The split_payload override carves the JSON
+    array into per-call sub-blocks that flow through the same streamer
+    machinery used by Hermes.
+    """
+
+    def _feed(self, chunks: list[str]) -> tuple[ChatOutputStreamer, list]:
+        streamer = ChatOutputStreamer(MistralToolCallParser())
+        deltas = []
+        cumulative = ""
+        for chunk in chunks:
+            cumulative += chunk
+            d = streamer.extract_streaming(cumulative)
+            if d is not None:
+                deltas.append(d)
+        final = streamer.finalize()
+        if final is not None:
+            deltas.append(final)
+        return streamer, deltas
+
+    def test_emits_name_before_args_for_single_call(self):
+        chunks = list('[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "Paris"}}]')
+        streamer, deltas = self._feed(chunks)
+
+        tool_deltas = [tc for d in deltas for tc in d.tool_calls]
+        assert tool_deltas[0].function is not None
+        assert tool_deltas[0].function.name == "get_weather"
+        assert tool_deltas[0].id is not None
+        assert tool_deltas[0].function.arguments is None
+        joined_args = "".join(d.function.arguments or "" for d in tool_deltas[1:])
+        assert json.loads(joined_args) == {"city": "Paris"}
+        # Region is EOS-bounded → finalize closes it out.
+        assert len(streamer.result.tool_calls) == 1
+
+    def test_two_calls_in_one_envelope_finalize_with_distinct_indices(self):
+        text = '[TOOL_CALLS][{"name": "a", "arguments": {"x": 1}}, {"name": "b", "arguments": {"y": 2}}]'
+        streamer, deltas = self._feed([text])
+
+        tool_deltas = [tc for d in deltas for tc in d.tool_calls]
+        indices = {d.index for d in tool_deltas}
+        assert indices == {0, 1}
+        names = [d.function.name for d in tool_deltas if d.function and d.function.name]
+        assert names == ["a", "b"]
+        assert [tc.function.name for tc in streamer.result.tool_calls] == ["a", "b"]
+
+    def test_preamble_holds_back_marker_prefix(self):
+        # `[T` could be the start of `[TOOL_CALLS]`; the streamer must hold
+        # it until the byte after `[T` proves it is or isn't the marker.
+        streamer = ChatOutputStreamer(MistralToolCallParser())
+        mid = streamer.extract_streaming("hello [T")
+        assert mid is not None and mid.content == "hello "
+        final = streamer.finalize()
+        assert final is not None and final.content == "[T"
+
+    def test_no_envelope_streams_as_pure_content(self):
+        _, deltas = self._feed(["plain ", "answer ", "no tools"])
+        assert "".join(d.content or "" for d in deltas) == "plain answer no tools"
+
+    def test_unterminated_array_finalizes_complete_calls(self):
+        # The model emitted one full call and started a second that never
+        # closed. The first should finalize; the second should be dropped.
+        text = '[TOOL_CALLS][{"name": "done", "arguments": {"x": 1}}, {"name": "wip"'
+        streamer, _ = self._feed([text])
+        assert [tc.function.name for tc in streamer.result.tool_calls] == ["done"]
+
+
+class TestSplitPayloadDefault:
+    """Regression: the default `split_payload` keeps Hermes one-call-per-region behavior."""
+
+    def test_default_returns_single_entry(self):
+        parser = HermesToolCallParser()
+        assert parser.split_payload("anything", True) == [("anything", True)]
+        assert parser.split_payload("anything", False) == [("anything", False)]
