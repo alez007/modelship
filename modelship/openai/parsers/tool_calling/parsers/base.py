@@ -55,6 +55,17 @@ class ToolCallParser(ABC):
         stream and the client receives malformed JSON.
         """
 
+    def split_payload(self, payload: str, is_complete: bool) -> list[tuple[str, bool]]:
+        """Split a region payload into ``(sub_payload, is_complete)`` per-call entries.
+
+        Default: one call per region (Hermes-style). Families like Mistral
+        whose envelope wraps a JSON array of calls override this to yield
+        one entry per array element. Each entry is then fed independently to
+        :meth:`extract_partial_name` / :meth:`extract_partial_args`, and each
+        becomes its own OpenAI ``tool_calls[i]`` slot.
+        """
+        return [(payload, is_complete)]
+
     def parse(self, text: str) -> ParsedChatOutput:
         # Local import: ``output`` imports ``ToolCallParser`` for typing,
         # so importing it at module top would create a cycle.

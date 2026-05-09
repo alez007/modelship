@@ -9,11 +9,12 @@ streaming helpers from ``modelship.openai.parsers.streaming``.
 """
 
 from modelship.openai.parsers.tool_calling.input import resolve_tools_for_request
-from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, MistralToolCallParser, ToolCallParser
 from modelship.openai.parsers.tool_calling.registry import available_parsers, get_parser, register_parser
 
 __all__ = [
     "HermesToolCallParser",
+    "MistralToolCallParser",
     "ToolCallParser",
     "available_parsers",
     "get_parser",

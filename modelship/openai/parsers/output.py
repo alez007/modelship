@@ -188,10 +188,13 @@ class ChatOutputStreamer:
                 if end < 0:
                     partial = text[payload_start:]
                     if hold_marker_tail:
-                        safe = _safe_overlap_index(partial, self._tool_end)
+                        # No end marker → region extends to EOS; nothing to hold back.
+                        safe = _safe_overlap_index(partial, self._tool_end) if self._tool_end else len(partial)
                         regions.append(("tool_call", partial[:safe], False))
                     else:
-                        regions.append(("tool_call", partial, False))
+                        # Finalize: with an end marker we never saw it (unterminated, leave incomplete);
+                        # without an end marker the region is complete by design.
+                        regions.append(("tool_call", partial, not self._tool_end))
                     break
                 regions.append(("tool_call", text[payload_start:end], True))
                 pos = end + len(self._tool_end)
@@ -240,54 +243,67 @@ class ChatOutputStreamer:
             return []
         deltas: list[DeltaToolCall] = []
         tool_blocks = [(payload, complete) for kind, payload, complete in regions if kind == "tool_call"]
-        for i, (payload, is_complete) in enumerate(tool_blocks):
-            self._ensure_slot(i)
+        # Flatten across regions and sub-blocks. Most parsers map one region to
+        # one call (default `split_payload`); families like Mistral wrap N calls
+        # in a single envelope and split them out here. The flat index is what
+        # the OpenAI ``tool_calls[i]`` slot uses.
+        flat_index = 0
+        stop = False
+        for region_payload, region_complete in tool_blocks:
+            if stop:
+                break
+            for sub_payload, sub_complete in self._tool_parser.split_payload(region_payload, region_complete):
+                i = flat_index
+                self._ensure_slot(i)
 
-            if not self._sent_name[i]:
-                name = self._tool_parser.extract_partial_name(payload)
-                if name is None:
-                    if is_complete:
-                        # Closed but malformed (no extractable name) — skip,
-                        # but still process later blocks.
-                        continue
-                    # Mid-stream and no name yet; per OpenAI convention we don't
-                    # advance to later blocks until the current one has a name.
-                    break
-                tool_id = f"chatcmpl-tool-{random_uuid()}"
-                self._sent_name[i] = True
-                self._sent_id[i] = tool_id
-                deltas.append(
-                    DeltaToolCall(
-                        index=i,
-                        id=tool_id,
-                        type="function",
-                        function=DeltaFunctionCall(name=name),
+                if not self._sent_name[i]:
+                    name = self._tool_parser.extract_partial_name(sub_payload)
+                    if name is None:
+                        if sub_complete:
+                            # Closed but malformed (no extractable name) — skip,
+                            # but still process later sub-blocks.
+                            flat_index += 1
+                            continue
+                        # Mid-stream and no name yet; per OpenAI convention we don't
+                        # advance to later blocks until the current one has a name.
+                        stop = True
+                        break
+                    tool_id = f"chatcmpl-tool-{random_uuid()}"
+                    self._sent_name[i] = True
+                    self._sent_id[i] = tool_id
+                    deltas.append(
+                        DeltaToolCall(
+                            index=i,
+                            id=tool_id,
+                            type="function",
+                            function=DeltaFunctionCall(name=name),
+                        )
                     )
-                )
 
-            args = self._tool_parser.extract_partial_args(payload)
-            if args is not None and len(args) > len(self._sent_args[i]):
-                diff = args[len(self._sent_args[i]) :]
-                self._sent_args[i] = args
-                deltas.append(
-                    DeltaToolCall(
-                        index=i,
-                        function=DeltaFunctionCall(arguments=diff),
+                args = self._tool_parser.extract_partial_args(sub_payload)
+                if args is not None and len(args) > len(self._sent_args[i]):
+                    diff = args[len(self._sent_args[i]) :]
+                    self._sent_args[i] = args
+                    deltas.append(
+                        DeltaToolCall(
+                            index=i,
+                            function=DeltaFunctionCall(arguments=diff),
+                        )
                     )
-                )
 
-            if is_complete and i not in self._finalized_indices and self._sent_name[i]:
-                self._finalized_indices.add(i)
-                self._finalized_calls.append(
-                    ToolCall(
-                        id=self._sent_id[i],
-                        type="function",
-                        function=FunctionCall(
-                            name=self._tool_parser.extract_partial_name(payload) or "",
-                            arguments=self._sent_args[i],
-                        ),
+                if sub_complete and i not in self._finalized_indices and self._sent_name[i]:
+                    self._finalized_indices.add(i)
+                    self._finalized_calls.append(
+                        ToolCall(
+                            id=self._sent_id[i],
+                            type="function",
+                            function=FunctionCall(
+                                name=self._tool_parser.extract_partial_name(sub_payload) or "",
+                                arguments=self._sent_args[i],
+                            ),
+                        )
                     )
-                )
+                flat_index += 1
         return deltas
 
     def _ensure_slot(self, i: int) -> None:
