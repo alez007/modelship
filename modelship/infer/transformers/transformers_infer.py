@@ -84,12 +84,18 @@ class TransformersInfer(BaseInfer):
             capabilities = TransformersCapabilities.detect(pipe)
             if capabilities.supports_image:
                 logger.info("Multimodal (vision) capability detected for model: %s", self.model_config.name)
-            # `resolve_all_tool_parsers` already honored `tool_calls_enabled=False`
-            # (opt-out leaves the resolved field None) and captured an explicit
-            # `tool_call_parser` setting if any. Read the resolved value directly.
+            # `resolve_all_tool_parsers` / `resolve_all_reasoning_parsers`
+            # already honored loader-specific opt-outs (leaving the resolved
+            # field None) and captured explicit overrides. Read both directly.
             tool_call_parser = self.model_config._resolved_tool_call_parser
+            reasoning_parser = self.model_config._resolved_reasoning_parser
             self.serving_chat = OpenAIServingChat(
-                pipe, self.model_config.name, self.config, capabilities, tool_call_parser
+                pipe,
+                self.model_config.name,
+                self.config,
+                capabilities,
+                tool_call_parser=tool_call_parser,
+                reasoning_parser=reasoning_parser,
             )
             self._serving.append(self.serving_chat)
 
