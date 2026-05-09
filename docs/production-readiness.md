@@ -100,6 +100,6 @@ Future development priorities for making Modelship production-ready, organized b
 | Monitoring (alerting + logs) | 9/10    | 9/10   |
 | Security                     | 4/10    | 8/10   |
 | Resilience                   | 6/10    | 8/10   |
-| Testing                      | 8/10    | 7/10   |
+| Testing                      | 8/10    | 9/10   |
 | DevOps Experience            | 6/10    | 8/10   |
 | Update/Deploy Strategy       | 6/10    | 7/10   |
