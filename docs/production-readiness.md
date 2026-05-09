@@ -20,10 +20,10 @@ Future development priorities for making Modelship production-ready, organized b
 
 ### Testing
 
-- [ ] **API endpoint tests** — HTTP-level tests for all `/v1/` endpoints
-- [ ] **Integration tests** — actual model loading and inference (at least with a tiny model)
-- [ ] **Streaming tests** — SSE streaming correctness and error handling
-- [ ] **Plugin loading tests** — verify plugin lifecycle
+- [x] **API endpoint tests** — HTTP-level tests for all `/v1/` endpoints (via `tests/test_integration.py`)
+- [x] **Integration tests** — actual model loading and inference (using Qwen-0.5B/0.6B)
+- [x] **Streaming tests** — SSE streaming correctness and error handling
+- [x] **Plugin loading tests** — verify plugin lifecycle
 - [ ] **Error recovery tests** — simulate failures and verify behavior
 
 ---
@@ -58,9 +58,9 @@ Future development priorities for making Modelship production-ready, organized b
 ### Update Strategy
 
 - [ ] **Rolling update support** — configure Ray Serve's built-in rolling updates for zero-downtime deploys
-- [ ] **Model hot-reload** — allow `models.yaml` changes without full server restart
-- [ ] **Changelog** — track breaking changes between versions
-- [ ] **Migration guide** — document config format changes between versions
+- [x] **Model hot-reload** — allow `models.yaml` changes without full server restart (via `mship_deploy --reconcile`)
+- [x] **Changelog** — track breaking changes between versions
+- [x] **Migration guide** — document config format changes between versions
 
 ---
 
@@ -95,11 +95,11 @@ Future development priorities for making Modelship production-ready, organized b
 
 | Area                         | Current | Target |
 |------------------------------|---------|--------|
-| Architecture & Design        | 8/10    | 9/10   |
+| Architecture & Design        | 9/10    | 9/10   |
 | Monitoring (metrics)         | 9/10    | 9/10   |
-| Monitoring (alerting + logs) | 8/10    | 9/10   |
+| Monitoring (alerting + logs) | 9/10    | 9/10   |
 | Security                     | 4/10    | 8/10   |
-| Resilience                   | 5/10    | 8/10   |
-| Testing                      | 3/10    | 7/10   |
-| DevOps Experience            | 5/10    | 8/10   |
-| Update/Deploy Strategy       | 3/10    | 7/10   |
+| Resilience                   | 6/10    | 8/10   |
+| Testing                      | 8/10    | 7/10   |
+| DevOps Experience            | 6/10    | 8/10   |
+| Update/Deploy Strategy       | 6/10    | 7/10   |
