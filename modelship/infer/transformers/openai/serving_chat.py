@@ -11,6 +11,7 @@ from modelship.infer.infer_config import RawRequestProxy, TransformersConfig
 from modelship.infer.transformers.capabilities import TransformersCapabilities
 from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
 from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
 from modelship.openai.parsers.tool_calling import get_parser, resolve_tools_for_request
 from modelship.openai.protocol import (
@@ -33,22 +34,27 @@ class OpenAIServingChat(OpenAIServing):
         model_name: str,
         config: TransformersConfig,
         capabilities: TransformersCapabilities,
-        tool_call_parser: str | None,
+        tool_call_parser: str | None = None,
+        reasoning_parser: str | None = None,
     ):
         self.pipeline = pipeline
         self.model_name = model_name
         self.config = config
         self.capabilities = capabilities
         self.tool_call_parser = tool_call_parser
+        self.reasoning_parser = reasoning_parser
         assert pipeline.tokenizer is not None, "text-generation pipeline must have a tokenizer"
         self.tokenizer: PreTrainedTokenizerBase = pipeline.tokenizer
         self._lock = asyncio.Lock()
-        # Validate the configured parser at startup so misconfiguration surfaces
+        # Validate configured parsers at startup so misconfiguration surfaces
         # before the first request rather than mid-generation. None means
         # auto-detection found no usable parser; tool calls in requests will be
-        # dropped with a warning at request time.
+        # dropped with a warning at request time, and reasoning will simply
+        # not be extracted.
         if tool_call_parser is not None:
             get_parser(tool_call_parser)
+        if reasoning_parser is not None:
+            get_reasoning_parser(reasoning_parser)
 
     async def warmup(self) -> None:
         logger.info("Warming up chat model: %s", self.model_name)
@@ -94,11 +100,18 @@ class OpenAIServingChat(OpenAIServing):
             max_tokens = request.max_completion_tokens
 
         parser_name = self.tool_call_parser if tools else None
+        reasoning_parser_name = self.reasoning_parser
 
         if request.stream:
             include_usage = bool(request.stream_options and request.stream_options.include_usage)
             return self._locked_stream(
-                request_id, messages, tools, max_tokens, parser_name=parser_name, include_usage=include_usage
+                request_id,
+                messages,
+                tools,
+                max_tokens,
+                parser_name=parser_name,
+                reasoning_parser_name=reasoning_parser_name,
+                include_usage=include_usage,
             )
 
         async with self._lock:
@@ -117,6 +130,7 @@ class OpenAIServingChat(OpenAIServing):
             model_name=self.model_name,
             text=completion_text,
             parser_name=parser_name,
+            reasoning_parser_name=reasoning_parser_name,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             max_tokens=max_tokens,
@@ -178,11 +192,18 @@ class OpenAIServingChat(OpenAIServing):
         max_tokens: int | None,
         *,
         parser_name: str | None,
+        reasoning_parser_name: str | None,
         include_usage: bool,
     ) -> AsyncGenerator[str, None]:
         async with self._lock:
             async for chunk in self._stream(
-                request_id, messages, tools, max_tokens, parser_name=parser_name, include_usage=include_usage
+                request_id,
+                messages,
+                tools,
+                max_tokens,
+                parser_name=parser_name,
+                reasoning_parser_name=reasoning_parser_name,
+                include_usage=include_usage,
             ):
                 yield chunk
 
@@ -194,6 +215,7 @@ class OpenAIServingChat(OpenAIServing):
         max_tokens: int | None,
         *,
         parser_name: str | None,
+        reasoning_parser_name: str | None,
         include_usage: bool,
     ) -> AsyncGenerator[str, None]:
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)  # type: ignore[arg-type]
@@ -220,6 +242,7 @@ class OpenAIServingChat(OpenAIServing):
                 model_name=self.model_name,
                 text_chunks=_async_iter(streamer),
                 parser_name=parser_name,
+                reasoning_parser_name=reasoning_parser_name,
                 count_tokens=lambda text: len(self.tokenizer.encode(text, add_special_tokens=False)),
                 prompt_tokens=self._count_prompt_tokens(messages, tools),
                 max_tokens=max_tokens,

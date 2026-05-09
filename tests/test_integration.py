@@ -90,6 +90,23 @@ MODEL_CONFIGS: dict[str, dict] = {
             "torch_dtype": "float32",
         },
     },
+    "chat-transformers-reasoning": {
+        "name": "chat-transformers-reasoning",
+        # Qwen3-0.6B safetensors — same family as the vLLM `chat-reasoning`
+        # and llama_cpp `chat-llama-reasoning` deployments. Lets us
+        # exercise reasoning, tools, and reasoning+tools through the
+        # transformers loader's `ChatOutputStreamer` wiring on real model
+        # output. CPU-only and float32 to match the rest of the
+        # transformers integration suite.
+        "model": "Qwen/Qwen3-0.6B",
+        "usecase": "generate",
+        "loader": "transformers",
+        "num_cpus": 2,
+        "transformers_config": {
+            "device": "cpu",
+            "torch_dtype": "float32",
+        },
+    },
     "embed-model": {
         "name": "embed-model",
         "model": "nomic-ai/nomic-embed-text-v1.5",
@@ -726,6 +743,105 @@ class TestChatLlamaCppReasoning:
             assert "</tool_call>" in reasoning, (
                 f"reasoning has an unmatched <tool_call> marker (open without close): {reasoning!r}"
             )
+
+
+@pytest.mark.integration
+class TestChatTransformersReasoning:
+    """End-to-end reasoning + tool calling through the transformers loader.
+
+    Qwen3-0.6B safetensors driven through the HF text-generation pipeline.
+    Verifies that ``transformers/openai/serving_chat.py`` plumbs
+    ``_resolved_reasoning_parser`` into the unified ``ChatOutputStreamer``
+    and that reasoning, tools, and reasoning+tools all surface correctly
+    on real model output.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-transformers-reasoning")
+
+    def test_reasoning_completion_transformers(self):
+        """Non-streaming: ``<think>...`` block routes to ``message.reasoning``,
+        the final answer lands in ``message.content``, no marker leakage."""
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-transformers-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 1024,
+            },
+            timeout=300,
+        )
+        assert response.status_code == 200, response.text
+        message = response.json()["choices"][0]["message"]
+        assert message.get("reasoning"), f"expected reasoning content, got {message!r}"
+        assert "<think>" not in (message.get("content") or "")
+        assert "</think>" not in (message.get("content") or "")
+        assert "<think>" not in message["reasoning"]
+        assert "</think>" not in message["reasoning"]
+
+    def test_reasoning_streaming_transformers(self):
+        """Streaming: at least one delta carries ``reasoning``; concatenated
+        reasoning is non-empty; markers never leak into either field."""
+        with httpx.stream(
+            "POST",
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-transformers-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 1024,
+                "stream": True,
+            },
+            timeout=300,
+        ) as response:
+            assert response.status_code == 200
+            reasoning_parts: list[str] = []
+            content_parts: list[str] = []
+            reasoning_deltas = 0
+            for line in response.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[len("data: ") :]
+                if payload == "[DONE]":
+                    break
+                chunk = json.loads(payload)
+                delta = chunk["choices"][0].get("delta") or {}
+                if delta.get("reasoning"):
+                    reasoning_parts.append(delta["reasoning"])
+                    reasoning_deltas += 1
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+
+        assert reasoning_deltas >= 1, "expected at least one reasoning delta"
+        assert "".join(reasoning_parts).strip(), "expected non-empty reasoning content"
+        assert "<think>" not in "".join(reasoning_parts)
+        assert "</think>" not in "".join(reasoning_parts)
+        assert "<think>" not in "".join(content_parts)
+        assert "</think>" not in "".join(content_parts)
+
+    def test_reasoning_with_tools_transformers(self, client):
+        """Reasoning + tool calling in one round-trip through transformers.
+
+        Mirrors ``TestChatLlamaCppReasoning.test_reasoning_with_tools_llama_cpp``:
+        the single-pass ``ChatOutputStreamer`` must populate BOTH
+        ``message.reasoning`` and ``message.tool_calls``.
+        """
+        completion = client.chat.completions.create(
+            model="chat-transformers-reasoning",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=1024,
+        )
+        message = completion.choices[0].message
+        reasoning = getattr(message, "reasoning", None) or message.model_extra.get("reasoning")
+        assert reasoning, f"expected reasoning, got message={message!r}"
+        assert "<think>" not in reasoning
+        tool_calls = message.tool_calls
+        assert tool_calls, f"expected a tool call, got content={message.content!r}, reasoning={reasoning!r}"
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
 
 
 @pytest.mark.integration
