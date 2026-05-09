@@ -1,18 +1,23 @@
-"""Loader-agnostic chat-completion helpers for tool-call-aware responses.
+"""Loader-agnostic chat-completion helpers for parser-aware responses.
 
 Loaders produce text differently — HF ``Pipeline`` for transformers, raw
-``llama.create_completion`` for llama_cpp, async iterators from plugins — but
-the OpenAI response shapes (streaming and non-streaming) are the same. This
-module owns those shapes plus the `ToolCallStreamer` driving loop, so the
-loaders only deal in plain text.
+``llama.create_completion`` for llama_cpp, async iterators from plugins —
+but the OpenAI response shapes (streaming and non-streaming) are the
+same. This module owns those shapes plus the
+:class:`~modelship.openai.parsers.output.ChatOutputStreamer` driving
+loop, so the loaders only deal in plain text.
 
 Two helpers:
 
-- :func:`build_chat_completion_response` — non-streaming. Loader hands in the
-  full completion text and token counts; we parse tool calls and pack the
-  OpenAI ``ChatCompletionResponse``.
+- :func:`build_chat_completion_response` — non-streaming. Loader hands in
+  the full completion text and token counts; we parse reasoning and
+  tool calls and pack the OpenAI ``ChatCompletionResponse``.
 - :func:`stream_chat_completion` — streaming. Loader hands in an
-  ``AsyncIterator[str]`` of new text pieces; we emit the SSE byte stream.
+  ``AsyncIterator[str]`` of new text pieces; we emit the SSE byte
+  stream.
+
+Both accept ``parser_name`` (tool-call) and ``reasoning_parser_name``
+independently. Either or both may be ``None``.
 """
 
 from __future__ import annotations
@@ -21,8 +26,9 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 
-from modelship.openai.parsers.tool_calling.parsers import ParsedToolCalls, ToolCallStreamer
-from modelship.openai.parsers.tool_calling.registry import get_parser
+from modelship.openai.parsers.output import ChatOutputStreamer, ParsedChatOutput
+from modelship.openai.parsers.reasoning.registry import get_parser as get_reasoning_parser
+from modelship.openai.parsers.tool_calling.registry import get_parser as get_tool_call_parser
 from modelship.openai.protocol import (
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
@@ -34,7 +40,7 @@ from modelship.openai.protocol import (
 )
 
 
-def finish_reason_for(parsed: ParsedToolCalls, completion_tokens: int, max_tokens: int | None) -> str:
+def finish_reason_for(parsed: ParsedChatOutput, completion_tokens: int, max_tokens: int | None) -> str:
     """Compute the OpenAI ``finish_reason`` for a chat completion."""
     if parsed.has_tool_calls:
         return "tool_calls"
@@ -49,6 +55,7 @@ def build_chat_completion_response(
     model_name: str,
     text: str,
     parser_name: str | None,
+    reasoning_parser_name: str | None = None,
     prompt_tokens: int,
     completion_tokens: int,
     max_tokens: int | None,
@@ -57,10 +64,10 @@ def build_chat_completion_response(
     """Parse ``text`` and pack it into an OpenAI ``ChatCompletionResponse``.
 
     Non-streaming counterpart of :func:`stream_chat_completion`. When
-    ``parser_name`` is ``None``, ``text`` becomes the message content as-is
-    with no tool-call extraction.
+    both parser names are ``None``, ``text`` becomes the message
+    content as-is with no extraction.
     """
-    parsed = get_parser(parser_name).parse(text) if parser_name else ParsedToolCalls(text, [])
+    parsed = _parse_full(text, parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
     finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
     return ChatCompletionResponse(
         id=request_id,
@@ -71,6 +78,7 @@ def build_chat_completion_response(
                 message=ChatMessage(
                     role="assistant",
                     content=parsed.content,
+                    reasoning=parsed.reasoning,
                     tool_calls=parsed.tool_calls,
                 ),
                 finish_reason=finish_reason,
@@ -91,6 +99,7 @@ async def stream_chat_completion(
     model_name: str,
     text_chunks: AsyncIterator[str],
     parser_name: str | None,
+    reasoning_parser_name: str | None = None,
     count_tokens: Callable[[str], int],
     prompt_tokens: int,
     max_tokens: int | None,
@@ -99,17 +108,19 @@ async def stream_chat_completion(
 ) -> AsyncIterator[str]:
     """Drive the OpenAI streaming-response protocol from a stream of text pieces.
 
-    Yields SSE strings ready to be forwarded to the client. When
-    ``parser_name`` is set, the cumulative buffer is fed to a
-    :class:`ToolCallStreamer` so newly-emittable content/tool-call fragments
-    show up in deltas without a half-formed marker ever reaching the client.
-    When it's ``None``, each chunk is forwarded as a content delta unchanged.
+    Yields SSE strings ready to be forwarded to the client. When either
+    ``parser_name`` or ``reasoning_parser_name`` is set, the cumulative
+    buffer is fed to a :class:`ChatOutputStreamer` so newly-emittable
+    reasoning, content, and tool-call fragments show up in deltas
+    without a half-formed marker ever reaching the client. When both
+    are ``None``, each chunk is forwarded as a content delta unchanged.
 
     ``count_tokens`` is consulted only at end-of-stream to compute the
-    completion-token count for ``finish_reason`` and (optionally) usage; pass
-    ``lambda _: 0`` if the loader doesn't have a tokenizer handy.
+    completion-token count for ``finish_reason`` and (optionally)
+    usage; pass ``lambda _: 0`` if the loader doesn't have a tokenizer
+    handy.
     """
-    tool_call_streamer = ToolCallStreamer(get_parser(parser_name)) if parser_name else None
+    streamer = _make_streamer(parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
     accumulated = ""
 
     yield _delta_chunk(request_id, model_name, DeltaMessage(role="assistant"), created)
@@ -118,22 +129,22 @@ async def stream_chat_completion(
         if not piece:
             continue
         accumulated += piece
-        if tool_call_streamer is None:
+        if streamer is None:
             yield _delta_chunk(request_id, model_name, DeltaMessage(content=piece), created)
             await asyncio.sleep(0)
             continue
-        delta = tool_call_streamer.extract_streaming(accumulated)
+        delta = streamer.extract_streaming(accumulated)
         if delta is not None:
             yield _delta_chunk(request_id, model_name, delta, created)
         await asyncio.sleep(0)
 
-    if tool_call_streamer is not None:
-        final = tool_call_streamer.finalize()
+    if streamer is not None:
+        final = streamer.finalize()
         if final is not None:
             yield _delta_chunk(request_id, model_name, final, created)
-        parsed = tool_call_streamer.result
+        parsed = streamer.result
     else:
-        parsed = ParsedToolCalls(accumulated, [])
+        parsed = ParsedChatOutput(content=accumulated or None, reasoning=None, tool_calls=[])
 
     completion_tokens = count_tokens(accumulated)
     finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
@@ -169,6 +180,23 @@ async def stream_chat_completion(
         )
 
     yield "data: [DONE]\n\n"
+
+
+def _parse_full(text: str, *, parser_name: str | None, reasoning_parser_name: str | None) -> ParsedChatOutput:
+    streamer = _make_streamer(parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
+    if streamer is None:
+        return ParsedChatOutput(content=text or None, reasoning=None, tool_calls=[])
+    streamer.extract_streaming(text)
+    streamer.finalize()
+    return streamer.result
+
+
+def _make_streamer(*, parser_name: str | None, reasoning_parser_name: str | None) -> ChatOutputStreamer | None:
+    if parser_name is None and reasoning_parser_name is None:
+        return None
+    tool_parser = get_tool_call_parser(parser_name) if parser_name else None
+    reasoning_parser = get_reasoning_parser(reasoning_parser_name) if reasoning_parser_name else None
+    return ChatOutputStreamer(tool_parser, reasoning_parser)
 
 
 def _delta_chunk(request_id: str, model_name: str, delta: DeltaMessage, created: int) -> str:

@@ -13,12 +13,9 @@ from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
 from modelship.logging import get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
-from modelship.openai.parsers.tool_calling import (
-    build_chat_completion_response,
-    get_parser,
-    resolve_tools_for_request,
-    stream_chat_completion,
-)
+from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
+from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
+from modelship.openai.parsers.tool_calling import get_parser, resolve_tools_for_request
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -39,6 +36,7 @@ class OpenAIServingChat(OpenAIServing):
         model_name: str,
         capabilities: LlamaCppCapabilities,
         tool_call_parser: str | None = None,
+        reasoning_parser: str | None = None,
         renderer: LlamaCppToolCallRenderer | None = None,
     ):
         self._llama = llama
@@ -48,11 +46,24 @@ class OpenAIServingChat(OpenAIServing):
         self._accepted_params = set(inspect.signature(llama.create_chat_completion).parameters)
         self._completion_accepted_params = set(inspect.signature(llama.create_completion).parameters)
         self.tool_call_parser = tool_call_parser
+        self.reasoning_parser = reasoning_parser
         self._renderer = renderer
+        # The renderer's presence is the sole switch between paths:
+        #  - renderer set → drive `create_completion` raw, route every
+        #    response through `ChatOutputStreamer`. Reasoning + tool-call
+        #    extraction happens here. Default for any model that exposes
+        #    a chat template via GGUF metadata.
+        #  - renderer None → fall back to llama-cpp's
+        #    `create_chat_completion`. Used when the user opted into
+        #    llama-cpp's own templating with `chat_format` on
+        #    LlamaCppConfig — they're presumed to know our parsers won't
+        #    fire for that config.
         if tool_call_parser is not None:
             assert renderer is not None, "renderer is required when tool_call_parser is set"
-            # Validate at startup so misconfiguration surfaces before the first request.
             get_parser(tool_call_parser)
+        if reasoning_parser is not None:
+            assert renderer is not None, "renderer is required when reasoning_parser is set"
+            get_reasoning_parser(reasoning_parser)
 
     async def warmup(self) -> None:
         logger.info("Warming up llama.cpp chat model: %s", self.model_name)
@@ -90,11 +101,19 @@ class OpenAIServingChat(OpenAIServing):
             )
             tools = None
 
-        if tools and self.tool_call_parser is not None:
-            return await self._handle_with_tools(request, request_id, messages, tools)
-        return await self._handle_without_tools(request, request_id, messages)
+        tool_parser_name = self.tool_call_parser if tools else None
+        # Renderer presence decides the path (see __init__ comment): when
+        # the user set `chat_format` on LlamaCppConfig we leave it to
+        # llama-cpp; otherwise we render the prompt ourselves so the
+        # ChatOutputStreamer sees the model's raw bytes regardless of
+        # whether reasoning or tools are active for this request.
+        if self._renderer is not None:
+            return await self._handle_with_parsers(
+                request, request_id, messages, tools, tool_parser_name=tool_parser_name
+            )
+        return await self._handle_native(request, request_id, messages)
 
-    async def _handle_without_tools(
+    async def _handle_native(
         self,
         request: ChatCompletionRequest,
         request_id: str,
@@ -102,9 +121,10 @@ class OpenAIServingChat(OpenAIServing):
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
         """Pass-through to ``llama.create_chat_completion`` — no parser involved.
 
-        This path is used when no tools are requested, or when the user
-        configured ``chat_format`` (in which case our parser is intentionally
-        bypassed and llama-cpp-python handles tool calling itself if at all).
+        Used when neither tool calling nor reasoning is active for this
+        deployment, or when the user configured ``chat_format`` (in
+        which case our parsers are intentionally bypassed and
+        llama-cpp-python's own chat handler is responsible).
         """
         kwargs = self._build_kwargs(request, messages)
         loop = asyncio.get_event_loop()
@@ -140,28 +160,30 @@ class OpenAIServingChat(OpenAIServing):
                 logger.warning("llama_cpp chat inference failed: %s", e)
                 return create_error_response(e)
 
-    async def _handle_with_tools(
+    async def _handle_with_parsers(
         self,
         request: ChatCompletionRequest,
         request_id: str,
         messages: list[dict],
-        tools: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        *,
+        tool_parser_name: str | None,
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
-        """Render prompt with tools, run raw completion, parse via shared streamer.
+        """Render prompt ourselves, run raw completion, parse via shared streamer.
 
-        Bypasses ``llama.create_chat_completion`` because that re-runs llama-cpp's
-        own chat templating (which produces tokens conditioned on a different
-        template than the one our parser expects).
+        Bypasses ``llama.create_chat_completion`` because that re-runs
+        llama-cpp's own chat templating (which also strips tokens our
+        parsers need to see). The unified streamer handles reasoning
+        and tool calls in a single pass over the model output.
         """
         assert self._renderer is not None  # guarded at __init__
-        assert self.tool_call_parser is not None
-        parser_name = self.tool_call_parser
         renderer = self._renderer
+        reasoning_parser_name = self.reasoning_parser
 
         try:
             prompt = renderer.render(messages, tools)
         except Exception as e:
-            logger.warning("llama_cpp tool-call prompt rendering failed for %s: %s", request_id, e)
+            logger.warning("llama_cpp prompt rendering failed for %s: %s", request_id, e)
             return create_error_response(e)
 
         max_tokens = request.max_tokens
@@ -175,10 +197,11 @@ class OpenAIServingChat(OpenAIServing):
 
         if request.stream:
             include_usage = bool(request.stream_options and request.stream_options.include_usage)
-            return self._locked_stream_with_tools(
+            return self._locked_stream_with_parsers(
                 request_id=request_id,
                 completion_kwargs=completion_kwargs,
-                parser_name=parser_name,
+                tool_parser_name=tool_parser_name,
+                reasoning_parser_name=reasoning_parser_name,
                 prompt_tokens=prompt_tokens,
                 max_tokens=max_tokens,
                 include_usage=include_usage,
@@ -192,7 +215,7 @@ class OpenAIServingChat(OpenAIServing):
                 )
                 result = cast(dict, raw)
             except Exception as e:
-                logger.warning("llama_cpp tool-call inference failed for %s: %s", request_id, e)
+                logger.warning("llama_cpp inference failed for %s: %s", request_id, e)
                 return create_error_response(e)
 
         completion_text = result["choices"][0]["text"] if result.get("choices") else ""
@@ -203,19 +226,21 @@ class OpenAIServingChat(OpenAIServing):
             request_id=request_id,
             model_name=self.model_name,
             text=completion_text,
-            parser_name=parser_name,
+            parser_name=tool_parser_name,
+            reasoning_parser_name=reasoning_parser_name,
             prompt_tokens=int(usage.get("prompt_tokens") or prompt_tokens),
             completion_tokens=completion_tokens,
             max_tokens=max_tokens,
             created=int(time.time()),
         )
 
-    async def _locked_stream_with_tools(
+    async def _locked_stream_with_parsers(
         self,
         *,
         request_id: str,
         completion_kwargs: dict,
-        parser_name: str,
+        tool_parser_name: str | None,
+        reasoning_parser_name: str | None,
         prompt_tokens: int,
         max_tokens: int | None,
         include_usage: bool,
@@ -227,7 +252,8 @@ class OpenAIServingChat(OpenAIServing):
                 request_id=request_id,
                 model_name=self.model_name,
                 text_chunks=self._raw_text_chunks(completion_kwargs),
-                parser_name=parser_name,
+                parser_name=tool_parser_name,
+                reasoning_parser_name=reasoning_parser_name,
                 count_tokens=renderer.count_tokens,
                 prompt_tokens=prompt_tokens,
                 max_tokens=max_tokens,

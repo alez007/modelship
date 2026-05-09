@@ -7,8 +7,8 @@ from typing import ClassVar
 
 import pytest
 
+from modelship.openai.parsers.output import ChatOutputStreamer
 from modelship.openai.parsers.tool_calling import (
-    ToolCallStreamer,
     available_parsers,
     get_parser,
     register_parser,
@@ -123,7 +123,7 @@ class TestHermesParser:
         assert result.tool_calls[0].id != result.tool_calls[1].id
 
 
-class TestToolCallStreamer:
+class TestChatOutputStreamer:
     """Drive the streamer one chunk at a time and verify the deltas.
 
     The cumulative-text protocol matches what serving_chat does in production:
@@ -131,8 +131,8 @@ class TestToolCallStreamer:
     delta.
     """
 
-    def _feed(self, chunks: list[str]) -> tuple[ToolCallStreamer, list]:
-        streamer = ToolCallStreamer(HermesToolCallParser())
+    def _feed(self, chunks: list[str]) -> tuple[ChatOutputStreamer, list]:
+        streamer = ChatOutputStreamer(HermesToolCallParser())
         deltas = []
         cumulative = ""
         for chunk in chunks:
@@ -154,7 +154,7 @@ class TestToolCallStreamer:
         # `<` could be the first char of `<tool_call>`; the streamer must not
         # ship it mid-stream. Once finalize() runs (no more text coming) the
         # held tail is safe to flush as content.
-        streamer = ToolCallStreamer(HermesToolCallParser())
+        streamer = ChatOutputStreamer(HermesToolCallParser())
         mid = streamer.extract_streaming("before <")
         assert mid is not None and mid.content == "before "
         final = streamer.finalize()
@@ -221,7 +221,7 @@ class TestToolCallStreamer:
     def test_partial_name_held_until_closing_quote(self):
         # While the model is mid-name (``"name": "get_wea`` so far), the
         # streamer must NOT send a partial name — wait for the closing quote.
-        streamer = ToolCallStreamer(HermesToolCallParser())
+        streamer = ChatOutputStreamer(HermesToolCallParser())
         partial = '<tool_call>{"name": "get_wea'
         d = streamer.extract_streaming(partial)
         # No name yet → no tool delta.

@@ -63,6 +63,22 @@ MODEL_CONFIGS: dict[str, dict] = {
         "loader": "llama_cpp",
         "num_cpus": 1,
     },
+    "chat-llama-reasoning": {
+        "name": "chat-llama-reasoning",
+        # Qwen3-0.6B in GGUF form: same family as the vLLM `chat-reasoning`
+        # deployment (which uses the safetensors checkpoint), so the
+        # model emits `<think>...</think>` and supports Hermes-style tool
+        # calls in the same chat template. Lets us exercise reasoning,
+        # tools, and reasoning+tools through the llama_cpp loader in one
+        # deployment. Reasoning chains need headroom, so n_ctx is bumped.
+        "model": "lmstudio-community/Qwen3-0.6B-GGUF:*Q4_K_M.gguf",
+        "usecase": "generate",
+        "loader": "llama_cpp",
+        "num_cpus": 1,
+        "llama_cpp_config": {
+            "n_ctx": 4096,
+        },
+    },
     "chat-transformers": {
         "name": "chat-transformers",
         "model": "Qwen/Qwen2.5-0.5B-Instruct",
@@ -540,6 +556,176 @@ class TestChatLlamaCpp:
         assert parsed_args.get("city")
         assert "Paris" in parsed_args["city"]
         assert collected["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.integration
+class TestChatLlamaCppReasoning:
+    """End-to-end reasoning + tool calling through the llama_cpp loader.
+
+    Same Qwen3-0.6B family as the vLLM `chat-reasoning` deployment but
+    in GGUF form, so the modelship-side ``ChatOutputStreamer`` is
+    actually exercised on real model output (vLLM has its own native
+    reasoning parser, llama_cpp does not). One deployment covers
+    three scenarios because Qwen3 emits ``<think>...</think>`` AND
+    supports Hermes-style tool calls in the same chat template.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-llama-reasoning")
+
+    def test_reasoning_completion_llama_cpp(self):
+        """Non-streaming: ``<think>...`` block routes to ``message.reasoning``,
+        the final answer lands in ``message.content``, no marker leakage."""
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-llama-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 1024,
+            },
+            timeout=300,
+        )
+        assert response.status_code == 200, response.text
+        message = response.json()["choices"][0]["message"]
+        assert message.get("reasoning"), f"expected reasoning content, got {message!r}"
+        assert "<think>" not in (message.get("content") or "")
+        assert "</think>" not in (message.get("content") or "")
+        assert "<think>" not in message["reasoning"]
+        assert "</think>" not in message["reasoning"]
+
+    def test_reasoning_streaming_llama_cpp(self):
+        """Streaming: at least one delta carries ``reasoning``; concatenated
+        reasoning is non-empty; markers never leak into either field."""
+        with httpx.stream(
+            "POST",
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-llama-reasoning",
+                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
+                "max_tokens": 1024,
+                "stream": True,
+            },
+            timeout=300,
+        ) as response:
+            assert response.status_code == 200
+            reasoning_parts: list[str] = []
+            content_parts: list[str] = []
+            reasoning_deltas = 0
+            for line in response.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[len("data: ") :]
+                if payload == "[DONE]":
+                    break
+                chunk = json.loads(payload)
+                delta = chunk["choices"][0].get("delta") or {}
+                if delta.get("reasoning"):
+                    reasoning_parts.append(delta["reasoning"])
+                    reasoning_deltas += 1
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+
+        assert reasoning_deltas >= 1, "expected at least one reasoning delta"
+        assert "".join(reasoning_parts).strip(), "expected non-empty reasoning content"
+        assert "<think>" not in "".join(reasoning_parts)
+        assert "</think>" not in "".join(reasoning_parts)
+        assert "<think>" not in "".join(content_parts)
+        assert "</think>" not in "".join(content_parts)
+
+    def test_reasoning_with_tools_llama_cpp(self, client):
+        """Reasoning + tool calling in one round-trip.
+
+        Asserts that when a reasoning model also emits a tool call, the
+        single-pass ``ChatOutputStreamer`` populates BOTH
+        ``message.reasoning`` and ``message.tool_calls``, and that
+        ``finish_reason="tool_calls"``.
+        """
+        completion = client.chat.completions.create(
+            model="chat-llama-reasoning",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=1024,
+        )
+        message = completion.choices[0].message
+        # The OpenAI Python SDK exposes unknown fields via ``model_extra``.
+        reasoning = getattr(message, "reasoning", None) or message.model_extra.get("reasoning")
+        assert reasoning, f"expected reasoning, got message={message!r}"
+        assert "<think>" not in reasoning
+        tool_calls = message.tool_calls
+        assert tool_calls, f"expected a tool call, got content={message.content!r}, reasoning={reasoning!r}"
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
+
+    def test_tool_markers_inside_reasoning_not_double_counted(self, client):
+        """Tool-call markers emitted *inside* ``<think>`` must route to
+        reasoning, never become real tool calls.
+
+        Coaxes the model into illustrating tool-call syntax inside its
+        reasoning and then making one actual call. The single-pass
+        ``ChatOutputStreamer`` must:
+
+        - Surface the illustrative ``<tool_call>...</tool_call>`` text
+          inside ``message.reasoning`` (proving it was treated as
+          reasoning bytes, not a real call).
+        - Emit exactly ONE ``tool_calls`` entry (the actual post-
+          reasoning call), not multiples.
+
+        Real models are non-deterministic; if the prompt fails to
+        produce literal markers in reasoning, we skip the
+        marker-routing assertion rather than flake — the
+        single-tool-call assertion still has value either way. The
+        deterministic equivalent is exercised in unit tests
+        (``tests/test_reasoning.py::TestComposition``).
+        """
+        completion = client.chat.completions.create(
+            model="chat-llama-reasoning",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an assistant with access to tools. When you think inside "
+                        "<think>...</think>, FIRST quote one example of tool-call syntax "
+                        "verbatim inside angle brackets — e.g. write the literal text "
+                        '<tool_call>{"name":"example","arguments":{}}</tool_call> as part '
+                        "of your reasoning to remind yourself of the format. THEN decide "
+                        "which real tool to call."
+                    ),
+                },
+                {"role": "user", "content": "What is the weather in Paris?"},
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=1024,
+        )
+        message = completion.choices[0].message
+        reasoning = getattr(message, "reasoning", None) or message.model_extra.get("reasoning") or ""
+        tool_calls = message.tool_calls or []
+
+        # Hard assertions: regardless of prompt compliance, the streamer
+        # must produce exactly one real tool call for the weather query.
+        assert tool_calls, (
+            f"expected exactly one real tool call, got content={message.content!r}, reasoning={reasoning!r}"
+        )
+        assert len(tool_calls) == 1, (
+            f"expected exactly one tool call (markers inside <think> must not be double-counted); "
+            f"got {len(tool_calls)} calls={[tc.function.name for tc in tool_calls]}"
+        )
+        assert tool_calls[0].function.name == "get_weather"
+        assert completion.choices[0].finish_reason == "tool_calls"
+
+        # Soft assertion: only meaningful if the model actually quoted
+        # the marker syntax inside its reasoning.
+        if "<tool_call>" in reasoning:
+            # Reasoning carries the literal marker text — confirms the
+            # streamer routed it to the reasoning view rather than
+            # parsing it as a real call (which would have shown up as a
+            # second tool_calls entry).
+            assert "</tool_call>" in reasoning, (
+                f"reasoning has an unmatched <tool_call> marker (open without close): {reasoning!r}"
+            )
 
 
 @pytest.mark.integration
