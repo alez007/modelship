@@ -28,6 +28,10 @@ uv run pytest tests/test_config.py::TestLlamaCppConfig::test_defaults -v
 
 CI (`.github/workflows/ci.yml`) runs `uv sync --extra dev --extra gpu` on Linux, then `ruff check`, `ruff format --check`, `pyright`, and `pytest tests/ -v`. Match that locally before pushing.
 
+`make lint` requires `--extra gpu` to be installed. Pyright resolves imports against the active venv, and `vllm`, `gguf`, `diffusers`, and `psutil` only ship under the gpu extra, so lint on a cpu-only sync fails with `reportMissingImports`. Tests run fine on either extra (the gpu extra is a superset).
+
+Agents: when running tests on your own initiative (sanity-checking a change, verifying a bump), skip the slow `integration`-marked suite by default — `uv run pytest tests/ -v -m "not integration"`. Only run the full `make test` (which includes integration) when explicitly requested.
+
 Pre-commit only runs ruff; it does **not** run pyright or tests, so don't rely on the hook to catch type errors.
 
 ## Lint / format / typecheck rules
