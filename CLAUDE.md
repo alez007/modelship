@@ -28,6 +28,10 @@ uv run pytest tests/test_config.py::TestLlamaCppConfig::test_defaults -v
 
 CI mirrors `make lint` + `pytest tests/ -v`. Match it locally before pushing.
 
+`make lint` requires the `gpu` extra — pyright fails with `reportMissingImports` for `vllm`, `gguf`, `diffusers.pipelines.auto_pipeline`, and `psutil` under the cpu sync. Tests pass on either extra.
+
+When running tests on your own initiative, skip the slow integration suite: `uv run pytest tests/ -v -m "not integration"`. Only run full `make test` when explicitly asked.
+
 ## Running the server
 
 `mship_deploy.py` is the entry point (not a console script, not `python -m`). It:
