@@ -133,20 +133,6 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-Or point any OpenAI SDK at it — no code changes, just swap `base_url`. The thought process will appear in the `reasoning_content` field:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
-resp = client.chat.completions.create(
-    model="reasoning-qwen",
-    messages=[{"role": "user", "content": "Which is larger, 9.11 or 9.9?"}],
-)
-print("Thoughts:", resp.choices[0].message.reasoning_content)
-print("Answer:", resp.choices[0].message.content)
-```
-
 ### GPU (vLLM, Diffusers)
 
 For high-throughput GPU inference, use the standard image and add `--gpus all`. You'll also need the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and an `HF_TOKEN` for gated models. Example `models.yaml` entries for vLLM, Diffusers, and multi-GPU setups live in [docs/model-configuration.md](docs/model-configuration.md); ready-to-run configs are in [config/examples/](config/examples/).
