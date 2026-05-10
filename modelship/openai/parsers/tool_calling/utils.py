@@ -10,6 +10,8 @@ from modelship.openai.parsers.utils import read_chat_template
 def detect_tool_parser(model_path: str | Path) -> str | None:
     """Return the name of the tool-call parser required by the model or None.
 
+    - Returns "gemma4" if `<|tool_call>` markers are found.
+    - Returns "function_gemma" if `<start_function_call>` markers are found.
     - Returns "hermes" if `<tool_call>` markers are found.
     - Returns "mistral" if `[TOOL_CALLS]` markers are found.
     - Returns "llama3_json" if `<|python_tag|>` markers are found.
@@ -24,8 +26,14 @@ def detect_tool_parser(model_path: str | Path) -> str | None:
 
 def classify_template(template: str) -> str | None:
     """Map a chat-template string to a parser name based on tool-call markers."""
-    if "tools" not in template and "tool_calls" not in template:
+    if "tools" not in template and "tool_calls" not in template and "function" not in template:
         return None
+
+    if "<|tool_call>" in template:
+        return "gemma4"
+
+    if "<start_function_call>" in template:
+        return "function_gemma"
 
     if "<tool_call>" in template:
         return "hermes"

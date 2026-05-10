@@ -9,10 +9,15 @@ built-in reasoning parsers and consumes only the resolved name.
 
 from __future__ import annotations
 
-from modelship.openai.parsers.reasoning.parsers import DeepseekR1ReasoningParser, ReasoningParser
+from modelship.openai.parsers.reasoning.parsers import (
+    DeepseekR1ReasoningParser,
+    Gemma4ReasoningParser,
+    ReasoningParser,
+)
 
 _PARSERS: dict[str, ReasoningParser] = {
     DeepseekR1ReasoningParser.name: DeepseekR1ReasoningParser(),
+    Gemma4ReasoningParser.name: Gemma4ReasoningParser(),
 }
 
 

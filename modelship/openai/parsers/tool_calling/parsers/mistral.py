@@ -92,12 +92,12 @@ class MistralToolCallParser(ToolCallParser):
         m = self._NAME_RE.search(partial_payload)
         return m.group(1) if m else None
 
-    def extract_partial_args(self, partial_payload: str) -> str | None:
+    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
         m = self._ARGS_RE.search(partial_payload)
         if m is None:
             return None
         args = partial_payload[m.end() :].rstrip()
-        if args.endswith("}"):
+        if not is_complete and args.endswith("}"):
             # Mirror Hermes: the per-call envelope is
             # `{"name":"x","arguments":<args>}` and the closing brace of
             # the envelope arrives in the byte stream alongside (or before)

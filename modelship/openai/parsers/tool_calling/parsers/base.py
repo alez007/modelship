@@ -64,7 +64,7 @@ class ToolCallParser(ABC):
         """
 
     @abstractmethod
-    def extract_partial_args(self, partial_payload: str) -> str | None:
+    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
         """Return the arguments substring as the client should see it so far.
 
         The streamer takes a length-diff of successive returns and forwards
@@ -72,6 +72,11 @@ class ToolCallParser(ABC):
         that could plausibly be the envelope closer landing ahead of the
         family's end marker — otherwise those bytes leak into the args
         stream and the client receives malformed JSON.
+
+        ``is_complete`` is True when the streamer has confirmed the tool call
+        is fully terminated (or at the end of generation). This allows parsers
+        that construct JSON dynamically (e.g., from custom syntax) to flush
+        withheld structural bytes.
         """
 
     def split_payload(self, payload: str, is_complete: bool) -> list[tuple[str, bool]]:
