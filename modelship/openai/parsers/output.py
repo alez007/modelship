@@ -23,6 +23,7 @@ so behavior cannot drift between them.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from modelship.openai.parsers.reasoning.parsers import ReasoningParser
@@ -95,6 +96,12 @@ class ChatOutputStreamer:
         # so a longer marker is replaced before a substring of it can
         # cause a false partial match.
         self._noise_specials: tuple[str, ...] = tuple(sorted(noise_specials, key=len, reverse=True))
+        if self._noise_specials:
+            pattern = "|".join(re.escape(s) for s in self._noise_specials)
+            self._noise_regex = re.compile(pattern)
+        else:
+            self._noise_regex = None
+
         self._reasoning = reasoning_parser
         self._reasoning_start = reasoning_parser.start_marker if reasoning_parser else ""
         self._reasoning_end = reasoning_parser.end_marker if reasoning_parser else ""
@@ -105,12 +112,19 @@ class ChatOutputStreamer:
         self._sent_args: list[str] = []
         self._finalized_indices: set[int] = set()
         self._finalized_calls: list[ToolCall] = []
+        self._last_raw_text = ""
+        self._stripped_head = ""
+        self._unstripped_tail = ""
         self._last_text = ""
 
     def extract_streaming(self, current_text: str) -> DeltaMessage | None:
         """Run one diff pass against ``current_text`` and return any new deltas."""
-        current_text = self._strip_noise(current_text)
+        delta_text = current_text[len(self._last_raw_text) :]
+        self._last_raw_text = current_text
+
+        current_text = self._strip_noise_delta(delta_text)
         self._last_text = current_text
+
         regions = self._scan(current_text, hold_marker_tail=True)
         content_delta = self._diff_content(regions)
         reasoning_delta = self._diff_reasoning(regions)
@@ -145,19 +159,35 @@ class ChatOutputStreamer:
     # Single-pass scanner
     # ------------------------------------------------------------------
 
-    def _strip_noise(self, text: str) -> str:
-        """Drop loader-supplied noise specials from ``text`` before scanning.
+    def _strip_noise_delta(self, delta_text: str) -> str:
+        """Drop loader-supplied noise specials from new text deltas.
 
-        Idempotent — safe to call on cumulative text every diff pass.
-        Cumulative semantics also mean a special split across two HF
-        chunks reassembles before we see it, so no per-chunk holdback is
-        needed here.
+        Maintains state to handle noise tokens split across chunks.
         """
-        if not self._noise_specials:
-            return text
+        if self._noise_regex is None:
+            self._stripped_head += delta_text
+            return self._stripped_head
+
+        # 1. Combine the held-back tail from the last chunk with the new chunk
+        working_text = self._unstripped_tail + delta_text
+
+        # 2. Strip noise from this combined window using regex
+        working_text = self._noise_regex.sub("", working_text)
+
+        # 3. Determine how much of the working text is "safe" to commit.
+        # The unsafe portion is the end of the string that might form a prefix
+        # of any noise token.
+        safe_idx = len(working_text)
         for s in self._noise_specials:
-            text = text.replace(s, "")
-        return text
+            overlap = _safe_overlap_index(working_text, s)
+            safe_idx = min(safe_idx, overlap)
+
+        # 4. Commit the safe part and hold back the unsafe tail
+        self._stripped_head += working_text[:safe_idx]
+        self._unstripped_tail = working_text[safe_idx:]
+
+        # 5. Return the full accumulated string for the scanner
+        return self._stripped_head + self._unstripped_tail
 
     def _scan(self, text: str, *, hold_marker_tail: bool) -> list[tuple[str, str, bool]]:
         """Walk ``text`` once, returning ordered ``(kind, payload, is_complete)`` regions.
