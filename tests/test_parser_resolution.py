@@ -49,9 +49,9 @@ class TestClassifyReasoningTemplate:
 
 class TestResolveReasoningParsers:
     def test_explicit_parser_stored(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="qwen3"))
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="deepseek_r1"))
         resolve_all_reasoning_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_reasoning_parser == "qwen3"
+        assert cfg._resolved_reasoning_parser == "deepseek_r1"
 
     def test_explicit_opt_out_leaves_none(self, monkeypatch):
         cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(enable_reasoning=False))
@@ -72,10 +72,10 @@ class TestResolveReasoningParsers:
         assert cfg._resolved_reasoning_parser is None
 
     def test_explicit_wins_over_auto(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="custom_x"))
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="deepseek_r1"))
         cfg._resolved_chat_template = "<think>x</think>"
         resolve_all_reasoning_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_reasoning_parser == "custom_x"
+        assert cfg._resolved_reasoning_parser == "deepseek_r1"
 
     def test_skips_non_generate_usecase(self):
         cfg = _make_cfg(usecase=ModelUsecase.embed)

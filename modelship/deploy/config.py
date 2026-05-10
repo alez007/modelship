@@ -7,6 +7,7 @@ from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsecase
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
+from modelship.openai.parsers.reasoning.registry import get_parser as get_reasoning_parser
 from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning_template
 from modelship.openai.parsers.tool_calling.registry import available_parsers, get_parser
 from modelship.openai.parsers.tool_calling.utils import classify_template
@@ -134,7 +135,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
                     f"which is not registered. Available: {sorted(registered) or '(none)'}."
                 )
             cfg._resolved_tool_call_parser = explicit
-            cfg._resolved_skip_special_tokens = _skip_specials_for(explicit)
+            _merge_skip_specials(cfg, explicit, is_reasoning=False)
             logger.info("Using explicit tool_call_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -162,11 +163,11 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             )
             continue
         cfg._resolved_tool_call_parser = detected
-        cfg._resolved_skip_special_tokens = _skip_specials_for(detected)
+        _merge_skip_specials(cfg, detected, is_reasoning=False)
         logger.info("Auto-detected tool_call_parser=%r for '%s'", detected, cfg.name)
 
 
-def _skip_specials_for(parser_name: str) -> bool | None:
+def _skip_specials_for(parser_name: str, is_reasoning: bool = False) -> bool | None:
     """Resolve the ``skip_special_tokens`` setting a loader should use.
 
     Returns ``False`` when the parser declares ``markers_are_specials``
@@ -175,7 +176,18 @@ def _skip_specials_for(parser_name: str) -> bool | None:
     in the stream and noise-strip the rest itself. Returns ``None``
     otherwise so the loader keeps its own default (``True``).
     """
-    return False if get_parser(parser_name).markers_are_specials else None
+    get_fn = get_reasoning_parser if is_reasoning else get_parser
+    return False if get_fn(parser_name).markers_are_specials else None
+
+
+def _merge_skip_specials(cfg, parser_name: str, is_reasoning: bool = False) -> None:
+    """Update ``_resolved_skip_special_tokens`` if the parser requires it.
+
+    Once set to ``False`` (keep specials), it is never reset to ``None``.
+    """
+    if cfg._resolved_skip_special_tokens is False:
+        return
+    cfg._resolved_skip_special_tokens = _skip_specials_for(parser_name, is_reasoning=is_reasoning)
 
 
 def _is_explicit_reasoning_opt_out(cfg) -> bool:
@@ -216,6 +228,7 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
 
         if explicit is not None:
             cfg._resolved_reasoning_parser = explicit
+            _merge_skip_specials(cfg, explicit, is_reasoning=True)
             logger.info("Using explicit reasoning_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -232,4 +245,5 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
         if detected is None:
             continue
         cfg._resolved_reasoning_parser = detected
+        _merge_skip_specials(cfg, detected, is_reasoning=True)
         logger.info("Auto-detected reasoning_parser=%r for '%s'", detected, cfg.name)
