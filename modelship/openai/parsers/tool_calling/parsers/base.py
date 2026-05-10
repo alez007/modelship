@@ -34,6 +34,25 @@ class ToolCallParser(ABC):
     name: str
     start_marker: str
     end_marker: str
+    # When False, the streamer locates ``start_marker`` but does NOT skip past
+    # it: the marker bytes stay at the head of the payload fed to the
+    # extractors. Used by parsers (e.g. ``llama3_json``) whose marker is part
+    # of the JSON they need to parse — ``{"name"`` cannot be consumed without
+    # destroying the object's structure. Defaults to True to preserve the
+    # Hermes/Mistral semantics where the marker is an envelope tag stripped
+    # before the body.
+    consume_start_marker: bool = True
+    # Set True when the parser's marker(s) are registered as *special tokens*
+    # in the tokenizers of the model families this parser targets — the way
+    # ``[TOOL_CALLS]`` is in Mistral v3+ tokenizers
+    # (``added_tokens_decoder`` with ``special=True``). Loaders that decode
+    # with ``skip_special_tokens=True`` by default would otherwise strip the
+    # marker before this parser ever sees it, leaving the parser permanently
+    # idle. The transformers loader reads this flag at startup, flips its
+    # streamer's ``skip_special_tokens`` to ``False`` when set, and noise-
+    # strips every OTHER registered special from chunks itself. Hermes and
+    # llama3_json keep the default — their markers are regular text.
+    markers_are_specials: bool = False
 
     @abstractmethod
     def extract_partial_name(self, partial_payload: str) -> str | None:

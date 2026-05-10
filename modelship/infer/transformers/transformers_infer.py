@@ -89,6 +89,7 @@ class TransformersInfer(BaseInfer):
             # field None) and captured explicit overrides. Read both directly.
             tool_call_parser = self.model_config._resolved_tool_call_parser
             reasoning_parser = self.model_config._resolved_reasoning_parser
+            skip_special_tokens = self.model_config._resolved_skip_special_tokens
             self.serving_chat = OpenAIServingChat(
                 pipe,
                 self.model_config.name,
@@ -96,6 +97,7 @@ class TransformersInfer(BaseInfer):
                 capabilities,
                 tool_call_parser=tool_call_parser,
                 reasoning_parser=reasoning_parser,
+                skip_special_tokens=skip_special_tokens,
             )
             self._serving.append(self.serving_chat)
 

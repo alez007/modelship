@@ -9,10 +9,16 @@ function-calling chat handler) bypass the registry entirely.
 
 from __future__ import annotations
 
-from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, MistralToolCallParser, ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers import (
+    HermesToolCallParser,
+    Llama3JsonToolCallParser,
+    MistralToolCallParser,
+    ToolCallParser,
+)
 
 _PARSERS: dict[str, ToolCallParser] = {
     HermesToolCallParser.name: HermesToolCallParser(),
+    Llama3JsonToolCallParser.name: Llama3JsonToolCallParser(),
     MistralToolCallParser.name: MistralToolCallParser(),
 }
 

@@ -36,6 +36,7 @@ class OpenAIServingChat(OpenAIServing):
         capabilities: TransformersCapabilities,
         tool_call_parser: str | None = None,
         reasoning_parser: str | None = None,
+        skip_special_tokens: bool | None = None,
     ):
         self.pipeline = pipeline
         self.model_name = model_name
@@ -51,10 +52,55 @@ class OpenAIServingChat(OpenAIServing):
         # auto-detection found no usable parser; tool calls in requests will be
         # dropped with a warning at request time, and reasoning will simply
         # not be extracted.
-        if tool_call_parser is not None:
-            get_parser(tool_call_parser)
-        if reasoning_parser is not None:
-            get_reasoning_parser(reasoning_parser)
+        tool_parser = get_parser(tool_call_parser) if tool_call_parser is not None else None
+        reasoning = get_reasoning_parser(reasoning_parser) if reasoning_parser is not None else None
+        # Resolve the streamer's ``skip_special_tokens`` setting. Default
+        # ``True`` matches HF's example code and is correct for parsers
+        # whose markers are regular text (Hermes ``<tool_call>``,
+        # llama3_json ``{"name"``). For parsers whose markers are
+        # registered specials (Mistral ``[TOOL_CALLS]``), the resolver
+        # passes ``False`` so the marker survives detokenization, and we
+        # noise-strip every OTHER registered special from each chunk
+        # ourselves so clients never see ``<|im_end|>`` /
+        # ``<|eot_id|>`` / etc. leak into content. Reasoning-parser
+        # markers go in the keep set too — a family could register
+        # ``<think>``/``</think>`` as specials, and the reasoning parser
+        # needs to see them.
+        self._skip_special_tokens = True if skip_special_tokens is None else skip_special_tokens
+        self._noise_specials: tuple[str, ...] = ()
+        if not self._skip_special_tokens:
+            keep = {
+                m
+                for m in (
+                    tool_parser.start_marker if tool_parser else "",
+                    tool_parser.end_marker if tool_parser else "",
+                    reasoning.start_marker if reasoning else "",
+                    reasoning.end_marker if reasoning else "",
+                )
+                if m
+            }
+            # ``added_tokens_decoder`` is the authoritative list of every
+            # token (special + ordinary) registered on the tokenizer, with
+            # a per-entry ``special`` flag. We strip the ``special=True``
+            # entries that are NOT in the keep set. Sort by length
+            # descending so a longer marker (e.g. ``<|start_header_id|>``)
+            # is replaced before a substring of it could cause false
+            # partial matches. Use ``getattr`` because some non-fast or
+            # custom tokenizers may not expose this attribute — in that
+            # case noise stripping silently degrades to a no-op rather
+            # than blowing up at startup.
+            added_tokens = getattr(self.tokenizer, "added_tokens_decoder", {}) or {}
+            self._noise_specials = tuple(
+                sorted(
+                    (
+                        tok.content
+                        for tok in added_tokens.values()
+                        if tok.special and tok.content and tok.content not in keep
+                    ),
+                    key=len,
+                    reverse=True,
+                )
+            )
 
     async def warmup(self) -> None:
         logger.info("Warming up chat model: %s", self.model_name)
@@ -131,6 +177,7 @@ class OpenAIServingChat(OpenAIServing):
             text=completion_text,
             parser_name=parser_name,
             reasoning_parser_name=reasoning_parser_name,
+            noise_specials=self._noise_specials,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             max_tokens=max_tokens,
@@ -176,6 +223,11 @@ class OpenAIServingChat(OpenAIServing):
         kwargs = {**self.config.pipeline_kwargs}
         if max_tokens is not None:
             kwargs["max_new_tokens"] = max_tokens
+        # Mirror the streamer's setting on the non-streaming path so the
+        # pipeline's internal detokenize doesn't pre-strip the parser's
+        # marker (the pipeline defaults ``skip_special_tokens=True``).
+        if not self._skip_special_tokens:
+            kwargs["skip_special_tokens"] = False
         if tools:
             # The standard text-generation pipeline does not forward `tools` to
             # `apply_chat_template`, so we render the prompt ourselves and feed
@@ -218,7 +270,11 @@ class OpenAIServingChat(OpenAIServing):
         reasoning_parser_name: str | None,
         include_usage: bool,
     ) -> AsyncGenerator[str, None]:
-        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)  # type: ignore[arg-type]
+        streamer = TextIteratorStreamer(  # type: ignore[arg-type]
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=self._skip_special_tokens,
+        )
 
         kwargs = {**self.config.pipeline_kwargs}
         if max_tokens is not None:
@@ -242,6 +298,7 @@ class OpenAIServingChat(OpenAIServing):
                 model_name=self.model_name,
                 text_chunks=_async_iter(streamer),
                 parser_name=parser_name,
+                noise_specials=self._noise_specials,
                 reasoning_parser_name=reasoning_parser_name,
                 count_tokens=lambda text: len(self.tokenizer.encode(text, add_special_tokens=False)),
                 prompt_tokens=self._count_prompt_tokens(messages, tools),

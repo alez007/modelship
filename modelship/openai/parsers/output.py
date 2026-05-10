@@ -23,6 +23,7 @@ so behavior cannot drift between them.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from modelship.openai.parsers.reasoning.parsers import ReasoningParser
@@ -78,12 +79,29 @@ class ChatOutputStreamer:
         self,
         tool_call_parser: ToolCallParser | None,
         reasoning_parser: ReasoningParser | None = None,
+        noise_specials: tuple[str, ...] = (),
     ):
         if tool_call_parser is None and reasoning_parser is None:
             raise ValueError("ChatOutputStreamer requires at least one parser (tool-call or reasoning)")
         self._tool_parser = tool_call_parser
         self._tool_start = tool_call_parser.start_marker if tool_call_parser else ""
         self._tool_end = tool_call_parser.end_marker if tool_call_parser else ""
+        self._tool_consume_start = tool_call_parser.consume_start_marker if tool_call_parser else True
+        # Loader-supplied list of registered special tokens to silently
+        # drop before scanning. Used when the loader runs detokenization
+        # with ``skip_special_tokens=False`` to keep the parser's marker
+        # visible — every OTHER special (``<|im_end|>``, ``<|eot_id|>``,
+        # ``[INST]``, etc.) is junk from the client's perspective and
+        # must not leak into content/reasoning views. Sorted long-first
+        # so a longer marker is replaced before a substring of it can
+        # cause a false partial match.
+        self._noise_specials: tuple[str, ...] = tuple(sorted(noise_specials, key=len, reverse=True))
+        if self._noise_specials:
+            pattern = "|".join(re.escape(s) for s in self._noise_specials)
+            self._noise_regex = re.compile(pattern)
+        else:
+            self._noise_regex = None
+
         self._reasoning = reasoning_parser
         self._reasoning_start = reasoning_parser.start_marker if reasoning_parser else ""
         self._reasoning_end = reasoning_parser.end_marker if reasoning_parser else ""
@@ -94,11 +112,19 @@ class ChatOutputStreamer:
         self._sent_args: list[str] = []
         self._finalized_indices: set[int] = set()
         self._finalized_calls: list[ToolCall] = []
+        self._last_raw_text = ""
+        self._stripped_head = ""
+        self._unstripped_tail = ""
         self._last_text = ""
 
     def extract_streaming(self, current_text: str) -> DeltaMessage | None:
         """Run one diff pass against ``current_text`` and return any new deltas."""
+        delta_text = current_text[len(self._last_raw_text) :]
+        self._last_raw_text = current_text
+
+        current_text = self._strip_noise_delta(delta_text)
         self._last_text = current_text
+
         regions = self._scan(current_text, hold_marker_tail=True)
         content_delta = self._diff_content(regions)
         reasoning_delta = self._diff_reasoning(regions)
@@ -132,6 +158,36 @@ class ChatOutputStreamer:
     # ------------------------------------------------------------------
     # Single-pass scanner
     # ------------------------------------------------------------------
+
+    def _strip_noise_delta(self, delta_text: str) -> str:
+        """Drop loader-supplied noise specials from new text deltas.
+
+        Maintains state to handle noise tokens split across chunks.
+        """
+        if self._noise_regex is None:
+            self._stripped_head += delta_text
+            return self._stripped_head
+
+        # 1. Combine the held-back tail from the last chunk with the new chunk
+        working_text = self._unstripped_tail + delta_text
+
+        # 2. Strip noise from this combined window using regex
+        working_text = self._noise_regex.sub("", working_text)
+
+        # 3. Determine how much of the working text is "safe" to commit.
+        # The unsafe portion is the end of the string that might form a prefix
+        # of any noise token.
+        safe_idx = len(working_text)
+        for s in self._noise_specials:
+            overlap = _safe_overlap_index(working_text, s)
+            safe_idx = min(safe_idx, overlap)
+
+        # 4. Commit the safe part and hold back the unsafe tail
+        self._stripped_head += working_text[:safe_idx]
+        self._unstripped_tail = working_text[safe_idx:]
+
+        # 5. Return the full accumulated string for the scanner
+        return self._stripped_head + self._unstripped_tail
 
     def _scan(self, text: str, *, hold_marker_tail: bool) -> list[tuple[str, str, bool]]:
         """Walk ``text`` once, returning ordered ``(kind, payload, is_complete)`` regions.
@@ -183,7 +239,11 @@ class ChatOutputStreamer:
                 regions.append(("reasoning", text[payload_start:end], True))
                 pos = end + len(self._reasoning_end)
             else:
-                payload_start = next_pos + len(self._tool_start)
+                # ``consume_start_marker=False`` keeps the marker bytes at the
+                # head of the payload — used by JSON-shape parsers whose marker
+                # (e.g. ``{"name"``) is itself part of the object to parse.
+                consume = self._tool_consume_start
+                payload_start = next_pos + (len(self._tool_start) if consume else 0)
                 end = text.find(self._tool_end, payload_start) if self._tool_end else -1
                 if end < 0:
                     partial = text[payload_start:]
@@ -205,10 +265,13 @@ class ChatOutputStreamer:
 
         ``buf`` does not contain a full opening marker; the unsafe tail
         is the longest proper-prefix overlap with whichever opening
-        marker(s) the streamer is watching for.
+        marker(s) the streamer is watching for. Noise specials count too
+        — a trailing ``<|eot_i`` could become ``<|eot_id|>`` on the next
+        pass, and we must not ship the partial as content before the
+        cumulative buffer disambiguates.
         """
         cap = len(buf)
-        for marker in (self._tool_start, self._reasoning_start):
+        for marker in (self._tool_start, self._reasoning_start, *self._noise_specials):
             if not marker:
                 continue
             cap = min(cap, _safe_overlap_index(buf, marker))

@@ -49,9 +49,9 @@ class TestClassifyReasoningTemplate:
 
 class TestResolveReasoningParsers:
     def test_explicit_parser_stored(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="qwen3"))
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="deepseek_r1"))
         resolve_all_reasoning_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_reasoning_parser == "qwen3"
+        assert cfg._resolved_reasoning_parser == "deepseek_r1"
 
     def test_explicit_opt_out_leaves_none(self, monkeypatch):
         cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(enable_reasoning=False))
@@ -72,10 +72,10 @@ class TestResolveReasoningParsers:
         assert cfg._resolved_reasoning_parser is None
 
     def test_explicit_wins_over_auto(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="custom_x"))
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(reasoning_parser="deepseek_r1"))
         cfg._resolved_chat_template = "<think>x</think>"
         resolve_all_reasoning_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_reasoning_parser == "custom_x"
+        assert cfg._resolved_reasoning_parser == "deepseek_r1"
 
     def test_skips_non_generate_usecase(self):
         cfg = _make_cfg(usecase=ModelUsecase.embed)
@@ -143,3 +143,34 @@ class TestResolveToolParsersStoresExplicit:
         cfg._resolved_chat_template = "{% if tools %}<tool_call>{% endif %}"
         resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_tool_call_parser is None
+
+
+class TestResolveSkipSpecialTokens:
+    """``_resolved_skip_special_tokens`` is pinned by the parser's flag.
+
+    The transformers loader reads this at startup to decide whether to
+    flip ``TextIteratorStreamer(skip_special_tokens=False)``. ``None``
+    means "loader keeps its own default (True)"; ``False`` means "the
+    parser's marker is registered as a special token and would be
+    stripped — keep specials in the stream and noise-strip the rest."
+    """
+
+    def test_hermes_leaves_skip_specials_default(self):
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="hermes"))
+        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
+        assert cfg._resolved_skip_special_tokens is None
+
+    def test_llama3_json_leaves_skip_specials_default(self):
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="llama3_json"))
+        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
+        assert cfg._resolved_skip_special_tokens is None
+
+    def test_mistral_pins_skip_specials_false(self):
+        # Mistral parser's marker is a special added token; loader must
+        # keep specials so the parser sees `[TOOL_CALLS]`.
+        cfg = _make_cfg(
+            loader=ModelLoader.transformers,
+            transformers_config=TransformersConfig(tool_call_parser="mistral"),
+        )
+        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
+        assert cfg._resolved_skip_special_tokens is False

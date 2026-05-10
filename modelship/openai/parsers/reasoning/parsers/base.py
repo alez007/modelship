@@ -27,3 +27,8 @@ class ReasoningParser(ABC):
     name: str
     start_marker: str
     end_marker: str
+    # Set True when the parser's marker(s) are registered as *special tokens*
+    # in the tokenizers of the model families this parser targets. Loaders
+    # that decode with ``skip_special_tokens=True`` by default would
+    # otherwise strip the marker before this parser ever sees it.
+    markers_are_specials: bool = False

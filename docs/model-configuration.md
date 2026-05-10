@@ -219,7 +219,7 @@ The `transformers` loader uses PyTorch with HuggingFace Transformers. Supports c
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the model constructor |
 | `pipeline_kwargs` | object | `{}` | Extra keyword arguments passed to the pipeline at inference time |
-| `tool_call_parser` | string | `hermes` | Parser used to turn raw model output into OpenAI `tool_calls`. Currently supported: `hermes` (Hermes-2-Pro / Qwen2.5-Instruct / many community fine-tunes that emit `<tool_call>{...}</tool_call>` markers). |
+| `tool_call_parser` | string | auto | Parser used to turn raw model output into OpenAI `tool_calls`. Currently supported: `hermes` (Hermes-2-Pro / Qwen2.5-Instruct / many community fine-tunes that emit `<tool_call>{...}</tool_call>` markers), `mistral` (Mistral 7B Instruct v0.3+ / Mistral Small/Large that emit `[TOOL_CALLS][...]`), `llama3_json` (Llama-3.1 / Llama-3.2 Instruct emitting bare `{"name": "...", "parameters": {...}}`). Auto-detected from the chat template when omitted. |
 
 ### Chat / Text Generation (CPU)
 
