@@ -90,6 +90,56 @@ MODEL_CONFIGS: dict[str, dict] = {
             "torch_dtype": "float32",
         },
     },
+    "chat-transformers-llama3-json": {
+        "name": "chat-transformers-llama3-json",
+        # Llama-3.1-8B-Instruct emits the JSON-format tool call defined by
+        # Meta's spec — bare ``{"name": "...", "parameters": {...}}``. The
+        # chat template references ``<|python_tag|>``, so auto-detection
+        # resolves to ``llama3_json``. 8B is the smallest Llama-3.x
+        # variant Meta certifies for tool / function calling — Llama-3.2-1B
+        # has the same chat template but does not reliably emit the
+        # JSON-call shape on ``tool_choice="auto"``. Like the Mistral-7B
+        # transformers deployment, 8B in float32 is too memory-heavy for
+        # CPU+float32, so this is the second exception pinned to a full
+        # GPU (``device=cuda``, native bfloat16 via ``torch_dtype="auto"``).
+        # Requires ``HF_TOKEN`` for the gated repo.
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "usecase": "generate",
+        "loader": "transformers",
+        "num_cpus": 5,
+        "num_gpus": 1,
+        "transformers_config": {
+            "device": "cuda",
+        },
+    },
+    "chat-transformers-mistral": {
+        "name": "chat-transformers-mistral",
+        # Mistral-7B-Instruct-v0.3 emits ``[TOOL_CALLS]`` followed by a JSON
+        # array of tool calls. The marker is registered as a *special added
+        # token* on the tokenizer, so by default ``skip_special_tokens=True``
+        # in ``TextIteratorStreamer`` would strip it before the parser sees
+        # it. The fix in this PR detects this case via
+        # ``markers_are_specials`` on the parser, pins
+        # ``_resolved_skip_special_tokens=False`` on the model config, and
+        # the transformers loader flips both ``TextIteratorStreamer`` and
+        # the non-streaming ``pipeline()`` call accordingly.
+        #
+        # 7B is the smallest official Mistral that ships the v3+ tool
+        # protocol; the rest of the transformers suite runs on CPU+float32
+        # but a 7B model in float32 (~28GB) creates too much memory
+        # pressure on the integration host, so this deployment is the
+        # exception — pinned to a full GPU. ``torch_dtype`` is left at the
+        # ``"auto"`` default which picks the model's native bfloat16.
+        # Requires ``HF_TOKEN`` (gated repo).
+        "model": "mistralai/Mistral-7B-Instruct-v0.3",
+        "usecase": "generate",
+        "loader": "transformers",
+        "num_cpus": 5,
+        "num_gpus": 1,
+        "transformers_config": {
+            "device": "cuda",
+        },
+    },
     "chat-transformers-reasoning": {
         "name": "chat-transformers-reasoning",
         # Qwen3-0.6B safetensors — same family as the vLLM `chat-reasoning`
@@ -743,6 +793,162 @@ class TestChatLlamaCppReasoning:
             assert "</tool_call>" in reasoning, (
                 f"reasoning has an unmatched <tool_call> marker (open without close): {reasoning!r}"
             )
+
+
+@pytest.mark.integration
+class TestChatTransformersLlama3Json:
+    """End-to-end llama3_json tool calling through the transformers loader.
+
+    Llama-3.1-8B-Instruct on GPU emits the JSON-format tool call defined
+    by Meta's spec — bare ``{"name": "...", "parameters": {...}}``. The
+    auto-detector picks ``llama3_json`` from the chat template's
+    ``<|python_tag|>`` reference. This class is the first end-to-end
+    exercise of the ``llama3_json`` parser on real model output (vLLM
+    has its own native parser; transformers/llama_cpp run through the
+    cross-loader registry).
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-transformers-llama3-json")
+
+    def test_tool_calling_transformers_llama3_json_loader(self, client):
+        """Round-trip a bare-JSON tool call through the transformers loader.
+
+        Verifies the parser surfaces ``message.tool_calls`` from a
+        ``{"name": "...", "parameters": {...}}`` response and canonicalizes
+        the ``parameters`` field bytes into ``arguments`` for the OpenAI
+        contract.
+        """
+        completion = client.chat.completions.create(
+            model="chat-transformers-llama3-json",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+        )
+        tool_calls = completion.choices[0].message.tool_calls
+        assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
+
+    def test_tool_calling_streaming_transformers_llama3_json_loader(self, client):
+        """Stream a bare-JSON tool call and verify the OpenAI delta contract.
+
+        Same shape as the Hermes/Mistral streaming tests: exactly one name
+        delta, multiple incremental argument deltas, valid JSON on
+        concatenation, final ``finish_reason="tool_calls"``.
+        """
+        stream = client.chat.completions.create(
+            model="chat-transformers-llama3-json",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+            stream=True,
+        )
+
+        collected = _collect_streaming_tool_call(stream)
+
+        assert collected["tool_calls"], (
+            f"expected at least one streamed tool call; got content={collected['content']!r}"
+        )
+        call_0 = collected["tool_calls"][0]
+        assert call_0["id"], "expected an id on the first tool-call delta"
+        assert call_0["name"] == "get_weather"
+        assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
+        assert collected["args_deltas"] >= 2, (
+            f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
+        )
+        parsed_args = json.loads(call_0["arguments"])
+        assert parsed_args.get("city")
+        assert "Paris" in parsed_args["city"]
+        assert collected["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.integration
+class TestChatTransformersMistral:
+    """End-to-end Mistral tool calling through the transformers loader.
+
+    Regression coverage for the ``markers_are_specials`` fix. Mistral
+    tokenizers register ``[TOOL_CALLS]`` as a special added token, so
+    the default ``TextIteratorStreamer(skip_special_tokens=True)`` would
+    strip the marker before the parser sees it — the parser would
+    silently miss every tool call. The fix pins
+    ``_resolved_skip_special_tokens=False`` from the parser flag and
+    the transformers loader honors it (plus a streamer-side noise
+    stripper for the other specials that now leak through).
+
+    If this class fails with empty ``tool_calls`` and the marker text
+    visible in ``message.content``, the loader plumbing has regressed.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-transformers-mistral")
+
+    def test_tool_calling_transformers_mistral_loader(self, client):
+        """Round-trip a ``[TOOL_CALLS]``-prefixed tool call through the
+        transformers loader.
+
+        Verifies the parser surfaces ``message.tool_calls`` from a
+        ``[TOOL_CALLS][{"name": "...", "arguments": {...}}]`` response —
+        which only works if the marker survived the tokenizer's
+        special-token stripping.
+        """
+        completion = client.chat.completions.create(
+            model="chat-transformers-mistral",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+        )
+        tool_calls = completion.choices[0].message.tool_calls
+        assert tool_calls, (
+            f"expected a tool call (Mistral [TOOL_CALLS] marker likely stripped before parser saw it); "
+            f"got content={completion.choices[0].message.content!r}"
+        )
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
+        # The marker itself must never leak into content.
+        assert "[TOOL_CALLS]" not in (completion.choices[0].message.content or "")
+
+    def test_tool_calling_streaming_transformers_mistral_loader(self, client):
+        """Stream a Mistral tool call and verify the OpenAI delta contract.
+
+        Same shape as the Hermes/llama3_json streaming tests: exactly one
+        name delta, multiple incremental argument deltas, valid JSON on
+        concatenation, final ``finish_reason="tool_calls"``. The marker
+        must not leak into any content delta.
+        """
+        stream = client.chat.completions.create(
+            model="chat-transformers-mistral",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+            stream=True,
+        )
+
+        collected = _collect_streaming_tool_call(stream)
+
+        assert collected["tool_calls"], (
+            f"expected at least one streamed tool call; got content={collected['content']!r}"
+        )
+        call_0 = collected["tool_calls"][0]
+        assert call_0["id"], "expected an id on the first tool-call delta"
+        assert call_0["name"] == "get_weather"
+        assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
+        assert collected["args_deltas"] >= 2, (
+            f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
+        )
+        parsed_args = json.loads(call_0["arguments"])
+        assert parsed_args.get("city")
+        assert "Paris" in parsed_args["city"]
+        assert collected["finish_reason"] == "tool_calls"
+        assert "[TOOL_CALLS]" not in collected["content"]
 
 
 @pytest.mark.integration

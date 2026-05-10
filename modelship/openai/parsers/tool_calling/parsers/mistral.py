@@ -24,6 +24,13 @@ class MistralToolCallParser(ToolCallParser):
     name = "mistral"
     start_marker = "[TOOL_CALLS]"
     end_marker = ""
+    # ``[TOOL_CALLS]`` is registered in Mistral v3+ tokenizers'
+    # ``added_tokens_decoder`` with ``special=True`` — alongside ``[INST]``,
+    # ``[/INST]``, ``[AVAILABLE_TOOLS]``, etc. ``skip_special_tokens=True``
+    # strips it on the way out of detokenization, so loaders must opt in to
+    # keep it. See ``tests/test_mistral_specials_smoketest.py`` for the
+    # round-trip evidence.
+    markers_are_specials = True
 
     _NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"')
     _ARGS_RE = re.compile(r'"arguments"\s*:\s*')

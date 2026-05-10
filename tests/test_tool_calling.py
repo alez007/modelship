@@ -14,7 +14,12 @@ from modelship.openai.parsers.tool_calling import (
     register_parser,
     resolve_tools_for_request,
 )
-from modelship.openai.parsers.tool_calling.parsers import HermesToolCallParser, MistralToolCallParser, ToolCallParser
+from modelship.openai.parsers.tool_calling.parsers import (
+    HermesToolCallParser,
+    Llama3JsonToolCallParser,
+    MistralToolCallParser,
+    ToolCallParser,
+)
 
 
 class TestRegistry:
@@ -23,6 +28,9 @@ class TestRegistry:
 
     def test_default_registry_includes_mistral(self):
         assert "mistral" in available_parsers()
+
+    def test_default_registry_includes_llama3_json(self):
+        assert "llama3_json" in available_parsers()
 
     def test_get_parser_returns_singleton(self):
         a = get_parser("hermes")
@@ -445,3 +453,231 @@ class TestSplitPayloadDefault:
         parser = HermesToolCallParser()
         assert parser.split_payload("anything", True) == [("anything", True)]
         assert parser.split_payload("anything", False) == [("anything", False)]
+
+
+class TestMarkersAreSpecialsFlag:
+    """Each parser's ``markers_are_specials`` flag gates the loader-side flip."""
+
+    def test_hermes_marker_is_regular_text(self):
+        assert HermesToolCallParser().markers_are_specials is False
+
+    def test_llama3_json_marker_is_regular_text(self):
+        from modelship.openai.parsers.tool_calling.parsers import Llama3JsonToolCallParser
+
+        assert Llama3JsonToolCallParser().markers_are_specials is False
+
+    def test_mistral_marker_is_a_special_token(self):
+        # Drives the transformers loader to flip ``skip_special_tokens=False``
+        # at startup so ``[TOOL_CALLS]`` survives detokenization.
+        assert MistralToolCallParser().markers_are_specials is True
+
+
+class TestStreamerNoiseStripping:
+    """When the loader keeps specials, the streamer drops every noise marker
+    (everything other than the parser's own start/end markers) before scanning.
+
+    The cumulative-text design means a special token that was split across
+    HF chunks is reassembled before the streamer ever sees it, so per-chunk
+    holdback isn't needed at this layer — we just ``replace`` over the full
+    accumulated buffer every diff pass.
+    """
+
+    def test_eos_token_does_not_leak_into_content(self):
+        streamer = ChatOutputStreamer(MistralToolCallParser(), noise_specials=("</s>", "<|eot_id|>"))
+        # Pure content path with the model's EOS appended.
+        d1 = streamer.extract_streaming("hello world</s>")
+        # Content delta should exclude the EOS bytes.
+        content = "".join(d.content or "" for d in [d1] if d is not None)
+        assert content == "hello world"
+
+    def test_tool_marker_is_kept_when_listed_as_keep(self):
+        # ``[TOOL_CALLS]`` is the parser's own start marker — even if it's
+        # also "special" in the tokenizer, it must survive because the
+        # loader includes it in the keep set, NOT in noise_specials.
+        streamer = ChatOutputStreamer(
+            MistralToolCallParser(),
+            noise_specials=("[INST]", "[/INST]", "</s>"),
+        )
+        text = '[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "Paris"}}]</s>'
+        streamer.extract_streaming(text)
+        streamer.finalize()
+        result = streamer.result
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        # The trailing </s> must not have leaked into content.
+        assert result.content is None or "</s>" not in result.content
+
+    def test_noise_split_across_cumulative_passes_is_caught(self):
+        # First pass sees `<|eot_i`, the next pass sees the full `<|eot_id|>`.
+        # Because the streamer re-strips against the full cumulative buffer
+        # every diff pass, the partial isn't yielded and the full marker
+        # is removed once it arrives.
+        streamer = ChatOutputStreamer(MistralToolCallParser(), noise_specials=("<|eot_id|>",))
+        d1 = streamer.extract_streaming("done <|eot_i")
+        d2 = streamer.extract_streaming("done <|eot_id|>")
+        final = streamer.finalize()
+        all_content = "".join(d.content or "" for d in (d1, d2, final) if d is not None)
+        assert "<|eot_id|>" not in all_content
+        # The "<|eot_i" partial must not have been forwarded as content.
+        assert "<|eot_i" not in all_content
+
+    def test_empty_noise_specials_is_a_no_op(self):
+        streamer = ChatOutputStreamer(HermesToolCallParser(), noise_specials=())
+        d = streamer.extract_streaming("plain text")
+        assert d is not None and d.content == "plain text"
+
+
+class TestLlama3JsonParser:
+    parser = Llama3JsonToolCallParser()
+
+    def test_no_tool_calls_returns_text_unchanged(self):
+        result = self.parser.parse("just a regular response")
+        assert result.tool_calls == []
+        assert result.content == "just a regular response"
+        assert result.has_tool_calls is False
+
+    def test_single_tool_call_with_parameters_field(self):
+        # Meta's official Llama-3.1 JSON template uses ``parameters``.
+        text = '{"name": "get_weather", "parameters": {"city": "Paris"}}'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {"city": "Paris"}
+        assert result.content is None
+
+    def test_single_tool_call_with_arguments_field(self):
+        # Some community fine-tunes emit ``arguments`` instead — accept both.
+        text = '{"name": "get_weather", "arguments": {"city": "Paris"}}'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {"city": "Paris"}
+
+    def test_multiple_tool_calls_separated_by_semicolon(self):
+        # vLLM convention for multi-call output.
+        text = '{"name": "a", "parameters": {"x": 1}}; {"name": "b", "parameters": {"y": 2}}'
+        result = self.parser.parse(text)
+        assert [tc.function.name for tc in result.tool_calls] == ["a", "b"]
+        assert json.loads(result.tool_calls[0].function.arguments) == {"x": 1}
+        assert json.loads(result.tool_calls[1].function.arguments) == {"y": 2}
+
+    def test_tool_call_with_residual_text(self):
+        text = 'Sure, calling that.\n{"name": "ping", "parameters": {}}'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.content == "Sure, calling that.\n"
+
+    def test_whitespace_only_preamble_nulls_content(self):
+        text = '   \n{"name": "ping", "parameters": {}}'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert result.content is None
+
+    def test_object_arguments_passed_through(self):
+        text = '{"name": "x", "parameters": {"a": 1, "b": [2, 3]}}'
+        result = self.parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"a": 1, "b": [2, 3]}
+
+    def test_string_arguments_forwarded_verbatim(self):
+        text = '{"name": "x", "parameters": "{\\"a\\": 1}"}'
+        result = self.parser.parse(text)
+        assert result.tool_calls[0].function.arguments == '"{\\"a\\": 1}"'
+
+    def test_braces_inside_string_args_do_not_break_split(self):
+        # The split walker tracks string state so literal `{` / `}` inside
+        # string values must not move the brace-depth counter.
+        text = '{"name": "x", "parameters": {"q": "}{ literal"}}'
+        result = self.parser.parse(text)
+        assert len(result.tool_calls) == 1
+        assert json.loads(result.tool_calls[0].function.arguments) == {"q": "}{ literal"}
+
+    def test_block_without_extractable_name_is_dropped(self):
+        # The bare-JSON marker is `{"name"` — a payload that doesn't even
+        # contain `"name"` won't trip the marker, so no tool call surfaces.
+        text = '{"foo": "bar"}'
+        result = self.parser.parse(text)
+        assert result.tool_calls == []
+
+    def test_each_tool_call_gets_unique_id(self):
+        text = '{"name": "a", "parameters": {}}; {"name": "b", "parameters": {}}'
+        result = self.parser.parse(text)
+        assert result.tool_calls[0].id != result.tool_calls[1].id
+
+
+class TestLlama3JsonStreamer:
+    """Stream a Llama-3.1 JSON tool call incrementally and verify deltas.
+
+    The region is EOS-bounded (empty `end_marker`) like Mistral, so completion
+    happens at finalize time. The marker `{"name"` is NOT consumed by the
+    streamer so the JSON object stays intact for the body extractors.
+    """
+
+    def _feed(self, chunks: list[str]) -> tuple[ChatOutputStreamer, list]:
+        streamer = ChatOutputStreamer(Llama3JsonToolCallParser())
+        deltas = []
+        cumulative = ""
+        for chunk in chunks:
+            cumulative += chunk
+            d = streamer.extract_streaming(cumulative)
+            if d is not None:
+                deltas.append(d)
+        final = streamer.finalize()
+        if final is not None:
+            deltas.append(final)
+        return streamer, deltas
+
+    def test_emits_name_before_args_for_single_call(self):
+        chunks = list('{"name": "get_weather", "parameters": {"city": "Paris"}}')
+        streamer, deltas = self._feed(chunks)
+
+        tool_deltas = [tc for d in deltas for tc in d.tool_calls]
+        assert tool_deltas[0].function is not None
+        assert tool_deltas[0].function.name == "get_weather"
+        assert tool_deltas[0].id is not None
+        assert tool_deltas[0].function.arguments is None
+        joined_args = "".join(d.function.arguments or "" for d in tool_deltas[1:])
+        assert json.loads(joined_args) == {"city": "Paris"}
+        # Region is EOS-bounded → finalize closes it out.
+        assert len(streamer.result.tool_calls) == 1
+
+    def test_two_calls_separated_by_semicolon_finalize_with_distinct_indices(self):
+        text = '{"name": "a", "parameters": {"x": 1}}; {"name": "b", "parameters": {"y": 2}}'
+        streamer, deltas = self._feed([text])
+
+        tool_deltas = [tc for d in deltas for tc in d.tool_calls]
+        indices = {d.index for d in tool_deltas}
+        assert indices == {0, 1}
+        names = [d.function.name for d in tool_deltas if d.function and d.function.name]
+        assert names == ["a", "b"]
+        assert [tc.function.name for tc in streamer.result.tool_calls] == ["a", "b"]
+
+    def test_preamble_holds_back_marker_prefix(self):
+        # A leading `{` could be the first byte of `{"name"`; the streamer must
+        # hold it until the next byte proves it is or isn't the marker.
+        streamer = ChatOutputStreamer(Llama3JsonToolCallParser())
+        mid = streamer.extract_streaming("hello {")
+        assert mid is not None and mid.content == "hello "
+        final = streamer.finalize()
+        assert final is not None and final.content == "{"
+
+    def test_no_marker_streams_as_pure_content(self):
+        # Plain text response with no JSON at all goes through as content.
+        _, deltas = self._feed(["plain ", "answer ", "no tools"])
+        assert "".join(d.content or "" for d in deltas) == "plain answer no tools"
+
+    def test_unterminated_call_drops_partial_at_finalize(self):
+        # Model emitted a full call and started a second that never closed.
+        # The first should finalize; the second is dropped.
+        text = '{"name": "done", "parameters": {"x": 1}}; {"name": "wip"'
+        streamer, _ = self._feed([text])
+        assert [tc.function.name for tc in streamer.result.tool_calls] == ["done"]
+
+    def test_arguments_stream_incrementally(self):
+        prefix = '{"name": "ping", "parameters": '
+        suffix = '{"x": 42}}'
+        _, deltas = self._feed([prefix, *list(suffix)])
+
+        arg_deltas = [tc for d in deltas for tc in d.tool_calls if tc.function and tc.function.arguments is not None]
+        assert len(arg_deltas) >= 3
+        joined = "".join(d.function.arguments or "" for d in arg_deltas)
+        assert json.loads(joined) == {"x": 42}

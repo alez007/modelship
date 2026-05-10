@@ -109,6 +109,15 @@ class ModelshipModelConfig(BaseModel):
     _resolved_tool_call_parser: str | None = PrivateAttr(default=None)
     _resolved_reasoning_parser: str | None = PrivateAttr(default=None)
     _resolved_chat_template: str | None = PrivateAttr(default=None)
+    # Pinned at startup from the resolved tool-call parser's
+    # ``markers_are_specials`` flag. Loaders that detokenize raw model
+    # output (transformers' ``TextIteratorStreamer``) consult this to
+    # decide whether to flip ``skip_special_tokens=False`` — required for
+    # parsers like Mistral whose ``[TOOL_CALLS]`` marker is registered as a
+    # special token in the tokenizer and would otherwise be stripped before
+    # the parser sees it. ``None`` means the loader should keep its own
+    # default.
+    _resolved_skip_special_tokens: bool | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def check_custom_requires_plugin(self):

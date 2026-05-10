@@ -8,7 +8,7 @@ from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsec
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
 from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning_template
-from modelship.openai.parsers.tool_calling.registry import available_parsers
+from modelship.openai.parsers.tool_calling.registry import available_parsers, get_parser
 from modelship.openai.parsers.tool_calling.utils import classify_template
 from modelship.openai.parsers.utils import read_chat_template
 
@@ -134,6 +134,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
                     f"which is not registered. Available: {sorted(registered) or '(none)'}."
                 )
             cfg._resolved_tool_call_parser = explicit
+            cfg._resolved_skip_special_tokens = _skip_specials_for(explicit)
             logger.info("Using explicit tool_call_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -161,7 +162,20 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             )
             continue
         cfg._resolved_tool_call_parser = detected
+        cfg._resolved_skip_special_tokens = _skip_specials_for(detected)
         logger.info("Auto-detected tool_call_parser=%r for '%s'", detected, cfg.name)
+
+
+def _skip_specials_for(parser_name: str) -> bool | None:
+    """Resolve the ``skip_special_tokens`` setting a loader should use.
+
+    Returns ``False`` when the parser declares ``markers_are_specials``
+    (its marker is registered as a special token and would be stripped by
+    the loader's default detokenization) — the loader must keep specials
+    in the stream and noise-strip the rest itself. Returns ``None``
+    otherwise so the loader keeps its own default (``True``).
+    """
+    return False if get_parser(parser_name).markers_are_specials else None
 
 
 def _is_explicit_reasoning_opt_out(cfg) -> bool:

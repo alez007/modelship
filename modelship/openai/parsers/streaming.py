@@ -56,6 +56,7 @@ def build_chat_completion_response(
     text: str,
     parser_name: str | None,
     reasoning_parser_name: str | None = None,
+    noise_specials: tuple[str, ...] = (),
     prompt_tokens: int,
     completion_tokens: int,
     max_tokens: int | None,
@@ -65,9 +66,17 @@ def build_chat_completion_response(
 
     Non-streaming counterpart of :func:`stream_chat_completion`. When
     both parser names are ``None``, ``text`` becomes the message
-    content as-is with no extraction.
+    content as-is with no extraction. ``noise_specials`` is forwarded to
+    the streamer so loaders that decode with ``skip_special_tokens=False``
+    can have unwanted special tokens (``<|eot_id|>``, ``[INST]``, etc.)
+    silently dropped before parsing.
     """
-    parsed = _parse_full(text, parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
+    parsed = _parse_full(
+        text,
+        parser_name=parser_name,
+        reasoning_parser_name=reasoning_parser_name,
+        noise_specials=noise_specials,
+    )
     finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
     return ChatCompletionResponse(
         id=request_id,
@@ -100,6 +109,7 @@ async def stream_chat_completion(
     text_chunks: AsyncIterator[str],
     parser_name: str | None,
     reasoning_parser_name: str | None = None,
+    noise_specials: tuple[str, ...] = (),
     count_tokens: Callable[[str], int],
     prompt_tokens: int,
     max_tokens: int | None,
@@ -120,7 +130,11 @@ async def stream_chat_completion(
     usage; pass ``lambda _: 0`` if the loader doesn't have a tokenizer
     handy.
     """
-    streamer = _make_streamer(parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
+    streamer = _make_streamer(
+        parser_name=parser_name,
+        reasoning_parser_name=reasoning_parser_name,
+        noise_specials=noise_specials,
+    )
     accumulated = ""
 
     yield _delta_chunk(request_id, model_name, DeltaMessage(role="assistant"), created)
@@ -182,8 +196,18 @@ async def stream_chat_completion(
     yield "data: [DONE]\n\n"
 
 
-def _parse_full(text: str, *, parser_name: str | None, reasoning_parser_name: str | None) -> ParsedChatOutput:
-    streamer = _make_streamer(parser_name=parser_name, reasoning_parser_name=reasoning_parser_name)
+def _parse_full(
+    text: str,
+    *,
+    parser_name: str | None,
+    reasoning_parser_name: str | None,
+    noise_specials: tuple[str, ...] = (),
+) -> ParsedChatOutput:
+    streamer = _make_streamer(
+        parser_name=parser_name,
+        reasoning_parser_name=reasoning_parser_name,
+        noise_specials=noise_specials,
+    )
     if streamer is None:
         return ParsedChatOutput(content=text or None, reasoning=None, tool_calls=[])
     streamer.extract_streaming(text)
@@ -191,12 +215,17 @@ def _parse_full(text: str, *, parser_name: str | None, reasoning_parser_name: st
     return streamer.result
 
 
-def _make_streamer(*, parser_name: str | None, reasoning_parser_name: str | None) -> ChatOutputStreamer | None:
+def _make_streamer(
+    *,
+    parser_name: str | None,
+    reasoning_parser_name: str | None,
+    noise_specials: tuple[str, ...] = (),
+) -> ChatOutputStreamer | None:
     if parser_name is None and reasoning_parser_name is None:
         return None
     tool_parser = get_tool_call_parser(parser_name) if parser_name else None
     reasoning_parser = get_reasoning_parser(reasoning_parser_name) if reasoning_parser_name else None
-    return ChatOutputStreamer(tool_parser, reasoning_parser)
+    return ChatOutputStreamer(tool_parser, reasoning_parser, noise_specials=noise_specials)
 
 
 def _delta_chunk(request_id: str, model_name: str, delta: DeltaMessage, created: int) -> str:
