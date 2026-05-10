@@ -52,10 +52,8 @@ class OpenAIServingChat(OpenAIServing):
         # auto-detection found no usable parser; tool calls in requests will be
         # dropped with a warning at request time, and reasoning will simply
         # not be extracted.
-        if tool_call_parser is not None:
-            get_parser(tool_call_parser)
-        if reasoning_parser is not None:
-            get_reasoning_parser(reasoning_parser)
+        tool_parser = get_parser(tool_call_parser) if tool_call_parser is not None else None
+        reasoning = get_reasoning_parser(reasoning_parser) if reasoning_parser is not None else None
         # Resolve the streamer's ``skip_special_tokens`` setting. Default
         # ``True`` matches HF's example code and is correct for parsers
         # whose markers are regular text (Hermes ``<tool_call>``,
@@ -64,30 +62,39 @@ class OpenAIServingChat(OpenAIServing):
         # passes ``False`` so the marker survives detokenization, and we
         # noise-strip every OTHER registered special from each chunk
         # ourselves so clients never see ``<|im_end|>`` /
-        # ``<|eot_id|>`` / etc. leak into content.
+        # ``<|eot_id|>`` / etc. leak into content. Reasoning-parser
+        # markers go in the keep set too — a family could register
+        # ``<think>``/``</think>`` as specials, and the reasoning parser
+        # needs to see them.
         self._skip_special_tokens = True if skip_special_tokens is None else skip_special_tokens
         self._noise_specials: tuple[str, ...] = ()
         if not self._skip_special_tokens:
             keep = {
                 m
                 for m in (
-                    get_parser(tool_call_parser).start_marker if tool_call_parser else "",
-                    get_parser(tool_call_parser).end_marker if tool_call_parser else "",
+                    tool_parser.start_marker if tool_parser else "",
+                    tool_parser.end_marker if tool_parser else "",
+                    reasoning.start_marker if reasoning else "",
+                    reasoning.end_marker if reasoning else "",
                 )
                 if m
             }
             # ``added_tokens_decoder`` is the authoritative list of every
             # token (special + ordinary) registered on the tokenizer, with
             # a per-entry ``special`` flag. We strip the ``special=True``
-            # entries that are NOT our parser's marker. Sort by length
+            # entries that are NOT in the keep set. Sort by length
             # descending so a longer marker (e.g. ``<|start_header_id|>``)
             # is replaced before a substring of it could cause false
-            # partial matches.
+            # partial matches. Use ``getattr`` because some non-fast or
+            # custom tokenizers may not expose this attribute — in that
+            # case noise stripping silently degrades to a no-op rather
+            # than blowing up at startup.
+            added_tokens = getattr(self.tokenizer, "added_tokens_decoder", {}) or {}
             self._noise_specials = tuple(
                 sorted(
                     (
                         tok.content
-                        for tok in self.tokenizer.added_tokens_decoder.values()
+                        for tok in added_tokens.values()
                         if tok.special and tok.content and tok.content not in keep
                     ),
                     key=len,
