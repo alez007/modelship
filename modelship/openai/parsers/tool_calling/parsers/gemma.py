@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 
+from modelship.logging import get_logger
 from modelship.openai.parsers.tool_calling.parsers.base import ToolCallParser
+
+logger = get_logger("openai.parsers.tool_calling.gemma")
 
 STRING_DELIM = '<|"|>'
 ESCAPE_DELIM = "<escape>"
@@ -80,7 +83,8 @@ class Gemma4ToolCallParser(ToolCallParser):
                 safe_json = safe_json[:-1]
 
             return safe_json
-        except Exception:
+        except (RecursionError, ValueError, TypeError, IndexError) as e:
+            logger.debug("Failed to parse %s args %r: %s", self.name, raw_args, e)
             return ""
 
     def split_payload(self, payload: str, is_complete: bool) -> list[tuple[str, bool]]:
