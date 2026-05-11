@@ -25,7 +25,7 @@ class HermesToolCallParser(ToolCallParser):
         m = self._NAME_RE.search(partial_payload)
         return m.group(1) if m else None
 
-    def extract_partial_args(self, partial_payload: str) -> str | None:
+    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
         m = self._ARGS_RE.search(partial_payload)
         if m is None:
             return None
@@ -39,6 +39,8 @@ class HermesToolCallParser(ToolCallParser):
             # if the model goes on to emit more args bytes, the held brace is
             # recovered on the next pass; if instead it goes on to emit
             # `</tool_call>`, the held brace was the envelope closer and
-            # discarding it was correct.
+            # discarding it was correct. At ``is_complete=True`` the trailing
+            # `}` is always the envelope closer (the args object's own closer
+            # is preceded by it), so the strip still applies.
             args = args[:-1].rstrip()
         return args or None

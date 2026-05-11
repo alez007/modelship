@@ -343,7 +343,7 @@ class ChatOutputStreamer:
                         )
                     )
 
-                args = self._tool_parser.extract_partial_args(sub_payload)
+                args = self._tool_parser.extract_partial_args(sub_payload, is_complete=sub_complete)
                 if args is not None and len(args) > len(self._sent_args[i]):
                     diff = args[len(self._sent_args[i]) :]
                     self._sent_args[i] = args

@@ -92,7 +92,7 @@ class MistralToolCallParser(ToolCallParser):
         m = self._NAME_RE.search(partial_payload)
         return m.group(1) if m else None
 
-    def extract_partial_args(self, partial_payload: str) -> str | None:
+    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
         m = self._ARGS_RE.search(partial_payload)
         if m is None:
             return None
@@ -101,7 +101,9 @@ class MistralToolCallParser(ToolCallParser):
             # Mirror Hermes: the per-call envelope is
             # `{"name":"x","arguments":<args>}` and the closing brace of
             # the envelope arrives in the byte stream alongside (or before)
-            # the args object's closer. Withhold one trailing `}` so the
-            # streamed args view never contains the envelope's closer.
+            # the args object's closer. Always strip one trailing `}` — at
+            # ``is_complete=True`` it is the envelope closer, and mid-stream
+            # we withhold the ambiguous brace so the streamed args view
+            # never contains it.
             args = args[:-1].rstrip()
         return args or None

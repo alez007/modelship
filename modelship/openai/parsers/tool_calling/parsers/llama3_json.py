@@ -91,18 +91,19 @@ class Llama3JsonToolCallParser(ToolCallParser):
         m = self._NAME_RE.search(partial_payload)
         return m.group(1) if m else None
 
-    def extract_partial_args(self, partial_payload: str) -> str | None:
+    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
         m = self._ARGS_RE.search(partial_payload)
         if m is None:
             return None
         args = partial_payload[m.end() :].rstrip()
         if args.endswith("}"):
-            # Mirror Hermes's trailing-`}` withhold: the per-call envelope
-            # is ``{"name": "x", "parameters": <args>}``. The closing brace
-            # of the envelope arrives in the byte stream alongside (or
-            # before) the args object's closer. Withhold one trailing `}`
-            # so the streamed args view never contains the envelope's
-            # closer; if more args bytes follow, the held brace is
-            # recovered on the next pass.
+            # Mirror Hermes's trailing-`}` strip: the per-call envelope is
+            # ``{"name": "x", "parameters": <args>}``. The closing brace of
+            # the envelope arrives in the byte stream alongside (or before)
+            # the args object's closer, so always strip one trailing `}` —
+            # at ``is_complete=True`` it is the envelope closer, and
+            # mid-stream we withhold the ambiguous brace so the streamed
+            # args view never contains it. If more args bytes follow, the
+            # held brace is recovered on the next pass.
             args = args[:-1].rstrip()
         return args or None
