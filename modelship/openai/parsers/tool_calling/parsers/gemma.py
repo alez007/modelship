@@ -1,10 +1,14 @@
 """Tool call parsers for Google Gemma models.
 
 Gemma 4 uses a custom serialization format (not JSON) for tool calls:
-`<|tool_call|>call:func_name{key:<|"|>value<|"|>,num:42}<tool_call|>`
+`<|tool_call>call:func_name{key:<|"|>value<|"|>,num:42}<tool_call|>`
 
-FunctionGemma (Gemma 2) uses:
+FunctionGemma (Gemma 2/3 fine-tune) uses:
 `<start_function_call>call:func_name{key:<escape>value<escape>}<end_function_call>`
+
+The two formats share the same envelope shape and only differ in the string
+delimiter, so both parsers reuse the same custom-syntax parser parameterized
+on ``string_delim``.
 """
 
 from __future__ import annotations
@@ -16,12 +20,22 @@ from modelship.openai.parsers.tool_calling.parsers.base import ToolCallParser
 STRING_DELIM = '<|"|>'
 ESCAPE_DELIM = "<escape>"
 
+# Trailing characters withheld from streaming JSON output so a closing
+# brace / quote / structural byte never lands ahead of more args bytes.
+# The streamer takes a length-diff of successive returns, so anything
+# emitted here must be a monotonic prefix of the final clean output.
+_STREAM_STRIP_TAIL = ("}", "]", '"', ",", " ", ":", "<", "|", "\\", ">")
+
 
 class Gemma4ToolCallParser(ToolCallParser):
     name = "gemma4"
     start_marker = "<|tool_call>"
     end_marker = "<tool_call|>"
     markers_are_specials = True
+    # String delimiter used inside the call body. Subclasses override
+    # this when the family uses a different delimiter token (e.g.
+    # FunctionGemma's ``<escape>``).
+    string_delim: str = STRING_DELIM
 
     def extract_partial_name(self, partial_payload: str) -> str | None:
         """Extract function name from 'call:func_name{...'."""
@@ -34,7 +48,7 @@ class Gemma4ToolCallParser(ToolCallParser):
         return name_part.strip() or None
 
     def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
-        """Parse Gemma 4 custom format and return standard JSON string."""
+        """Parse the custom syntax into a dict and dump it to JSON."""
         if "{" not in partial_payload:
             return None
 
@@ -44,10 +58,11 @@ class Gemma4ToolCallParser(ToolCallParser):
             raw_args = raw_args[:-1]
 
         try:
-            # We parse the custom syntax into a dict and dump it to JSON.
-            # partial=not is_complete tells the parser to withhold incomplete values
-            # at the very end of the stream to avoid flickering types.
-            args_dict = _parse_gemma4_args(raw_args, partial=not is_complete)
+            # ``partial=not is_complete`` tells the parser to withhold
+            # ambiguous trailing bytes (unterminated string values, trailing
+            # bare values) so partial output stays a monotonic prefix of the
+            # eventual final value.
+            args_dict = _parse_args(raw_args, partial=not is_complete, string_delim=self.string_delim)
             if not args_dict:
                 return "{}" if is_complete else ""
 
@@ -61,7 +76,7 @@ class Gemma4ToolCallParser(ToolCallParser):
             # move if more keys arrive), we withhold trailing JSON structural
             # characters during streaming.
             safe_json = full_json
-            while safe_json and safe_json[-1] in ("}", "]", '"', ",", " ", ":", "<", "|", "\\", ">"):
+            while safe_json and safe_json[-1] in _STREAM_STRIP_TAIL:
                 safe_json = safe_json[:-1]
 
             return safe_json
@@ -69,7 +84,7 @@ class Gemma4ToolCallParser(ToolCallParser):
             return ""
 
     def split_payload(self, payload: str, is_complete: bool) -> list[tuple[str, bool]]:
-        """Gemma 4 can concatenate multiple calls: `call:a{...}call:b{...}`."""
+        """Multiple calls can be concatenated: `call:a{...}call:b{...}`."""
         # Find all occurrences of "call:" at the top level (not inside braces)
         calls: list[tuple[str, bool]] = []
         pos = 0
@@ -107,43 +122,22 @@ class Gemma4ToolCallParser(ToolCallParser):
 
 
 class FunctionGemmaToolCallParser(Gemma4ToolCallParser):
-    """Parses FunctionGemma (Gemma 2) output which uses `<escape>` instead of `<|"|>`."""
+    """Parses FunctionGemma output which uses `<escape>` instead of `<|"|>`.
+
+    The envelope and string-delim tokens (``<start_function_call>``,
+    ``<end_function_call>``, ``<escape>``) are registered as special tokens
+    on the FunctionGemma tokenizer, so ``markers_are_specials = True`` so
+    the transformers loader keeps them visible to the parser.
+    """
 
     name = "function_gemma"
     start_marker = "<start_function_call>"
     end_marker = "<end_function_call>"
-    markers_are_specials = False  # These are generally emitted as literal strings or special tokens depending on the specific tuning. We assume text.
-
-    def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
-        """Parse FunctionGemma custom format and return standard JSON string."""
-        if "{" not in partial_payload:
-            return None
-
-        raw_args = partial_payload[partial_payload.find("{") + 1 :]
-        # Strip trailing '}' if present
-        if raw_args.endswith("}"):
-            raw_args = raw_args[:-1]
-
-        try:
-            args_dict = _parse_function_gemma_args(raw_args, partial=not is_complete)
-            if not args_dict:
-                return "{}" if is_complete else ""
-
-            full_json = json.dumps(args_dict, ensure_ascii=False)
-
-            if is_complete:
-                return full_json
-
-            safe_json = full_json
-            while safe_json and safe_json[-1] in ("}", "]", '"', ",", " ", ":", "<", "|", "\\", ">"):
-                safe_json = safe_json[:-1]
-
-            return safe_json
-        except Exception:
-            return ""
+    markers_are_specials = True
+    string_delim = ESCAPE_DELIM
 
 
-def _parse_gemma4_value(value_str: str) -> object:
+def _parse_value(value_str: str) -> object:
     value_str = value_str.strip()
     if not value_str:
         return value_str
@@ -162,13 +156,33 @@ def _parse_gemma4_value(value_str: str) -> object:
     return value_str
 
 
-def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
+def _safe_overlap(buf: str, marker: str) -> int:
+    """Index up to which ``buf`` can be flushed without splitting ``marker``.
+
+    Returns the position past the last byte safe to commit; trailing bytes
+    that could be a proper prefix of ``marker`` are excluded so a partial
+    parse of an unterminated string value never includes transient bytes
+    that will disappear once the delim arrives. This keeps partial output
+    a monotonic prefix of the eventual final output, which the streamer's
+    suffix-diff relies on.
+    """
+    if not marker:
+        return len(buf)
+    max_overlap = min(len(buf), len(marker) - 1)
+    for k in range(max_overlap, 0, -1):
+        if buf.endswith(marker[:k]):
+            return len(buf) - k
+    return len(buf)
+
+
+def _parse_args(args_str: str, *, partial: bool = False, string_delim: str = STRING_DELIM) -> dict:
     if not args_str or not args_str.strip():
         return {}
 
-    result = {}
+    result: dict = {}
     i = 0
     n = len(args_str)
+    delim_len = len(string_delim)
 
     while i < n:
         # Skip whitespace and commas
@@ -198,26 +212,32 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                 result[key] = ""
             break
 
-        # String value: <|"|>...<|"|>
-        if args_str[i:].startswith(STRING_DELIM):
-            i += len(STRING_DELIM)
+        # String value: <delim>...<delim>
+        if args_str[i:].startswith(string_delim):
+            i += delim_len
             val_start = i
-            end_pos = args_str.find(STRING_DELIM, i)
+            end_pos = args_str.find(string_delim, i)
             if end_pos == -1:
-                result[key] = args_str[val_start:]
+                val = args_str[val_start:]
+                if partial:
+                    # The closing delim hasn't arrived yet — trim any trailing
+                    # bytes that could be a proper prefix of the delim so the
+                    # partial value is a prefix of the eventual final value.
+                    val = val[: _safe_overlap(val, string_delim)]
+                result[key] = val
                 break
             result[key] = args_str[val_start:end_pos]
-            i = end_pos + len(STRING_DELIM)
+            i = end_pos + delim_len
         # Nested object
         elif args_str[i] == "{":
             depth = 1
             obj_start = i + 1
             i += 1
             while i < n and depth > 0:
-                if args_str[i:].startswith(STRING_DELIM):
-                    i += len(STRING_DELIM)
-                    nd = args_str.find(STRING_DELIM, i)
-                    i = n if nd == -1 else nd + len(STRING_DELIM)
+                if args_str[i:].startswith(string_delim):
+                    i += delim_len
+                    nd = args_str.find(string_delim, i)
+                    i = n if nd == -1 else nd + delim_len
                     continue
                 if args_str[i] == "{":
                     depth += 1
@@ -225,19 +245,19 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                     depth -= 1
                 i += 1
             if depth > 0:
-                result[key] = _parse_gemma4_args(args_str[obj_start:i], partial=True)
+                result[key] = _parse_args(args_str[obj_start:i], partial=True, string_delim=string_delim)
             else:
-                result[key] = _parse_gemma4_args(args_str[obj_start : i - 1])
+                result[key] = _parse_args(args_str[obj_start : i - 1], string_delim=string_delim)
         # Array
         elif args_str[i] == "[":
             depth = 1
             arr_start = i + 1
             i += 1
             while i < n and depth > 0:
-                if args_str[i:].startswith(STRING_DELIM):
-                    i += len(STRING_DELIM)
-                    nd = args_str.find(STRING_DELIM, i)
-                    i = n if nd == -1 else nd + len(STRING_DELIM)
+                if args_str[i:].startswith(string_delim):
+                    i += delim_len
+                    nd = args_str.find(string_delim, i)
+                    i = n if nd == -1 else nd + delim_len
                     continue
                 if args_str[i] == "[":
                     depth += 1
@@ -245,9 +265,9 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                     depth -= 1
                 i += 1
             if depth > 0:
-                result[key] = _parse_gemma4_array(args_str[arr_start:i], partial=True)
+                result[key] = _parse_array(args_str[arr_start:i], partial=True, string_delim=string_delim)
             else:
-                result[key] = _parse_gemma4_array(args_str[arr_start : i - 1])
+                result[key] = _parse_array(args_str[arr_start : i - 1], string_delim=string_delim)
         # Bare value
         else:
             val_start = i
@@ -255,93 +275,80 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                 i += 1
             if partial and i >= n:
                 break
-            result[key] = _parse_gemma4_value(args_str[val_start:i])
+            result[key] = _parse_value(args_str[val_start:i])
 
     return result
 
 
-def _parse_gemma4_array(arr_str: str, *, partial: bool = False) -> list:
-    items = []
+def _parse_array(arr_str: str, *, partial: bool = False, string_delim: str = STRING_DELIM) -> list:
+    items: list = []
     i = 0
     n = len(arr_str)
+    delim_len = len(string_delim)
     while i < n:
         while i < n and arr_str[i] in (" ", ",", "\n", "\t"):
             i += 1
         if i >= n:
             break
-        if arr_str[i:].startswith(STRING_DELIM):
-            i += len(STRING_DELIM)
-            end_pos = arr_str.find(STRING_DELIM, i)
+        # String value
+        if arr_str[i:].startswith(string_delim):
+            i += delim_len
+            val_start = i
+            end_pos = arr_str.find(string_delim, i)
             if end_pos == -1:
-                items.append(arr_str[i:])
+                val = arr_str[val_start:]
+                if partial:
+                    val = val[: _safe_overlap(val, string_delim)]
+                items.append(val)
                 break
-            items.append(arr_str[i:end_pos])
-            i = end_pos + len(STRING_DELIM)
+            items.append(arr_str[val_start:end_pos])
+            i = end_pos + delim_len
+        # Nested object
         elif arr_str[i] == "{":
-            # ... port object/array recursion if needed, omitting for brevity in initial implementation
-            # but keeping basic structure.
-            i += 1  # skip { for now
-            pass
+            depth = 1
+            obj_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if arr_str[i:].startswith(string_delim):
+                    i += delim_len
+                    nd = arr_str.find(string_delim, i)
+                    i = n if nd == -1 else nd + delim_len
+                    continue
+                if arr_str[i] == "{":
+                    depth += 1
+                elif arr_str[i] == "}":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                items.append(_parse_args(arr_str[obj_start:i], partial=True, string_delim=string_delim))
+            else:
+                items.append(_parse_args(arr_str[obj_start : i - 1], string_delim=string_delim))
+        # Nested array
+        elif arr_str[i] == "[":
+            depth = 1
+            inner_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if arr_str[i:].startswith(string_delim):
+                    i += delim_len
+                    nd = arr_str.find(string_delim, i)
+                    i = n if nd == -1 else nd + delim_len
+                    continue
+                if arr_str[i] == "[":
+                    depth += 1
+                elif arr_str[i] == "]":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                items.append(_parse_array(arr_str[inner_start:i], partial=True, string_delim=string_delim))
+            else:
+                items.append(_parse_array(arr_str[inner_start : i - 1], string_delim=string_delim))
+        # Bare value
         else:
             val_start = i
             while i < n and arr_str[i] not in (",", "]"):
                 i += 1
             if partial and i >= n:
                 break
-            items.append(_parse_gemma4_value(arr_str[val_start:i]))
+            items.append(_parse_value(arr_str[val_start:i]))
     return items
-
-
-def _parse_function_gemma_args(args_str: str, *, partial: bool = False) -> dict:
-    """Same as _parse_gemma4_args but uses <escape>."""
-    if not args_str or not args_str.strip():
-        return {}
-
-    result = {}
-    i = 0
-    n = len(args_str)
-
-    while i < n:
-        while i < n and args_str[i] in (" ", ",", "\n", "\t"):
-            i += 1
-        if i >= n:
-            break
-
-        key_start = i
-        while i < n and args_str[i] != ":":
-            i += 1
-        if i >= n:
-            break
-        key = args_str[key_start:i].strip()
-        i += 1
-
-        if i >= n:
-            if not partial:
-                result[key] = ""
-            break
-
-        while i < n and args_str[i] in (" ", "\n", "\t"):
-            i += 1
-        if i >= n:
-            if not partial:
-                result[key] = ""
-            break
-
-        if args_str[i:].startswith(ESCAPE_DELIM):
-            i += len(ESCAPE_DELIM)
-            val_start = i
-            end_pos = args_str.find(ESCAPE_DELIM, i)
-            if end_pos == -1:
-                result[key] = args_str[val_start:]
-                break
-            result[key] = args_str[val_start:end_pos]
-            i = end_pos + len(ESCAPE_DELIM)
-        else:
-            val_start = i
-            while i < n and args_str[i] not in (",", "}", "]"):
-                i += 1
-            if partial and i >= n:
-                break
-            result[key] = _parse_gemma4_value(args_str[val_start:i])
-
-    return result

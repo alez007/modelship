@@ -96,13 +96,14 @@ class Llama3JsonToolCallParser(ToolCallParser):
         if m is None:
             return None
         args = partial_payload[m.end() :].rstrip()
-        if not is_complete and args.endswith("}"):
-            # Mirror Hermes's trailing-`}` withhold: the per-call envelope
-            # is ``{"name": "x", "parameters": <args>}``. The closing brace
-            # of the envelope arrives in the byte stream alongside (or
-            # before) the args object's closer. Withhold one trailing `}`
-            # so the streamed args view never contains the envelope's
-            # closer; if more args bytes follow, the held brace is
-            # recovered on the next pass.
+        if args.endswith("}"):
+            # Mirror Hermes's trailing-`}` strip: the per-call envelope is
+            # ``{"name": "x", "parameters": <args>}``. The closing brace of
+            # the envelope arrives in the byte stream alongside (or before)
+            # the args object's closer, so always strip one trailing `}` —
+            # at ``is_complete=True`` it is the envelope closer, and
+            # mid-stream we withhold the ambiguous brace so the streamed
+            # args view never contains it. If more args bytes follow, the
+            # held brace is recovered on the next pass.
             args = args[:-1].rstrip()
         return args or None

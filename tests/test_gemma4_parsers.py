@@ -103,3 +103,84 @@ class TestFunctionGemmaToolCallParser:
         result = streamer.result
         assert len(result.tool_calls) == 1
         assert json.loads(result.tool_calls[0].function.arguments) == {"location": "Tokyo"}
+
+    def test_markers_are_specials_is_true(self):
+        # FunctionGemma's envelope and string-delim tokens are registered
+        # specials on the tokenizer; the transformers loader keys off this
+        # flag to switch ``skip_special_tokens=False`` and keep the markers
+        # visible to the parser.
+        assert FunctionGemmaToolCallParser.markers_are_specials is True
+
+
+class TestGemmaNestedStructures:
+    """Custom-syntax parser handles nested objects and arrays correctly."""
+
+    def test_array_of_objects(self):
+        parser = Gemma4ToolCallParser()
+        text = "<|tool_call>call:f{items:[{a:1},{a:2}]}<tool_call|>"
+        result = parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"items": [{"a": 1}, {"a": 2}]}
+
+    def test_array_of_mixed_types(self):
+        parser = Gemma4ToolCallParser()
+        text = '<|tool_call>call:f{items:[<|"|>x<|"|>,{n:1},<|"|>y<|"|>]}<tool_call|>'
+        result = parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"items": ["x", {"n": 1}, "y"]}
+
+    def test_nested_arrays(self):
+        parser = Gemma4ToolCallParser()
+        text = "<|tool_call>call:f{grid:[[1,2],[3,4]]}<tool_call|>"
+        result = parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"grid": [[1, 2], [3, 4]]}
+
+    def test_function_gemma_array_of_objects(self):
+        parser = FunctionGemmaToolCallParser()
+        text = "<start_function_call>call:f{items:[{a:1},{a:2}]}<end_function_call>"
+        result = parser.parse(text)
+        assert json.loads(result.tool_calls[0].function.arguments) == {"items": [{"a": 1}, {"a": 2}]}
+
+
+class TestGemmaStreamingMonotonicity:
+    """Partial string parsing must yield monotonic prefixes of the final value.
+
+    Regression: when a chunk ends mid-way through the closing string delim
+    (e.g. ``<es`` for FunctionGemma's ``<escape>``), the partial parse used
+    to include those bytes in the string value, producing a stripped JSON
+    longer than the eventual clean output — and the streamer's
+    length-greater diff machinery could not retract the transient bytes,
+    leaving the client stuck with a malformed value.
+    """
+
+    def test_function_gemma_chunk_mid_closing_delim(self):
+        parser = FunctionGemmaToolCallParser()
+        streamer = ChatOutputStreamer(parser)
+        chunks = [
+            "<start_function_call>call:f{location:<escape>Tokyo<es",
+            "<start_function_call>call:f{location:<escape>Tokyo<escape>}<end_function_call>",
+        ]
+        seen = ""
+        for c in chunks:
+            d = streamer.extract_streaming(c)
+            if d and d.tool_calls:
+                for t in d.tool_calls:
+                    if t.function and t.function.arguments:
+                        seen += t.function.arguments
+        streamer.finalize()
+        assert json.loads(seen) == {"location": "Tokyo"}
+
+    def test_gemma4_chunk_mid_closing_delim(self):
+        parser = Gemma4ToolCallParser()
+        streamer = ChatOutputStreamer(parser)
+        chunks = [
+            '<|tool_call>call:f{x:<|"|>val<',
+            '<|tool_call>call:f{x:<|"|>val<|"|>}<tool_call|>',
+        ]
+        seen = ""
+        for c in chunks:
+            d = streamer.extract_streaming(c)
+            if d and d.tool_calls:
+                for t in d.tool_calls:
+                    if t.function and t.function.arguments:
+                        seen += t.function.arguments
+        streamer.finalize()
+        assert json.loads(seen) == {"x": "val"}

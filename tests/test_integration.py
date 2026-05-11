@@ -157,6 +157,20 @@ MODEL_CONFIGS: dict[str, dict] = {
             "torch_dtype": "float32",
         },
     },
+    "chat-transformers-function-gemma": {
+        "name": "chat-transformers-function-gemma",
+        # Google's FunctionGemma (Gemma 2 family) uses the `<start_function_call>`
+        # and `<escape>` syntax. It's a 270M parameter model, small enough
+        # to run on CPU+float32.
+        "model": "google/functiongemma-270m-it",
+        "usecase": "generate",
+        "loader": "transformers",
+        "num_cpus": 2,
+        "transformers_config": {
+            "device": "cpu",
+            "torch_dtype": "float32",
+        },
+    },
     "embed-model": {
         "name": "embed-model",
         "model": "nomic-ai/nomic-embed-text-v1.5",
@@ -1108,3 +1122,57 @@ class TestAudio:
         with open(audio_file, "rb") as f:
             transcription = client.audio.transcriptions.create(model="stt-model", file=f)
         assert "test" in transcription.text.lower()
+
+
+@pytest.mark.integration
+class TestChatTransformersFunctionGemma:
+    """End-to-end FunctionGemma (Gemma 2) tool calling through transformers.
+
+    Verifies that the `function_gemma` parser correctly intercepts the
+    `<start_function_call>` markers and `<escape>` syntax.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-transformers-function-gemma")
+
+    def test_tool_calling_transformers_function_gemma_loader(self, client):
+        completion = client.chat.completions.create(
+            model="chat-transformers-function-gemma",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+        )
+        tool_calls = completion.choices[0].message.tool_calls
+        assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
+
+    def test_tool_calling_streaming_transformers_function_gemma_loader(self, client):
+        stream = client.chat.completions.create(
+            model="chat-transformers-function-gemma",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+            stream=True,
+        )
+
+        collected = _collect_streaming_tool_call(stream)
+
+        assert collected["tool_calls"], (
+            f"expected at least one streamed tool call; got content={collected['content']!r}"
+        )
+        call_0 = collected["tool_calls"][0]
+        assert call_0["id"], "expected an id on the first tool-call delta"
+        assert call_0["name"] == "get_weather"
+        assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
+        assert collected["args_deltas"] >= 2, (
+            f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
+        )
+        parsed_args = json.loads(call_0["arguments"])
+        assert parsed_args.get("city")
+        assert "Paris" in parsed_args["city"]
+        assert collected["finish_reason"] == "tool_calls"

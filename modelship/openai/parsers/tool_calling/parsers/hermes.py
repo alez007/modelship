@@ -30,7 +30,7 @@ class HermesToolCallParser(ToolCallParser):
         if m is None:
             return None
         args = partial_payload[m.end() :].rstrip()
-        if not is_complete and args.endswith("}"):
+        if args.endswith("}"):
             # The block envelope is `{"name":"x","arguments":<args>}`. The
             # closing brace of the envelope arrives in the byte stream before
             # `</tool_call>` does, so we cannot tell whether any given
@@ -39,6 +39,8 @@ class HermesToolCallParser(ToolCallParser):
             # if the model goes on to emit more args bytes, the held brace is
             # recovered on the next pass; if instead it goes on to emit
             # `</tool_call>`, the held brace was the envelope closer and
-            # discarding it was correct.
+            # discarding it was correct. At ``is_complete=True`` the trailing
+            # `}` is always the envelope closer (the args object's own closer
+            # is preceded by it), so the strip still applies.
             args = args[:-1].rstrip()
         return args or None
