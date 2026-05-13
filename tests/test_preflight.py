@@ -281,9 +281,11 @@ class TestMultimodal:
         hw = HardwareProfile(gpus=[GPUInfo(0, 80 * 1024**3, "test")])
         rec = VllmPreflight().recommend(cfg, hw)
         assert "max_num_batched_tokens" in rec
-        assert rec["max_num_batched_tokens"] >= 8192
         # 336/14 = 24 → 24² = 576 patches → 2x headroom = 1152, capped at the 8192 floor.
-        assert rec["max_num_batched_tokens"] >= rec["max_model_len"]
+        # MNBT must match the value the cudagraph budget was sized against; vLLM's
+        # chunked prefill handles prompts longer than MNBT, so it stays at the floor
+        # rather than scaling up to max_model_len.
+        assert rec["max_num_batched_tokens"] == 8192
 
     def test_nested_text_config_is_unwrapped(self, tmp_path):
         # The point of this test is that we can READ geometry from a nested

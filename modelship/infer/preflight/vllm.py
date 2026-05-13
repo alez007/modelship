@@ -169,14 +169,17 @@ class VllmPreflight:
         # single image/audio item in one batch. The exact per-item token
         # count is computed inside vLLM's vision tower (architecture-
         # specific) — we pick a conservative floor that covers common VLMs.
+        # Must equal `effective_mnbt` so the cudagraph estimate above stays
+        # accurate: vLLM's CUDA-graph capture scales linearly with MNBT, and
+        # any larger value here would invalidate the KV-cache budget. vLLM's
+        # chunked prefill handles prompts longer than MNBT.
         if is_mm:
-            mm_floor = max(mm_recommended_mnbt or _MULTIMODAL_BATCHED_TOKENS_FLOOR, suggested)
-            rec["max_num_batched_tokens"] = mm_floor
+            rec["max_num_batched_tokens"] = effective_mnbt
             logger.info(
                 "preflight vllm '%s': multimodal detected → suggested max_num_batched_tokens=%d "
                 "(mm_tokens_per_item≈%s)",
                 config.name,
-                mm_floor,
+                effective_mnbt,
                 mm_tokens_per_item if mm_tokens_per_item is not None else "unknown",
             )
 
