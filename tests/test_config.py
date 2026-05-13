@@ -140,6 +140,7 @@ class TestVllmEngineConfig:
     def test_defaults(self):
         config = VllmEngineConfig()
         assert config.tensor_parallel_size == 1
+        assert config.pipeline_parallel_size == 1
         assert config.dtype == "auto"
         assert config.gpu_memory_utilization == 0.9
         assert config.trust_remote_code is False

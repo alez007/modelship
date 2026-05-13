@@ -31,18 +31,28 @@ def read_chat_template(model_path: str | Path) -> str | None:
 
 def _read_chat_template_from_tokenizer_config(config_dir: Path) -> str | None:
     config_path = config_dir / "tokenizer_config.json"
-    if not config_path.exists():
-        return None
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            config = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Failed to load %s for parser detection: %s", config_path, e)
-        return None
-    template = config.get("chat_template")
-    if not template or not isinstance(template, str):
-        return None
-    return template
+    if config_path.exists():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load %s for parser detection: %s", config_path, e)
+        else:
+            template = config.get("chat_template")
+            if template and isinstance(template, str):
+                return template
+
+    # HF newer convention (transformers 4.43+): chat_template lives in
+    # a separate file alongside tokenizer_config.json. AWQ/GPTQ quantized
+    # repacks often ship it this way.
+    jinja_path = config_dir / "chat_template.jinja"
+    if jinja_path.exists():
+        try:
+            return jinja_path.read_text(encoding="utf-8") or None
+        except OSError as e:
+            logger.warning("Failed to load %s for parser detection: %s", jinja_path, e)
+
+    return None
 
 
 def _read_chat_template_from_gguf(gguf_path: Path) -> str | None:

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import traceback
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -172,13 +173,15 @@ class ModelDeployment:
             MODEL_LOAD_FAILURES_TOTAL.inc(tags={"model": config.name, "loader": config.loader.value})
             self._graceful_teardown()
 
+            logger.exception("Engine init failed for '%s'", config.name)
+            tb = traceback.format_exc()
             err_msg = f"{config.loader.value} engine init failed for '{config.name}': {e}"
             try:
                 from modelship.infer.deploy_coordinator import get_or_create_coordinator
 
                 coordinator = get_or_create_coordinator()
                 app_name = serve.get_replica_context().app_name
-                await coordinator.report_fatal_error.remote(app_name, err_msg)
+                await coordinator.report_fatal_error.remote(app_name, f"{err_msg}\n{tb}")
             except Exception:
                 logger.exception("Failed to report fatal error to coordinator for %s", config.name)
 

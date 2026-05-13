@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from ray import serve
+from ray.exceptions import RayTaskError
 from ray.serve.handle import DeploymentHandle
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -37,6 +38,7 @@ from modelship.openai.protocol import (
     TranscriptionResponse,
     TranslationRequest,
     TranslationResponse,
+    create_error_response,
 )
 from modelship.utils import random_uuid
 
@@ -111,6 +113,18 @@ class OpenaiModelList(BaseModel):
 
 def _error_response(result: ErrorResponse) -> JSONResponse:
     return JSONResponse(content=result.model_dump(mode="json"), status_code=result.error.code if result.error else 500)
+
+
+def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
+    # OpenAI-style 400 for client-side validation failures (e.g. vLLM's
+    # VLLMValidationError on context overflow, which subclasses ValueError).
+    base = cause.args[0] if cause.args else str(cause)
+    return create_error_response(
+        message=base,
+        err_type="invalid_request_error",
+        status_code=HTTPStatus.BAD_REQUEST,
+        param=getattr(cause, "parameter", None),
+    )
 
 
 @serve.deployment
@@ -233,6 +247,24 @@ class ModelshipAPI:
         try:
             try:
                 first = await response_gen.__anext__()
+            except RayTaskError as e:
+                # Loader code raised across the Ray boundary. Treat ValueError-family
+                # causes (e.g. vLLM's VLLMValidationError on context overflow) as
+                # OpenAI-style 400s rather than masking them as 500s.
+                cause = e.cause if isinstance(e.cause, BaseException) else None
+                if isinstance(cause, ValueError | TypeError | OverflowError):
+                    REQUEST_ERRORS_TOTAL.inc(
+                        tags={"model": model, "endpoint": endpoint, "error_type": "validation_error"}
+                    )
+                    REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+                    logger.info("Validation error for model=%s: %s", model, cause)
+                    watcher.stop()
+                    return _error_response(_validation_error_from_cause(cause))
+                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
+                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+                logger.exception("Initial response generation failed for model=%s", model)
+                watcher.stop()
+                return JSONResponse(status_code=500, content={"detail": str(e)})
             except Exception as e:
                 # Catch failures during initial generator creation or the very first yield
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
