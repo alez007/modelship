@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.36] - 2026-05-14
+
+### Added
+- include PyTorch .bin/.pt weights in footprint estimate
+- preflight estimator, pipeline parallelism, and runtime hardening
+- add Gemma 4 and FunctionGemma tool/reasoning parsers
+- llama3_json tool-call parser
+- mistral tool-call parser
+- transformers reasoning content
+- llama_cpp reasoning content + parser unification
+- vllm reasoning content + auto-detect
+- llama_cpp tool calling + cross-loader auto-detection
+- auto-detect tool-call parser for transformers loader
+- incremental streaming for tool-call parsing
+- cross-loader tool-calling toolkit + transformers wiring
+- add integration testing suite for OpenAI endpoints
+
+### Fixed
+- decouple multimodal max_num_batched_tokens from max_model_len
+- restore envelope-} strip and harden Gemma parsers
+- consider reasoning parsers when resolving skip_special_tokens
+- preserve preamble whitespace next to tool_calls
+- case-insensitive .gguf suffix check in chat-template reader
+- maintain consistent created timestamp in chat streaming
+- make tool-call finalization robust to skipped blocks
+- integration tests
+
+### Changed
+- add bitsandbytes to gpu extra
+- narrow exception scope in Gemma args parser
+- optimize noise stripping using delta processing and regex
+- improve noise-stripping robustness and reasoning support
+- update testing target score to 9/10
+- remove python sdk example from quick start
+- optimize README for user adoption and clarify production readiness
+- refresh roadmap and production readiness state
+- tighten agent notes wording
+- bump transformers to 5.8.0 and llama-cpp-python to 0.3.22
+- unify openai parsers under modelship.openai.parsers
+- per-model deploy/reconcile in integration tests
+- bump vllm to 0.20.1
+- simplify tool-parser detection warning and file open
+- optimize transformers stream complexity
+- remove unused `_content_parts_len` attribute from ToolCallStreamer
+
 ## [0.1.35] - 2026-05-01
 
 ### Added
