@@ -336,24 +336,40 @@ def _estimate_mm_tokens_per_item(model_cfg: dict) -> int | None:
 
 
 def _estimate_weight_footprint(model_path: str) -> int:
-    """Sum safetensors sizes. Prefers the index's `total_size` (exact) and
-    falls back to summing file sizes (good enough for sharded layouts)."""
-    index_path = os.path.join(model_path, "model.safetensors.index.json")
-    if os.path.isfile(index_path):
-        try:
-            with open(index_path) as f:
-                idx = json.load(f)
-            total = idx.get("metadata", {}).get("total_size")
-            if total:
-                return int(total)
-        except Exception:
-            logger.debug("preflight: failed to read safetensors index", exc_info=True)
+    """Estimate the on-disk weight footprint. Prefers safetensors (index
+    `total_size` if present, else summed file sizes) and falls back to PyTorch
+    `.bin`/`.pt` for models that haven't been converted. Returns the first
+    format found — models that ship both layouts would otherwise double-count."""
+    safetensors_index = os.path.join(model_path, "model.safetensors.index.json")
+    if os.path.isfile(safetensors_index):
+        total = _read_index_total_size(safetensors_index)
+        if total:
+            return total
 
-    total = 0
     try:
-        for name in os.listdir(model_path):
-            if name.endswith(".safetensors"):
-                total += os.path.getsize(os.path.join(model_path, name))
+        names = os.listdir(model_path)
     except FileNotFoundError:
         return 0
-    return total
+
+    safetensors_total = sum(os.path.getsize(os.path.join(model_path, n)) for n in names if n.endswith(".safetensors"))
+    if safetensors_total:
+        return safetensors_total
+
+    pytorch_index = os.path.join(model_path, "pytorch_model.bin.index.json")
+    if os.path.isfile(pytorch_index):
+        total = _read_index_total_size(pytorch_index)
+        if total:
+            return total
+
+    return sum(os.path.getsize(os.path.join(model_path, n)) for n in names if n.endswith((".bin", ".pt")))
+
+
+def _read_index_total_size(index_path: str) -> int:
+    try:
+        with open(index_path) as f:
+            idx = json.load(f)
+    except Exception:
+        logger.debug("preflight: failed to read weight index %s", index_path, exc_info=True)
+        return 0
+    total = idx.get("metadata", {}).get("total_size")
+    return int(total) if total else 0
