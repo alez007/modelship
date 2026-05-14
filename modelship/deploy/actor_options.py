@@ -50,11 +50,11 @@ def resolve_plugin_wheel(plugin: str) -> Path:
 def _resolve_num_gpus(config: ModelshipModelConfig, env_vars: dict[str, str]) -> float:
     """Decide how many GPU units the outer Ray actor should request.
 
-    The result depends on loader, vLLM tensor-parallel size, and the chosen
-    distributed-executor backend. Mutates *env_vars* in place to add
+    The result depends on loader, vLLM tensor- and pipeline-parallel sizes, and
+    the chosen distributed-executor backend. Mutates *env_vars* in place to add
     VLLM_RAY_PER_WORKER_GPUS when the ray-backend path needs it, and may set
     config.vllm_engine_kwargs.distributed_executor_backend to "ray" as the
-    default for tp > 1.
+    default when the world size (tp * pp) is greater than 1.
     """
     if config.loader == ModelLoader.llama_cpp:
         if config.num_gpus > 0:
@@ -66,42 +66,48 @@ def _resolve_num_gpus(config: ModelshipModelConfig, env_vars: dict[str, str]) ->
         return 0
 
     tp = config.vllm_engine_kwargs.tensor_parallel_size if config.vllm_engine_kwargs else 1
+    pp = config.vllm_engine_kwargs.pipeline_parallel_size if config.vllm_engine_kwargs else 1
+    world_size = tp * pp
     tp_backend = config.vllm_engine_kwargs.distributed_executor_backend if config.vllm_engine_kwargs else None
 
     # vLLM validates world_size against the outer actor's visible GPUs before consulting
-    # the executor backend. With tp>1 and no backend set, the outer actor has 0 GPUs
+    # the executor backend. With world_size>1 and no backend set, the outer actor has 0 GPUs
     # (ray-backend path below) and ParallelConfig blows up. Default to ray so the outer
     # actor is a coordinator and vLLM uses Ray V2 executor (new default in 0.20.0).
-    if tp > 1 and tp_backend is None and config.vllm_engine_kwargs is not None:
+    if world_size > 1 and tp_backend is None and config.vllm_engine_kwargs is not None:
         config.vllm_engine_kwargs.distributed_executor_backend = "ray"
         tp_backend = "ray"
         logger.info(
-            "Defaulting distributed_executor_backend='ray' for model '%s' (tensor_parallel_size=%d).",
+            "Defaulting distributed_executor_backend='ray' for model '%s' "
+            "(tensor_parallel_size=%d, pipeline_parallel_size=%d).",
             config.name,
             tp,
+            pp,
         )
 
     if config.num_gpus == 0:
         return 0
-    if tp > 1 and tp_backend == "mp":
-        # mp backend: the main actor forks TP worker subprocesses, each owning one
-        # physical GPU. Allocate tp whole units so Ray exposes all devices via
+    if world_size > 1 and tp_backend == "mp":
+        # mp backend: the main actor forks worker subprocesses, each owning one
+        # physical GPU. Allocate world_size whole units so Ray exposes all devices via
         # CUDA_VISIBLE_DEVICES. num_gpus is not used for Ray allocation in this path —
         # gpu_memory_utilization is passed directly to vLLM instead.
         if config.num_gpus > 0:
             logger.warning(
                 "num_gpus=%s is ignored for model '%s': with vllm mp backend and "
-                "tensor_parallel_size=%d, Ray GPU allocation is determined by tp.",
+                "tensor_parallel_size=%d pipeline_parallel_size=%d, Ray GPU allocation "
+                "is determined by their product.",
                 config.num_gpus,
                 config.name,
                 tp,
+                pp,
             )
-        return float(tp)
-    if tp > 1:
-        # ray backend: vLLM spawns tp worker Ray actors that each claim their own
-        # fractional GPU. The outer actor is a coordinator only and needs no GPU
-        # units. VLLM_RAY_PER_WORKER_GPUS tells vLLM what fraction each worker
-        # actor should request.
+        return float(world_size)
+    if world_size > 1:
+        # ray backend: vLLM spawns world_size worker Ray actors that each claim
+        # their own fractional GPU. The outer actor is a coordinator only and needs
+        # no GPU units. VLLM_RAY_PER_WORKER_GPUS tells vLLM what fraction each
+        # worker actor should request.
         if config.num_gpus > 0:
             env_vars["VLLM_RAY_PER_WORKER_GPUS"] = str(config.num_gpus)
         return 0

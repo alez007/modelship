@@ -40,11 +40,15 @@ def compute_deploy_plan(
     fingerprint -> new deployment_name -> shows up as both an add and a
     remove (handled as a replace by callers)."""
 
-    # Schedule TP>1 models first so they claim whole GPU units before fractional
-    # models consume the pool.
+    # Schedule larger world-size models first so they claim whole GPU units before
+    # fractional models consume the pool. World size = tp * pp.
     sorted_models = sorted(
         yml_conf.models,
-        key=lambda c: c.vllm_engine_kwargs.tensor_parallel_size if c.vllm_engine_kwargs else 1,
+        key=lambda c: (
+            c.vllm_engine_kwargs.tensor_parallel_size * c.vllm_engine_kwargs.pipeline_parallel_size
+            if c.vllm_engine_kwargs
+            else 1
+        ),
         reverse=True,
     )
 

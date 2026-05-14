@@ -1,5 +1,6 @@
 import io
 from collections.abc import AsyncGenerator
+from http import HTTPStatus
 from typing import ClassVar, cast
 
 from fastapi import UploadFile
@@ -45,11 +46,13 @@ from vllm.entrypoints.pooling.embed.protocol import (
 )
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender
+from vllm.exceptions import VLLMValidationError
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 
 from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
+from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.logging import get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.protocol import (
@@ -64,9 +67,22 @@ from modelship.openai.protocol import (
     TranslationRequest,
     TranslationResponse,
     TranslationResponseVerbose,
+    create_error_response,
 )
 
 logger = get_logger("infer.vllm")
+
+
+def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
+    # VLLMValidationError.__str__ appends "(parameter=..., value=...)"; keep the
+    # original message and surface the offending field via the OpenAI `param` slot.
+    base = exc.args[0] if exc.args else str(exc)
+    return create_error_response(
+        message=base,
+        err_type="invalid_request_error",
+        status_code=HTTPStatus.BAD_REQUEST,
+        param=exc.parameter,
+    )
 
 
 class VllmInfer(BaseInfer):
@@ -86,7 +102,17 @@ class VllmInfer(BaseInfer):
                 f"Check driver logs for resolution errors."
             )
 
-        config_engine_kwargs = model_config.vllm_engine_kwargs.model_dump(exclude_unset=True)
+        user_overrides = model_config.vllm_engine_kwargs.model_dump(exclude_unset=True)
+
+        # Preflight: hardware-aware safe defaults the user can override.
+        # User-supplied values always win; divergences are logged so
+        # misconfigured deploys are visible without spelunking vLLM logs.
+        recommendation = run_preflight(model_config, discover_hardware())
+        if recommendation:
+            logger.info("preflight recommendation for '%s': %s", model_config.name, recommendation)
+        else:
+            logger.info("preflight recommendation for '%s': none", model_config.name)
+        config_engine_kwargs = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
         config_engine_kwargs["model"] = model_config._resolved_path
 
         mem_fraction = self._get_memory_fraction()
@@ -99,6 +125,7 @@ class VllmInfer(BaseInfer):
         engine_args = AsyncEngineArgs(
             model=self.vllm_engine_kwargs.model,
             tensor_parallel_size=self.vllm_engine_kwargs.tensor_parallel_size,
+            pipeline_parallel_size=self.vllm_engine_kwargs.pipeline_parallel_size,
             max_model_len=cast("int", self.vllm_engine_kwargs.max_model_len),
             dtype=cast("ModelDType", self.vllm_engine_kwargs.dtype),
             tokenizer=self.vllm_engine_kwargs.tokenizer,
@@ -307,7 +334,10 @@ class VllmInfer(BaseInfer):
         if self.serving_chat is None:
             return await super().create_chat_completion(request, raw_request)
         vllm_request = VllmChatCompletionRequest(**request.model_dump())
-        result = await self.serving_chat.create_chat_completion(vllm_request, cast("Request", raw_request))
+        try:
+            result = await self.serving_chat.create_chat_completion(vllm_request, cast("Request", raw_request))
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
         if isinstance(result, VllmChatCompletionResponse):
@@ -320,7 +350,10 @@ class VllmInfer(BaseInfer):
         if self.serving_embedding is None:
             return await super().create_embedding(request, raw_request)
         vllm_request = VllmEmbeddingCompletionRequest(**request.model_dump())
-        result = await self.serving_embedding(vllm_request, cast("Request", raw_request))
+        try:
+            result = await self.serving_embedding(vllm_request, cast("Request", raw_request))
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
         return cast("ErrorResponse | Response", result)
@@ -332,9 +365,12 @@ class VllmInfer(BaseInfer):
             return await super().create_transcription(audio_data, request, raw_request)
         vllm_request = VllmTranscriptionRequest(**request.model_dump())
         vllm_request.timestamp_granularities = []
-        result = await self.serving_transcription.create_transcription(
-            audio_data, vllm_request, cast("Request", raw_request)
-        )
+        try:
+            result = await self.serving_transcription.create_transcription(
+                audio_data, vllm_request, cast("Request", raw_request)
+            )
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
         if isinstance(result, VllmTranscriptionResponseVerbose):
@@ -351,9 +387,12 @@ class VllmInfer(BaseInfer):
         if self.serving_translation is None:
             return await super().create_translation(audio_data, request, raw_request)
         vllm_request = VllmTranslationRequest(**request.model_dump())
-        result = await self.serving_translation.create_translation(
-            audio_data, vllm_request, cast("Request", raw_request)
-        )
+        try:
+            result = await self.serving_translation.create_translation(
+                audio_data, vllm_request, cast("Request", raw_request)
+            )
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
         if isinstance(result, VllmTranslationResponseVerbose):

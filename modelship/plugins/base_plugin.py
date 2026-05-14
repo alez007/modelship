@@ -10,7 +10,7 @@ error.
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from modelship.infer.infer_config import ModelshipModelConfig
 from modelship.openai.protocol import (
@@ -22,6 +22,9 @@ from modelship.openai.protocol import (
     RawTranscription,
     RawTranslation,
 )
+
+if TYPE_CHECKING:
+    from modelship.infer.preflight import HardwareProfile
 
 _NOT_SUPPORTED = ErrorResponse(
     error=ErrorInfo(message="plugin does not support this action", type="invalid_request_error", code=404)
@@ -39,6 +42,18 @@ class BasePlugin(ABC):
 
     def max_context_length(self) -> int | None:
         return None
+
+    @classmethod
+    def preflight(
+        cls,
+        config: ModelshipModelConfig,
+        hw: "HardwareProfile",
+    ) -> dict[str, Any]:
+        """Optional hook: inspect hardware and recommend safe defaults for
+        this plugin's configuration. Returns a dict keyed on `plugin_config`
+        field names. User-supplied values in `models.yaml` always override
+        these recommendations. Default no-op."""
+        return {}
 
     async def create_chat_completion(
         self,

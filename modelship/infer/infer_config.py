@@ -42,6 +42,7 @@ class ModelLoader(StrEnum):
 class VllmEngineConfig(BaseModel):
     model: str = ""
     tensor_parallel_size: int = 1
+    pipeline_parallel_size: int = 1
     max_model_len: int | None = None
     dtype: str = "auto"
     tokenizer: str | None = None

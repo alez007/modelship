@@ -43,6 +43,7 @@ gpu = [
     "vllm==0.20.1",
     "vllm[audio]==0.20.1",
     "accelerate>=1.6.0",
+    "bitsandbytes>=0.49.0",
     "diffusers>=0.31.0",
     "llama-cpp-python>=0.3.6",
     "onnxruntime-gpu>=1.20.1",

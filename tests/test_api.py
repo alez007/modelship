@@ -246,3 +246,56 @@ class TestHandleResponse:
         result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
 
         assert isinstance(result, StreamingResponse)
+
+    @pytest.mark.asyncio
+    async def test_raytaskerror_with_value_error_cause_returns_400(self, api):
+        import json
+
+        from fastapi.responses import JSONResponse
+        from ray.exceptions import RayTaskError
+
+        # Build a RayTaskError whose .cause is a ValueError subclass with a
+        # `parameter` attribute — mirrors what VLLMValidationError looks like
+        # after Ray transports it across process boundaries.
+        class _FakeValidationError(ValueError):
+            def __init__(self, message: str, parameter: str) -> None:
+                super().__init__(message)
+                self.parameter = parameter
+
+        cause = _FakeValidationError("This model's maximum context length is 14512 tokens.", "input_tokens")
+        err = RayTaskError(function_name="fn", traceback_str="tb", cause=cause)
+
+        async def mock_gen():
+            if False:
+                yield  # pragma: no cover — make this an async generator
+            raise err
+
+        watcher = MagicMock()
+        result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 400
+        body = json.loads(bytes(result.body))
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] == "input_tokens"
+        assert "maximum context length" in body["error"]["message"]
+        watcher.stop.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_raytaskerror_with_unknown_cause_returns_500(self, api):
+        from fastapi.responses import JSONResponse
+        from ray.exceptions import RayTaskError
+
+        cause = RuntimeError("something exploded internally")
+        err = RayTaskError(function_name="fn", traceback_str="tb", cause=cause)
+
+        async def mock_gen():
+            if False:
+                yield  # pragma: no cover
+            raise err
+
+        watcher = MagicMock()
+        result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 500
