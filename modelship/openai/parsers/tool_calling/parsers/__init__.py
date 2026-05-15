@@ -6,6 +6,7 @@ from modelship.openai.parsers.tool_calling.parsers.gemma import (
 from modelship.openai.parsers.tool_calling.parsers.hermes import HermesToolCallParser
 from modelship.openai.parsers.tool_calling.parsers.llama3_json import Llama3JsonToolCallParser
 from modelship.openai.parsers.tool_calling.parsers.mistral import MistralToolCallParser
+from modelship.openai.parsers.tool_calling.parsers.qwen3_coder import Qwen3CoderToolCallParser
 
 __all__ = [
     "FunctionGemmaToolCallParser",
@@ -13,5 +14,6 @@ __all__ = [
     "HermesToolCallParser",
     "Llama3JsonToolCallParser",
     "MistralToolCallParser",
+    "Qwen3CoderToolCallParser",
     "ToolCallParser",
 ]

@@ -143,7 +143,9 @@ def _pynvml_node_discover() -> list[GPUInfo]:
 def run_preflight(config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
     """Look up the loader's estimator and run it. Returns `{}` if no estimator
     is registered or the estimator declines (no resolved path, missing config,
-    etc.). Never raises — preflight failures must not block a deploy."""
+    etc.). For `loader='custom'`, dispatches to the plugin's
+    `ModelPlugin.preflight()` classmethod via a registered adapter.
+    Never raises — preflight failures must not block a deploy."""
     # Register-on-first-call so importing this module doesn't pull in
     # backend-specific deps (vllm, transformers) when they're not installed.
     _ensure_registered()
@@ -179,7 +181,27 @@ def merge_with_user_overrides(
     return {**recommendation, **user_overrides}
 
 
+class _CustomPluginPreflight:
+    """Dispatch adapter for `loader='custom'`. Imports `config.plugin` and
+    delegates to its `ModelPlugin.preflight()` classmethod. The outer
+    `run_preflight()` already swallows exceptions, so import or attribute
+    errors propagate up to be logged there."""
+
+    def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        if config.plugin is None:
+            return {}
+        import importlib
+
+        module = importlib.import_module(config.plugin)
+        plugin_cls = getattr(module, "ModelPlugin", None)
+        if plugin_cls is None:
+            return {}
+        return plugin_cls.preflight(config, hw) or {}
+
+
 def _ensure_registered() -> None:
+    if ModelLoader.custom not in _REGISTRY:
+        register(ModelLoader.custom, _CustomPluginPreflight())
     if ModelLoader.vllm in _REGISTRY:
         return
     try:

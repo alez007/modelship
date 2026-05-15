@@ -15,6 +15,7 @@ from modelship.openai.parsers.tool_calling.parsers import (
     HermesToolCallParser,
     Llama3JsonToolCallParser,
     MistralToolCallParser,
+    Qwen3CoderToolCallParser,
     ToolCallParser,
 )
 
@@ -24,6 +25,7 @@ _PARSERS: dict[str, ToolCallParser] = {
     HermesToolCallParser.name: HermesToolCallParser(),
     Llama3JsonToolCallParser.name: Llama3JsonToolCallParser(),
     MistralToolCallParser.name: MistralToolCallParser(),
+    Qwen3CoderToolCallParser.name: Qwen3CoderToolCallParser(),
 }
 
 

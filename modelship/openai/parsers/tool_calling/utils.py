@@ -12,6 +12,7 @@ def detect_tool_parser(model_path: str | Path) -> str | None:
 
     - Returns "gemma4" if `<|tool_call>` markers are found.
     - Returns "function_gemma" if `<start_function_call>` markers are found.
+    - Returns "qwen3_coder" if `<function=` or `<parameter=` markers are found.
     - Returns "hermes" if `<tool_call>` markers are found.
     - Returns "mistral" if `[TOOL_CALLS]` markers are found.
     - Returns "llama3_json" if `<|python_tag|>` markers are found.
@@ -34,6 +35,13 @@ def classify_template(template: str) -> str | None:
 
     if "<start_function_call>" in template:
         return "function_gemma"
+
+    # Qwen3-Coder shares the ``<tool_call>`` envelope with Hermes but the
+    # body is XML rather than JSON. The ``<function=`` / ``<parameter=``
+    # markers only appear in Qwen3-Coder templates, so check them before
+    # the ``<tool_call>`` -> hermes branch below.
+    if "<function=" in template or "<parameter=" in template:
+        return "qwen3_coder"
 
     if "<tool_call>" in template:
         return "hermes"
