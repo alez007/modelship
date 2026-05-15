@@ -45,11 +45,13 @@ _PARAM_OPEN_RE = re.compile(r"<parameter=([^>]+)>")
 _PARAM_CLOSE = "</parameter>"
 _FUNC_CLOSE = "</function>"
 
-# Trailing characters withheld from the streamed JSON so a closing brace,
-# quote, or comma never lands ahead of more arguments bytes. The streamer
-# takes a length-diff of successive returns, so anything emitted here must
-# be a monotonic prefix of the final clean output.
-_STREAM_STRIP_TAIL = ("}", '"', ",")
+# Structural suffix that ``json.dumps`` always emits for a non-empty dict
+# whose last value is a string: the closing quote of that value plus the
+# closing brace of the object. Stripping exactly these two bytes exposes
+# the in-flight value as a monotonic prefix without touching content
+# inside the value — a character-wise loop would eat trailing ``,``,
+# ``}``, or ``"`` that are actually part of the parameter value.
+_STREAM_STRIP_TAIL = '"}'
 
 
 class Qwen3CoderToolCallParser(ToolCallParser):
@@ -102,10 +104,9 @@ class Qwen3CoderToolCallParser(ToolCallParser):
         if is_complete:
             return full_json
 
-        safe_json = full_json
-        while safe_json and safe_json[-1] in _STREAM_STRIP_TAIL:
-            safe_json = safe_json[:-1]
-        return safe_json
+        if full_json.endswith(_STREAM_STRIP_TAIL):
+            return full_json[: -len(_STREAM_STRIP_TAIL)]
+        return full_json
 
 
 def _safe_overlap(buf: str, marker: str) -> int:
