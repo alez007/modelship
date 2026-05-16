@@ -9,6 +9,7 @@ from modelship.infer.custom.openai.serving_transcription import (
     OpenAIServingTranslation,
 )
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy
+from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ErrorResponse,
@@ -41,6 +42,16 @@ class CustomInfer(BaseInfer):
         plugin = self.model_config.plugin
         if plugin is not None:
             module = cast("PluginProto", importlib.import_module(plugin))
+            recommendation = run_preflight(self.model_config, discover_hardware())
+            if recommendation:
+                logger.info("preflight recommendation for '%s': %s", self.model_config.name, recommendation)
+                self.model_config.plugin_config = merge_with_user_overrides(
+                    recommendation,
+                    self.model_config.plugin_config or {},
+                    model_name=self.model_config.name,
+                )
+            else:
+                logger.info("preflight recommendation for '%s': none", self.model_config.name)
             self.custom_engine = module.ModelPlugin(model_config=self.model_config)
             await self.custom_engine.start()
             self._set_max_context_length(self.custom_engine.max_context_length())
