@@ -63,9 +63,23 @@ def total_gpu_reservation(deploy_opts: dict) -> float:
     Used by the coordinator's resource tracker, which can't read the PG
     bundle list as a single scalar.
     """
+    return _total_reservation(deploy_opts, "GPU", "num_gpus")
+
+
+def total_cpu_reservation(deploy_opts: dict) -> float:
+    """Sum the CPU units this deployment (actor + any PG bundles) will consume.
+
+    For multi-slot deploys the outer actor sits in bundle 0 and its CPU
+    request is satisfied from that bundle's reservation, so summing the
+    bundles gives the correct total — same shape as the GPU helper.
+    """
+    return _total_reservation(deploy_opts, "CPU", "num_cpus")
+
+
+def _total_reservation(deploy_opts: dict, bundle_key: str, actor_key: str) -> float:
     if "placement_group_bundles" in deploy_opts:
-        return float(sum(b.get("GPU", 0) for b in deploy_opts["placement_group_bundles"]))
-    return float(deploy_opts.get("ray_actor_options", {}).get("num_gpus", 0) or 0)
+        return float(sum(b.get(bundle_key, 0) for b in deploy_opts["placement_group_bundles"]))
+    return float(deploy_opts.get("ray_actor_options", {}).get(actor_key, 0) or 0)
 
 
 def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | None = None) -> dict:

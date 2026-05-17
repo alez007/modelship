@@ -183,9 +183,9 @@ class ModelshipModelConfig(BaseModel):
                 )
             if "num_gpus" in self.model_fields_set:
                 _logger.warning(
-                    "num_gpus=%d is redundant for model '%s' when "
-                    "tensor_parallel_size x pipeline_parallel_size=%d is set; "
-                    "the value is derived from tp x pp.",
+                    "num_gpus=%d is redundant for model '%s': it matches "
+                    "tensor_parallel_size x pipeline_parallel_size=%d, which "
+                    "already determines the GPU count. Safe to drop.",
                     ng_int,
                     self.name,
                     world_size,

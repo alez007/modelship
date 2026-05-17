@@ -7,7 +7,7 @@ import ray
 from ray import serve
 from ray.serve.schema import LoggingConfig
 
-from modelship.deploy.actor_options import build_deployment_options, total_gpu_reservation
+from modelship.deploy.actor_options import build_deployment_options, total_cpu_reservation, total_gpu_reservation
 from modelship.infer.infer_config import ModelshipConfig, ModelshipModelConfig
 from modelship.infer.model_deployment import ModelDeployment
 from modelship.logging import get_logger
@@ -102,7 +102,7 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
             ctx.operator_id,
             deployment_name,
             total_gpu_reservation(deploy_opts),
-            float(deploy_opts.get("ray_actor_options", {}).get("num_cpus", 0) or 0),
+            total_cpu_reservation(deploy_opts),
             ctx.probe,
         )
     )

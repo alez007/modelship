@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import mship_deploy
 import pytest
 
-from modelship.deploy.actor_options import build_deployment_options, resolve_plugin_wheel
+from modelship.deploy.actor_options import (
+    build_deployment_options,
+    resolve_plugin_wheel,
+    total_cpu_reservation,
+    total_gpu_reservation,
+)
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, ModelUsecase, VllmEngineConfig
 from modelship.utils import rand_suffix
 from modelship.utils.cli import parse_args
@@ -175,6 +180,36 @@ class TestBuildDeploymentOptions:
         opts = build_deployment_options(config)
         assert opts["ray_actor_options"]["num_gpus"] == 0.3
         assert "placement_group_bundles" not in opts
+
+
+class TestReservationTotals:
+    def test_single_slot_uses_actor_options(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0.5,
+            num_cpus=2,
+        )
+        opts = build_deployment_options(config)
+        assert total_gpu_reservation(opts) == 0.5
+        assert total_cpu_reservation(opts) == 2
+
+    def test_multi_slot_sums_pg_bundles(self):
+        # 4 slots, each bundle reserves num_cpus from the cluster; the outer
+        # actor's CPU sits inside bundle 0 and is not additive.
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=4,
+            num_cpus=2,
+        )
+        opts = build_deployment_options(config)
+        assert total_gpu_reservation(opts) == 4
+        assert total_cpu_reservation(opts) == 8
 
 
 class TestRemoveApps:
