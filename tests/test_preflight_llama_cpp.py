@@ -106,6 +106,27 @@ class TestLlamaCppPreflightRecommends:
         assert rec["n_ctx"] < 131072
         assert rec["n_ctx"] % 256 == 0
 
+    def test_missing_context_length_applies_safety_cap(self, tmp_path):
+        # GGUF lacks `{arch}.context_length`. On a huge-RAM host the math
+        # would otherwise hand out a context far beyond the model's training
+        # window; the cap (32768) must kick in instead.
+        cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)))
+        hw = HardwareProfile(ram_bytes=1024 * 1024**3)  # 1 TiB
+
+        no_ctx_meta = _GGUFMeta(
+            block_count=_LLAMA_META.block_count,
+            head_count_kv=_LLAMA_META.head_count_kv,
+            head_dim=_LLAMA_META.head_dim,
+            context_length=None,
+        )
+        with (
+            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=no_ctx_meta),
+            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
+        ):
+            rec = LlamaCppPreflight().recommend(cfg, hw)
+
+        assert rec == {"n_ctx": 32768}
+
     def test_oversubscribed_budget_returns_empty(self, tmp_path):
         # Weights >> available RAM → no budget left; skip recommendation
         # rather than ship something the user can't actually run.

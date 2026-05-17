@@ -29,6 +29,14 @@ _NCTX_ALIGNMENT = 256
 # silently ship a 256-token context.
 _MIN_NCTX = 512
 
+# Safety cap when the GGUF doesn't declare `{arch}.context_length`. Without it,
+# a high-RAM host could end up recommending an n_ctx far beyond what the model
+# was actually trained for (older quant repos and custom conversions sometimes
+# omit the field). 32k is the largest "native" context shipped by most
+# instruct-tuned models without RoPE extension at the time of writing — picking
+# higher risks gibberish and severe attention-cost blowup at inference time.
+_UNKNOWN_CONTEXT_LENGTH_CAP = 32768
+
 # Default KV-cache element size when neither `type_k` nor `type_v` is set in
 # `model_kwargs`. llama.cpp defaults to fp16 (2 bytes).
 _DEFAULT_KV_DTYPE_BYTES = 2
@@ -77,8 +85,18 @@ class LlamaCppPreflight:
 
         max_tokens = int(budget // kv_per_token)
         suggested = (max_tokens // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
-        if meta.context_length:
-            suggested = min(suggested, meta.context_length)
+        # Cap to the model's declared training context when available;
+        # otherwise apply a conservative safety ceiling so a high-RAM host
+        # doesn't recommend hundreds of thousands of tokens on a GGUF that
+        # just happens to omit the field.
+        cap = meta.context_length if meta.context_length else _UNKNOWN_CONTEXT_LENGTH_CAP
+        if not meta.context_length:
+            logger.info(
+                "preflight '%s': GGUF metadata missing context_length; capping n_ctx at %d",
+                config.name,
+                _UNKNOWN_CONTEXT_LENGTH_CAP,
+            )
+        suggested = min(suggested, cap)
         if suggested < _MIN_NCTX:
             logger.warning(
                 "preflight '%s': budget yields n_ctx=%d (< %d); skipping recommendation",
