@@ -111,6 +111,17 @@ class TestFunctionGemmaToolCallParser:
         # visible to the parser.
         assert FunctionGemmaToolCallParser.markers_are_specials is True
 
+    def test_accepts_space_separator_instead_of_colon(self):
+        # Regression: the 270m-it checkpoint sometimes emits ``call <name>``
+        # (whitespace) instead of ``call:<name>``. Both shapes must parse.
+        parser = FunctionGemmaToolCallParser()
+        text = "<start_function_call>call get_weather{city:<escape>Paris<escape>}<end_function_call>"
+        result = parser.parse(text)
+
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {"city": "Paris"}
+
 
 class TestGemmaNestedStructures:
     """Custom-syntax parser handles nested objects and arrays correctly."""

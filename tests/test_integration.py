@@ -1125,6 +1125,7 @@ class TestAudio:
 
 
 @pytest.mark.integration
+@pytest.mark.function_gemma
 class TestChatTransformersFunctionGemma:
     """End-to-end FunctionGemma (Gemma 2) tool calling through transformers.
 
@@ -1169,9 +1170,12 @@ class TestChatTransformersFunctionGemma:
         assert call_0["id"], "expected an id on the first tool-call delta"
         assert call_0["name"] == "get_weather"
         assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
-        assert collected["args_deltas"] >= 2, (
-            f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
-        )
+        # HF's ``TextIteratorStreamer`` only emits up to the last whitespace
+        # character (transformers/generation/streamers.py: ``text.rfind(" ")+1``),
+        # and FunctionGemma's args body contains no internal spaces, so the
+        # whole body arrives in a single chunk and produces exactly one args
+        # delta. vLLM / llama_cpp loaders emit per-token and still satisfy >= 2.
+        assert collected["args_deltas"] >= 1, f"expected at least one args delta, got {collected['args_deltas']}"
         parsed_args = json.loads(call_0["arguments"])
         assert parsed_args.get("city")
         assert "Paris" in parsed_args["city"]
