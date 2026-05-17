@@ -202,6 +202,13 @@ class _CustomPluginPreflight:
 def _ensure_registered() -> None:
     if ModelLoader.custom not in _REGISTRY:
         register(ModelLoader.custom, _CustomPluginPreflight())
+    if ModelLoader.llama_cpp not in _REGISTRY:
+        try:
+            from modelship.infer.preflight.llama_cpp import LlamaCppPreflight
+
+            register(ModelLoader.llama_cpp, LlamaCppPreflight())
+        except Exception:
+            logger.debug("preflight: LlamaCppPreflight registration skipped", exc_info=True)
     if ModelLoader.vllm in _REGISTRY:
         return
     try:

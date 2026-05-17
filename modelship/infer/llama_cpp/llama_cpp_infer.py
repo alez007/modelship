@@ -10,6 +10,7 @@ from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.openai.serving_chat import OpenAIServingChat
 from modelship.infer.llama_cpp.openai.serving_embedding import OpenAIServingEmbedding
 from modelship.infer.llama_cpp.utils import build_tool_call_renderer
+from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -25,7 +26,19 @@ logger = get_logger("infer.llama_cpp")
 class LlamaCppInfer(BaseInfer):
     def __init__(self, model_config: ModelshipModelConfig):
         super().__init__(model_config)
-        self.config = model_config.llama_cpp_config or LlamaCppConfig()
+        user_config = model_config.llama_cpp_config or LlamaCppConfig()
+        user_overrides = user_config.model_dump(exclude_unset=True)
+
+        # Preflight: hardware-aware safe defaults the user can override.
+        # User-supplied values always win; divergences are logged so
+        # misconfigured deploys are visible without spelunking llama.cpp logs.
+        recommendation = run_preflight(model_config, discover_hardware())
+        if recommendation:
+            logger.info("preflight recommendation for '%s': %s", model_config.name, recommendation)
+        else:
+            logger.info("preflight recommendation for '%s': none", model_config.name)
+        merged = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
+        self.config = user_config.model_copy(update=merged)
 
         # Automatically enable verbose mode if MSHIP_LOG_LEVEL is TRACE.
         # Other log levels are handled via the 'llama_cpp' Python logger (configured in logging.py).

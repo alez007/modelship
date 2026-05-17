@@ -578,6 +578,7 @@ class TestChatTransformers:
 
 
 @pytest.mark.integration
+@pytest.mark.llama_cpp
 class TestChatLlamaCpp:
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
@@ -640,6 +641,7 @@ class TestChatLlamaCpp:
 
 
 @pytest.mark.integration
+@pytest.mark.llama_cpp
 class TestChatLlamaCppReasoning:
     """End-to-end reasoning + tool calling through the llama_cpp loader.
 
@@ -1065,6 +1067,7 @@ class TestChatTransformersReasoning:
 
 
 @pytest.mark.integration
+@pytest.mark.llama_cpp
 class TestChatLimited:
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
