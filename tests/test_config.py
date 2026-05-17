@@ -117,6 +117,101 @@ class TestModelshipModelConfig:
         )
         assert config.num_gpus == 0.70
 
+    def test_num_gpus_integer_required_above_one(self):
+        with pytest.raises(ValidationError, match="must be integers"):
+            ModelshipModelConfig(
+                name="test-llm",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=1.5,
+            )
+
+    def test_num_gpus_auto_derives_tp(self):
+        # num_gpus=3 with default tp/pp -> tp becomes 3, num_gpus normalizes to per-slot share.
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=3,
+        )
+        assert config.vllm_engine_kwargs.tensor_parallel_size == 3
+        assert config.num_gpus == 1.0
+
+    def test_explicit_tp_matching_num_gpus_accepted(self):
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=4,
+            vllm_engine_kwargs=VllmEngineConfig(tensor_parallel_size=2, pipeline_parallel_size=2),
+        )
+        assert config.vllm_engine_kwargs.tensor_parallel_size == 2
+        assert config.vllm_engine_kwargs.pipeline_parallel_size == 2
+        assert config.num_gpus == 1.0
+
+    def test_explicit_tp_inconsistent_with_num_gpus_rejected(self):
+        with pytest.raises(ValidationError, match="does not match tensor_parallel_size"):
+            ModelshipModelConfig(
+                name="test-llm",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=2,
+                vllm_engine_kwargs=VllmEngineConfig(tensor_parallel_size=3),
+            )
+
+    def test_fractional_num_gpus_with_tp_rejected(self):
+        with pytest.raises(ValidationError, match=r"fractional.*not compatible.*tensor_parallel"):
+            ModelshipModelConfig(
+                name="test-llm",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=0.3,
+                vllm_engine_kwargs=VllmEngineConfig(tensor_parallel_size=2),
+            )
+
+    def test_fractional_num_gpus_with_pp_rejected(self):
+        with pytest.raises(ValidationError, match=r"fractional.*not compatible.*tensor_parallel"):
+            ModelshipModelConfig(
+                name="test-llm",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=0.5,
+                vllm_engine_kwargs=VllmEngineConfig(pipeline_parallel_size=2),
+            )
+
+    def test_num_gpus_redundant_with_tp_logs_warning(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="config"):
+            ModelshipModelConfig(
+                name="test-llm",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=2,
+                vllm_engine_kwargs=VllmEngineConfig(tensor_parallel_size=2),
+            )
+        assert any("redundant" in rec.message for rec in caplog.records)
+
+    def test_non_vllm_loader_skips_tp_derivation(self):
+        # transformers has no parallelism config; num_gpus stays as-is for the
+        # loader to interpret directly (whole GPUs are fine for that path).
+        config = ModelshipModelConfig(
+            name="test-tts",
+            model="some-model",
+            usecase=ModelUsecase.tts,
+            loader=ModelLoader.custom,
+            plugin="myplugin",
+            num_gpus=2,
+        )
+        assert config.num_gpus == 2
+
     def test_all_usecases_valid(self):
         for usecase in ModelUsecase:
             config = ModelshipModelConfig(

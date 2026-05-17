@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import mship_deploy
 import pytest
 
-from modelship.deploy.actor_options import build_actor_options, resolve_plugin_wheel
+from modelship.deploy.actor_options import build_deployment_options, resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, ModelUsecase, VllmEngineConfig
 from modelship.utils import rand_suffix
 from modelship.utils.cli import parse_args
@@ -87,7 +87,7 @@ class TestRandSuffix:
             assert all(c.islower() or c.isdigit() for c in suffix)
 
 
-class TestBuildActorOptions:
+class TestBuildDeploymentOptions:
     def test_basic_options(self):
         config = ModelshipModelConfig(
             name="test-model",
@@ -97,11 +97,13 @@ class TestBuildActorOptions:
             num_gpus=1,
             num_cpus=2,
         )
-        opts = build_actor_options(config)
-        assert opts["num_gpus"] == 1
-        assert opts["num_cpus"] == 2
-        assert "env_vars" in opts["runtime_env"]
-        assert "pip" not in opts["runtime_env"]
+        opts = build_deployment_options(config)
+        actor = opts["ray_actor_options"]
+        assert actor["num_gpus"] == 1
+        assert actor["num_cpus"] == 2
+        assert "env_vars" in actor["runtime_env"]
+        assert "pip" not in actor["runtime_env"]
+        assert "placement_group_bundles" not in opts
 
     def test_with_plugin_wheel(self):
         config = ModelshipModelConfig(
@@ -112,8 +114,8 @@ class TestBuildActorOptions:
             plugin="myplugin",
         )
         wheel_path = Path("/tmp/myplugin-0.1.0-py3-none-any.whl")
-        opts = build_actor_options(config, plugin_wheel=wheel_path)
-        assert opts["runtime_env"]["pip"] == [str(wheel_path)]
+        opts = build_deployment_options(config, plugin_wheel=wheel_path)
+        assert opts["ray_actor_options"]["runtime_env"]["pip"] == [str(wheel_path)]
 
     def test_llama_cpp_force_cpu(self):
         config = ModelshipModelConfig(
@@ -123,41 +125,56 @@ class TestBuildActorOptions:
             loader=ModelLoader.llama_cpp,
             num_gpus=1,
         )
-        opts = build_actor_options(config)
-        assert opts["num_gpus"] == 0
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 0
 
-    def test_pipeline_parallel_defaults_to_ray_backend(self):
+    def test_pipeline_parallel_uses_placement_group(self):
+        # num_gpus=2 + pp=2 satisfies the world_size==num_gpus invariant; the
+        # outer actor sits in bundle 0 with no GPU and vLLM workers claim the
+        # rest via the inherited placement group.
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
             usecase=ModelUsecase.generate,
             loader=ModelLoader.vllm,
-            num_gpus=1,
+            num_gpus=2,
             vllm_engine_kwargs=VllmEngineConfig(pipeline_parallel_size=2),
         )
-        opts = build_actor_options(config)
-        # Outer actor is a coordinator; worker actors claim the GPUs via
-        # VLLM_RAY_PER_WORKER_GPUS, same path as tp>1 takes.
-        assert opts["num_gpus"] == 0
-        assert opts["runtime_env"]["env_vars"]["VLLM_RAY_PER_WORKER_GPUS"] == "1.0"
-        assert config.vllm_engine_kwargs.distributed_executor_backend == "ray"
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 0
+        assert opts["placement_group_strategy"] == "STRICT_PACK"
+        bundles = opts["placement_group_bundles"]
+        assert len(bundles) == 2
+        assert all(b["GPU"] == 1.0 for b in bundles)
 
-    def test_tp_times_pp_with_mp_backend(self):
+    def test_tp_times_pp_builds_pg(self):
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
             usecase=ModelUsecase.generate,
             loader=ModelLoader.vllm,
-            num_gpus=1,
+            num_gpus=4,
             vllm_engine_kwargs=VllmEngineConfig(
                 tensor_parallel_size=2,
                 pipeline_parallel_size=2,
-                distributed_executor_backend="mp",
             ),
         )
-        opts = build_actor_options(config)
-        # mp backend: outer actor owns world_size = tp * pp GPUs directly.
-        assert opts["num_gpus"] == 4
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 0
+        assert len(opts["placement_group_bundles"]) == 4
+        assert all(b["GPU"] == 1.0 for b in opts["placement_group_bundles"])
+
+    def test_single_slot_skips_placement_group(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0.3,
+        )
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 0.3
+        assert "placement_group_bundles" not in opts
 
 
 class TestRemoveApps:

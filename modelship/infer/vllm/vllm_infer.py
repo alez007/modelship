@@ -7,7 +7,6 @@ from fastapi import UploadFile
 from starlette.requests import Request
 from starlette.responses import Response
 from vllm.config.model import ModelDType
-from vllm.config.parallel import DistributedExecutorBackend
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.logger import RequestLogger
 from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -122,6 +121,14 @@ class VllmInfer(BaseInfer):
         self.vllm_engine_kwargs: VllmEngineConfig = VllmEngineConfig(**config_engine_kwargs)
         logger.info("initialising vllm engine with args: %s", self.vllm_engine_kwargs.model_dump())
 
+        # Force the ray executor for multi-slot deploys: the outer actor sits
+        # in a 0-GPU PG bundle, but vLLM's ParallelConfig validates world_size
+        # against the actor's visible GPUs before consulting the backend. The
+        # ray backend skips that check (workers claim their own bundles via the
+        # inherited placement group).
+        world_size = self.vllm_engine_kwargs.tensor_parallel_size * self.vllm_engine_kwargs.pipeline_parallel_size
+        distributed_executor_backend = "ray" if world_size > 1 else None
+
         engine_args = AsyncEngineArgs(
             model=self.vllm_engine_kwargs.model,
             tensor_parallel_size=self.vllm_engine_kwargs.tensor_parallel_size,
@@ -131,9 +138,7 @@ class VllmInfer(BaseInfer):
             tokenizer=self.vllm_engine_kwargs.tokenizer,
             trust_remote_code=self.vllm_engine_kwargs.trust_remote_code,
             gpu_memory_utilization=self.vllm_engine_kwargs.gpu_memory_utilization,
-            distributed_executor_backend=cast(
-                "DistributedExecutorBackend", self.vllm_engine_kwargs.distributed_executor_backend
-            ),
+            distributed_executor_backend=distributed_executor_backend,
             enable_log_requests=self.vllm_engine_kwargs.enable_log_requests
             if self.vllm_engine_kwargs.enable_log_requests is not None
             else False,

@@ -8,6 +8,10 @@ from fastapi import Request
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from starlette.datastructures import Headers, State
 
+from modelship.logging import get_logger
+
+_logger = get_logger("config")
+
 # Length (hex chars) of the per-deployment fingerprint suffix. 10 hex chars =
 # 40 bits, collision-resistant for the realistic universe of model configs.
 FINGERPRINT_LEN = 10
@@ -47,8 +51,7 @@ class VllmEngineConfig(BaseModel):
     dtype: str = "auto"
     tokenizer: str | None = None
     trust_remote_code: bool = False
-    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when not explicitly set in config
-    distributed_executor_backend: str | None = None
+    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when num_gpus < 1
     task: str = "auto"
     model_impl: str | None = None
     enable_log_requests: bool | None = False
@@ -126,6 +129,72 @@ class ModelshipModelConfig(BaseModel):
             raise ValueError("loader='custom' requires plugin to be set")
         if self.loader != ModelLoader.custom and not self.model:
             raise ValueError(f"`model:` is required for loader={self.loader!r}")
+        return self
+
+    @model_validator(mode="after")
+    def normalize_num_gpus_and_tp(self):
+        """Enforce the num_gpus / tensor_parallel semantics for vLLM.
+
+        - num_gpus < 1 (fractional): single GPU sharing. tp=pp=1 only — Ray
+          cannot guarantee distinct physical-GPU placement for fractional
+          placement-group bundles, so TP across shared GPUs is rejected.
+        - num_gpus >= 1: must be an integer count of whole GPUs.
+        - When tp x pp > 1, the GPU count is implied by tp x pp; if the user
+          also set num_gpus, log a warning and use tp x pp (each slot owns a
+          whole GPU).
+        - When tp = pp = 1 and num_gpus >= 2 is set, auto-derive tp = num_gpus.
+        """
+        ng = self.num_gpus
+        if ng <= 0 or self.loader != ModelLoader.vllm:
+            return self
+
+        tp = self.vllm_engine_kwargs.tensor_parallel_size
+        pp = self.vllm_engine_kwargs.pipeline_parallel_size
+        world_size = tp * pp
+
+        if 0 < ng < 1:
+            if world_size > 1:
+                raise ValueError(
+                    f"num_gpus={ng!r} (fractional) is not compatible with "
+                    f"tensor_parallel_size x pipeline_parallel_size > 1 "
+                    f"(got {tp} x {pp}). Ray packs fractional placement-group "
+                    f"bundles onto the same physical GPU, which breaks tensor "
+                    f"parallelism. Use whole GPUs for multi-slot deploys "
+                    f"(e.g. num_gpus={world_size}) or drop the parallelism "
+                    f"settings to share a single GPU."
+                )
+            return self
+
+        # ng >= 1: integer-only.
+        if ng != int(ng):
+            raise ValueError(
+                f"num_gpus={ng!r} is not allowed: values >= 1 must be integers. "
+                f"Use a fractional value < 1 to share a single GPU, or an integer "
+                f"to request that many whole GPUs."
+            )
+        ng_int = int(ng)
+
+        if world_size > 1:
+            if ng_int != world_size:
+                raise ValueError(
+                    f"num_gpus={ng_int} does not match tensor_parallel_size x "
+                    f"pipeline_parallel_size={tp} x {pp}={world_size}. Either drop "
+                    f"num_gpus (it's derived from tp x pp) or set num_gpus={world_size}."
+                )
+            if "num_gpus" in self.model_fields_set:
+                _logger.warning(
+                    "num_gpus=%d is redundant for model '%s' when "
+                    "tensor_parallel_size x pipeline_parallel_size=%d is set; "
+                    "the value is derived from tp x pp.",
+                    ng_int,
+                    self.name,
+                    world_size,
+                )
+        else:
+            # tp=pp=1: auto-derive tp from num_gpus.
+            self.vllm_engine_kwargs.tensor_parallel_size = ng_int
+
+        self.num_gpus = 1.0
         return self
 
     def fingerprint(self) -> str:

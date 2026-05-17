@@ -37,10 +37,10 @@ logger = get_logger("infer.deployment")
 def _reap_child_processes() -> None:
     """Kill any subprocesses still alive in this actor process.
 
-    vLLM with distributed_executor_backend='mp' forks Worker_TP* subprocesses
-    before the AsyncLLM constructor returns. If init then raises (e.g. CUDA
-    OOM during graph capture), those workers never get reaped — they reparent
-    to PID 1 and hold their full GPU allocation until manually killed.
+    Some loaders (and vLLM's engine core process) fork helper subprocesses
+    before constructors return. If init then raises (e.g. CUDA OOM during
+    graph capture), those workers never get reaped — they reparent to PID 1
+    and hold their full GPU allocation until manually killed.
     """
     try:
         import psutil
