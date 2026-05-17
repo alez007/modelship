@@ -7,7 +7,7 @@ import ray
 from ray import serve
 from ray.serve.schema import LoggingConfig
 
-from modelship.deploy.actor_options import build_actor_options
+from modelship.deploy.actor_options import build_deployment_options, total_cpu_reservation, total_gpu_reservation
 from modelship.infer.infer_config import ModelshipConfig, ModelshipModelConfig
 from modelship.infer.model_deployment import ModelDeployment
 from modelship.logging import get_logger
@@ -94,15 +94,15 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
     "skipped" (no progress, retry), "deployed", "transient" (deploy raised; retry),
     "fatal" (deployment reported a permanent error; skip permanently)."""
     wheel = ctx.plugin_wheels.get(config.plugin) if config.plugin else None
-    actor_opts = build_actor_options(config, plugin_wheel=wheel)
+    deploy_opts = build_deployment_options(config, plugin_wheel=wheel)
     deployment_name = config.deployment_name()
 
     reserved, _reason = ray.get(
         ctx.coordinator.try_reserve.remote(
             ctx.operator_id,
             deployment_name,
-            float(actor_opts.get("num_gpus", 0) or 0),
-            float(actor_opts.get("num_cpus", 0) or 0),
+            total_gpu_reservation(deploy_opts),
+            total_cpu_reservation(deploy_opts),
             ctx.probe,
         )
     )
@@ -116,9 +116,9 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
             ModelDeployment.options(
                 name=deployment_name,
                 num_replicas=config.num_replicas,
-                ray_actor_options=actor_opts,
                 max_constructor_retry_count=1,
                 logging_config=ctx.serve_logging_config,
+                **deploy_opts,
             ).bind(config),
             name=deployment_name,
             route_prefix=None,

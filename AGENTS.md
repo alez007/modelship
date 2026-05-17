@@ -54,7 +54,7 @@ The Docker image's `CMD` (`scripts/start.sh`) starts the Ray head (auto-detectin
 
 ## Architecture quick map
 
-- `mship_deploy.py` — Ray init + deploy loop. Contains non-obvious GPU allocation logic in `build_actor_options` for vLLM `tensor_parallel_size > 1` (mp vs ray backend behave differently; `num_gpus` is sometimes ignored and replaced by `VLLM_RAY_PER_WORKER_GPUS`).
+- `mship_deploy.py` — Ray init + deploy loop. `build_deployment_options` (in `modelship/deploy/actor_options.py`) handles GPU allocation: multi-slot vLLM deploys (`tp*pp > 1`) always build a Ray Serve placement group (one whole-GPU bundle per slot, STRICT_PACK) that vLLM's ray executor inherits via `get_current_placement_group()`. Single-slot deploys use a scalar `num_gpus` on the outer actor. Fractional `num_gpus` (`<1`) is single-GPU only — combining it with TP/PP is rejected at config time (Ray packs fractional PG bundles onto the same physical GPU).
 - `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + `DisconnectEvent` Ray actor to propagate client disconnects across process boundaries.
 - `modelship/infer/model_deployment.py` — the single `@serve.deployment` actor class; lazily imports the right backend based on `config.loader`.
 - `modelship/infer/infer_config.py` — pydantic config schemas **and** `RawRequestProxy` / `DisconnectEvent`. `RawRequestProxy` exists because FastAPI `Request` cannot cross Ray process boundaries; any new attribute vLLM reads from `raw_request` must be added there.
@@ -85,8 +85,8 @@ Commit messages matter: use Conventional Commits prefixes so the changelog gener
 ## Gotchas
 
 - `config/models.yaml` is gitignored; `mship_deploy.py` errors out with a pointer to `config/examples/` if missing.
-- vLLM version is pinned (`vllm==0.20.1`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
-- `llama_cpp` loader is CPU-only today; `num_gpus > 0` is silently warned and forced to 0 in `mship_deploy.py:build_actor_options`.
+- vLLM version is pinned (`vllm==0.20.1`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor.
+- `llama_cpp` loader is CPU-only today; `num_gpus > 0` is silently warned and forced to 0 in `mship_deploy.py:build_deployment_options`.
 - Metrics are on by default on port **8079** (not 8000). Disable with `--no-metrics` or `MSHIP_METRICS=false`.
 - Log level `TRACE` (below `DEBUG`) is a custom level and logs full request/response payloads.
 - Docker images are multi-arch (amd64 + arm64). The CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a different tag suffix (`:latest-cpu`).

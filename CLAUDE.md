@@ -45,7 +45,7 @@ Docker's `scripts/start.sh` starts Ray (auto-detecting CPUs/GPUs unless `RAY_HEA
 
 ## Architecture map
 
-- `mship_deploy.py` — Ray init + deploy loop. `build_actor_options` has non-obvious GPU allocation for vLLM `tensor_parallel_size > 1` (mp vs ray backend differ; `num_gpus` is sometimes replaced by `VLLM_RAY_PER_WORKER_GPUS`). `llama_cpp` loader is CPU-only — `num_gpus > 0` is silently forced to 0.
+- `mship_deploy.py` — Ray init + deploy loop. `build_deployment_options` (in `modelship/deploy/actor_options.py`) handles GPU allocation: multi-slot vLLM deploys (`tp*pp > 1`) always build a Ray Serve placement group (one whole-GPU bundle per slot, STRICT_PACK) that vLLM's ray executor inherits via `get_current_placement_group()`. Single-slot deploys use a scalar `num_gpus` on the outer actor (fractional sharing supported). Fractional `num_gpus` with `tp*pp > 1` is rejected at config time — Ray packs fractional PG bundles onto the same physical GPU. `llama_cpp` loader is CPU-only — `num_gpus > 0` is silently forced to 0.
 - `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + `DisconnectEvent` Ray actor to propagate client disconnects across process boundaries and cancel in-flight inference.
 - `modelship/infer/model_deployment.py` — the single `@serve.deployment` actor class; lazily imports the right backend from `config.loader`.
 - `modelship/infer/infer_config.py` — pydantic config schemas plus `RawRequestProxy` / `DisconnectEvent`. `RawRequestProxy` exists because FastAPI `Request` can't cross Ray process boundaries. **Any new attribute vLLM reads from `raw_request` must be added there.**
@@ -65,7 +65,7 @@ Under `tests/`, `pytest-asyncio` for async. Tests **mock out Ray Serve** — the
 
 ## Sharp edges
 
-- `vllm==0.20.1` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_actor_options` defaults to the Ray V2 executor.
+- `vllm==0.20.1` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor.
 - Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables.
 - `TRACE` is a custom log level below `DEBUG`; it logs full request/response payloads.
 - Docker CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a `:latest-cpu` tag suffix.

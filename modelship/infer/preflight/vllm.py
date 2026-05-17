@@ -55,7 +55,11 @@ _MULTIMODAL_BATCHED_TOKENS_FLOOR = 8192
 class VllmPreflight:
     def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
         if not hw.gpus:
-            logger.info("preflight '%s': skipping — no GPUs visible to actor", config.name)
+            # discover_hardware()'s pynvml fallback should have found node-level
+            # GPUs even when the actor itself owns none (PG-coordinator case).
+            # An empty list here means the node is genuinely GPU-less or NVML
+            # discovery failed — nothing to recommend either way.
+            logger.info("preflight '%s': skipping — no GPUs discoverable on this node", config.name)
             return {}
 
         model_path = config._resolved_path

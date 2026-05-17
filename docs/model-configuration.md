@@ -69,7 +69,7 @@ python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 | `usecase` | string | `generate`, `embed`, `transcription`, `translation`, `tts`, or `image` |
 | `loader` | string | `vllm`, `transformers`, `diffusers`, `llama_cpp`, or `custom` |
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
-| `num_gpus` | float | Fraction of a GPU to allocate (0.0-1.0); also sets vLLM `gpu_memory_utilization` |
+| `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
 | `num_replicas` | int | Number of identical Ray Serve replicas for this deployment (default `1`) |
 | `vllm_engine_kwargs` | object | Passed directly to the vLLM engine (see below) |
@@ -134,8 +134,7 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | `dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`) |
 | `tokenizer` | string | model default | Custom tokenizer path |
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `gpu_memory_utilization` | float | `0.9` | VRAM fraction (overridden by `num_gpus` when set) |
-| `distributed_executor_backend` | string | auto | `ray` or `mp` for multi-GPU |
+| `gpu_memory_utilization` | float | `0.9` | VRAM fraction (overridden by `num_gpus` when `num_gpus < 1`) |
 | `quantization` | string | — | Quantization method (e.g. `awq`, `gptq`) |
 | `enable_auto_tool_choice` | bool | — | Enable automatic tool/function calling |
 | `tool_call_parser` | string | — | Tool call parser (e.g. `llama3_json`, `hermes`) |
@@ -171,16 +170,30 @@ models:
 
 ### Multi-GPU with Tensor Parallelism
 
+`num_gpus: 2` is shorthand for "use 2 whole GPUs" — tensor parallelism is
+auto-derived (`tensor_parallel_size: 2`). Setting both is redundant; setting
+only `tensor_parallel_size` (and/or `pipeline_parallel_size`) is fine too.
+Each slot always owns one whole GPU.
+
 ```yaml
 models:
   - name: llama-70b
     model: meta-llama/Llama-3.1-70B-Instruct
     usecase: generate
     loader: vllm
-    vllm_engine_kwargs:
-      tensor_parallel_size: 2
-      distributed_executor_backend: ray
+    num_gpus: 2
 ```
+
+Multi-slot deploys always use vLLM's ray distributed executor: each TP/PP
+slot runs as its own Ray worker actor inside a Ray Serve placement group
+(STRICT_PACK, one whole-GPU bundle per slot, all on one node for NVLink).
+
+> **Note:** Fractional `num_gpus` (`< 1`) is **single-GPU only**. Combining
+> `num_gpus < 1` with `tensor_parallel_size > 1` or `pipeline_parallel_size > 1`
+> is rejected at config time, because Ray packs fractional placement-group
+> bundles onto the same physical GPU — which breaks tensor parallelism. To
+> share GPUs use `num_gpus: 0.x` with `tp: 1`; to do TP use whole-GPU
+> integer `num_gpus`.
 
 ### Embeddings
 
