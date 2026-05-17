@@ -14,6 +14,7 @@ on ``string_delim``.
 from __future__ import annotations
 
 import json
+import re
 
 from modelship.logging import get_logger
 from modelship.openai.parsers.tool_calling.parsers.base import ToolCallParser
@@ -29,6 +30,12 @@ ESCAPE_DELIM = "<escape>"
 # emitted here must be a monotonic prefix of the final clean output.
 _STREAM_STRIP_TAIL = ("}", "]", '"', ",", " ", ":", "<", "|", "\\", ">")
 
+# Separator between the literal ``call`` keyword and the function name.
+# The spec is ``call:name`` but smaller FunctionGemma checkpoints
+# (e.g. 270m-it) sometimes emit ``call name`` — accept whitespace in
+# place of (or alongside) the colon so those outputs still parse.
+_CALL_SEP = re.compile(r"call[\s:]+")
+
 
 class Gemma4ToolCallParser(ToolCallParser):
     name = "gemma4"
@@ -41,13 +48,13 @@ class Gemma4ToolCallParser(ToolCallParser):
     string_delim: str = STRING_DELIM
 
     def extract_partial_name(self, partial_payload: str) -> str | None:
-        """Extract function name from 'call:func_name{...'."""
-        if not partial_payload.startswith("call:"):
+        """Extract function name from 'call:func_name{...' (or 'call func_name{...')."""
+        match = _CALL_SEP.match(partial_payload)
+        if match is None:
             return None
-        # Name ends at the first '{'
         if "{" not in partial_payload:
             return None
-        name_part = partial_payload[5 : partial_payload.find("{")]
+        name_part = partial_payload[match.end() : partial_payload.find("{")]
         return name_part.strip() or None
 
     def extract_partial_args(self, partial_payload: str, is_complete: bool = False) -> str | None:
@@ -88,39 +95,37 @@ class Gemma4ToolCallParser(ToolCallParser):
             return ""
 
     def split_payload(self, payload: str, is_complete: bool) -> list[tuple[str, bool]]:
-        """Multiple calls can be concatenated: `call:a{...}call:b{...}`."""
-        # Find all occurrences of "call:" at the top level (not inside braces)
+        """Multiple calls can be concatenated: `call:a{...}call:b{...}`.
+
+        Accepts either ``call:name`` or ``call name`` (whitespace) — same
+        relaxation as :meth:`extract_partial_name`.
+        """
         calls: list[tuple[str, bool]] = []
         pos = 0
         n = len(payload)
 
         while pos < n:
-            start = payload.find("call:", pos)
-            if start == -1:
+            match = _CALL_SEP.search(payload, pos)
+            if match is None:
                 break
+            start = match.start()
 
-            # Find the end of this call. We look for the NEXT "call:" or end of string.
-            # But we must be careful not to find "call:" inside a string or nested object.
-            # For simplicity, we search for the next "call:" and assume it's a new call
-            # if it's preceded by a "}".
-            next_call = payload.find("call:", start + 5)
-            while next_call != -1:
-                # Basic check: a new call should be preceded by a closing brace
-                # from the previous call.
-                preceding = payload[start:next_call].rstrip()
+            # Find the next call: a real new call is preceded by a closing
+            # brace from the previous one, so skip over any ``call`` tokens
+            # nested inside string values or object bodies.
+            next_match = _CALL_SEP.search(payload, match.end())
+            while next_match is not None:
+                preceding = payload[start : next_match.start()].rstrip()
                 if preceding.endswith("}"):
                     break
-                next_call = payload.find("call:", next_call + 5)
+                next_match = _CALL_SEP.search(payload, next_match.end())
 
-            if next_call == -1:
+            if next_match is None:
                 # This is the last call in the payload.
-                sub_payload = payload[start:]
-                calls.append((sub_payload, is_complete))
+                calls.append((payload[start:], is_complete))
                 break
-            else:
-                sub_payload = payload[start:next_call]
-                calls.append((sub_payload, True))  # Inner calls are complete
-                pos = next_call
+            calls.append((payload[start : next_match.start()], True))  # Inner calls are complete
+            pos = next_match.start()
 
         return calls or [(payload, is_complete)]
 
