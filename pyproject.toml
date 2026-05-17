@@ -31,6 +31,8 @@ dependencies = [
     "soundfile>=0.13.0",
     "requests>=2.32.5",
     "pip>=25.0",
+    "psutil>=5.9",
+    "gguf>=0.18.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +49,7 @@ gpu = [
     "diffusers>=0.31.0",
     "llama-cpp-python>=0.3.6",
     "onnxruntime-gpu>=1.20.1",
+    "nvidia-ml-py",
 ]
 cpu = [
     "torch>=2.10.0",
@@ -149,6 +152,7 @@ known-first-party = ["modelship"]
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that require a running Ray cluster and external models",
+    "llama_cpp: integration tests that exercise the llama_cpp loader",
 ]
 
 [tool.pyright]
