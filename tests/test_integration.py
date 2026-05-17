@@ -373,6 +373,7 @@ _WEATHER_TOOL = {
 
 
 @pytest.mark.integration
+@pytest.mark.vllm
 class TestChatCapable:
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
@@ -437,8 +438,103 @@ class TestChatCapable:
         assert "Paris" in parsed_args.get("city", "")
         assert collected["finish_reason"] == "tool_calls"
 
+    def test_response_format_json_object_constrains_unprompted_output(self, client):
+        """Prompt asks a natural-language question with no JSON hint. A
+        passing test means the grammar constraint — not the prompt — produced
+        a JSON object instead of prose.
+        """
+        completion = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format={"type": "json_object"},
+            max_tokens=64,
+        )
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert isinstance(parsed, dict)
+
+    def test_response_format_json_schema_constrains_unprompted_output(self, client):
+        """Same intent for json_schema: prompt is natural-language, success
+        proves the schema constraint is doing the work.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "country": {"type": "string"},
+            },
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        }
+        completion = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "location", "schema": schema, "strict": True},
+            },
+            max_tokens=64,
+        )
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"city", "country"}
+        assert isinstance(parsed["city"], str) and parsed["city"]
+        assert isinstance(parsed["country"], str) and parsed["country"]
+
+    def test_response_format_json_schema_streaming_constrains_unprompted_output(self, client):
+        """Same as above but over the streaming path."""
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        stream = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "schema": schema, "strict": True},
+            },
+            max_tokens=64,
+            stream=True,
+        )
+        chunks = []
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                chunks.append(chunk.choices[0].delta.content)
+        content = "".join(chunks)
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"answer"}
+        assert isinstance(parsed["answer"], str) and parsed["answer"]
+
+    def test_response_format_dropped_when_tools_present(self, client):
+        """Server-side validator drops response_format when tools are set;
+        the request should still complete as a tool call.
+        """
+        completion = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="required",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "unused",
+                    "schema": {"type": "object", "properties": {"x": {"type": "string"}}},
+                    "strict": True,
+                },
+            },
+        )
+        assert completion.choices[0].message.tool_calls
+        assert completion.choices[0].message.tool_calls[0].function.name == "get_weather"
+
 
 @pytest.mark.integration
+@pytest.mark.vllm
 class TestChatReasoning:
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
