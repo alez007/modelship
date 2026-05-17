@@ -16,6 +16,8 @@ from modelship.infer.preflight.llama_cpp import (
     LlamaCppPreflight,
     _ggml_type_bytes,
     _GGUFMeta,
+    _read_int,
+    _read_string,
     _resolve_kv_dtype_bytes,
 )
 
@@ -165,6 +167,61 @@ class TestKvDtypeResolution:
         assert _ggml_type_bytes(0) == 4
         assert _ggml_type_bytes(1) == 2
         assert _ggml_type_bytes(999) is None
+
+
+class _FakeField:
+    """Imitates gguf.gguf_reader.ReaderField just enough for _read_field_value."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def contents(self) -> object:
+        return self._value
+
+
+class _FakeReader:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields = {k: _FakeField(v) for k, v in fields.items()}
+
+    def get_field(self, key: str) -> _FakeField | None:
+        return self._fields.get(key)
+
+
+class TestFieldExtraction:
+    """gguf hands back several shapes for `ReaderField.contents()`; these
+    tests pin the behavior so future gguf bumps don't silently regress."""
+
+    def test_python_int_scalar(self):
+        reader = _FakeReader({"llama.block_count": 32})
+        assert _read_int(reader, "llama.block_count") == 32
+
+    def test_numpy_scalar(self):
+        import numpy as np
+
+        reader = _FakeReader({"llama.block_count": np.uint32(32)})
+        assert _read_int(reader, "llama.block_count") == 32
+
+    def test_numpy_array_single_element(self):
+        import numpy as np
+
+        # Some gguf versions return numpy arrays even for scalar metadata.
+        reader = _FakeReader({"llama.block_count": np.array([32], dtype=np.uint32)})
+        assert _read_int(reader, "llama.block_count") == 32
+
+    def test_python_list(self):
+        reader = _FakeReader({"llama.block_count": [32]})
+        assert _read_int(reader, "llama.block_count") == 32
+
+    def test_string_as_bytes_array(self):
+        import numpy as np
+
+        reader = _FakeReader({"general.architecture": np.array([b"llama"], dtype=object)})
+        assert _read_string(reader, "general.architecture") == "llama"
+
+    def test_missing_key_returns_none(self):
+        reader = _FakeReader({})
+        assert _read_int(reader, "llama.block_count") is None
+        assert _read_string(reader, "general.architecture") is None
 
 
 class TestRegistration:

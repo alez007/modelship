@@ -216,29 +216,44 @@ def _read_field_value(reader: Any, key: str) -> Any:
     return None
 
 
-def _read_int(reader: Any, key: str) -> int | None:
-    val = _read_field_value(reader, key)
+def _unwrap_scalar(val: Any) -> Any:
+    """Extract a scalar from whatever shape gguf hands back.
+
+    `ReaderField.contents()` returns numpy arrays for some field types and
+    Python sequences for others; numpy `>=0`-dim scalars are also possible
+    on older gguf releases. Pull out the first element when the value is
+    array-like, leave true scalars alone."""
     if val is None:
         return None
+    # numpy array (1-d or higher): take the first element.
+    if hasattr(val, "ndim") and getattr(val, "ndim", 0) > 0:
+        try:
+            return val.item(0) if val.size else None
+        except (AttributeError, IndexError, ValueError):
+            return None
+    # Python sequence.
     if isinstance(val, list | tuple):
-        val = val[0] if val else None
+        return val[0] if val else None
+    return val
+
+
+def _read_int(reader: Any, key: str) -> int | None:
+    val = _unwrap_scalar(_read_field_value(reader, key))
+    if val is None:
+        return None
     try:
-        return int(val) if val is not None else None
+        return int(val)
     except (TypeError, ValueError):
         return None
 
 
 def _read_string(reader: Any, key: str) -> str | None:
-    val = _read_field_value(reader, key)
+    val = _unwrap_scalar(_read_field_value(reader, key))
     if val is None:
         return None
     if isinstance(val, bytes):
         return val.decode("utf-8", errors="replace")
-    if isinstance(val, list | tuple):
-        val = val[0] if val else None
-        if isinstance(val, bytes):
-            return val.decode("utf-8", errors="replace")
-    return str(val) if val is not None else None
+    return str(val)
 
 
 def _kv_bytes_per_token(meta: _GGUFMeta, config: ModelshipModelConfig) -> int | None:
