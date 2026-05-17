@@ -13,11 +13,7 @@ from http import HTTPStatus
 from typing import Any, ClassVar, Literal
 
 from fastapi import UploadFile
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from modelship.logging import get_logger
-
-_logger = get_logger("openai.protocol")
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -188,17 +184,6 @@ class ChatCompletionRequest(OpenAIBaseModel):
     reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     parallel_tool_calls: bool | None = True
     user: str | None = None
-
-    @model_validator(mode="after")
-    def _tools_supersede_response_format(self) -> "ChatCompletionRequest":
-        # OpenAI semantics: when tools are present, response_format is ignored.
-        # Drop it here so every loader sees a consistent request shape.
-        if self.tools and self.response_format:
-            _logger.warning(
-                "chat request has both tools and response_format; ignoring response_format per OpenAI semantics",
-            )
-            self.response_format = None
-        return self
 
 
 # ---------------------------------------------------------------------------

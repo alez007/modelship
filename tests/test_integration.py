@@ -511,26 +511,33 @@ class TestChatCapable:
         assert set(parsed.keys()) == {"answer"}
         assert isinstance(parsed["answer"], str) and parsed["answer"]
 
-    def test_response_format_dropped_when_tools_present(self, client):
-        """Server-side validator drops response_format when tools are set;
-        the request should still complete as a tool call.
+    def test_response_format_coexists_with_tool_choice_none(self, client):
+        """OpenAI allows response_format alongside tool definitions; with
+        tool_choice="none" the model must produce schema-constrained text
+        instead of calling the tool. vLLM honors both natively.
         """
+        schema = {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        }
         completion = client.chat.completions.create(
             model="chat-capable",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
             tools=[_WEATHER_TOOL],
-            tool_choice="required",
+            tool_choice="none",
             response_format={
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "unused",
-                    "schema": {"type": "object", "properties": {"x": {"type": "string"}}},
-                    "strict": True,
-                },
+                "json_schema": {"name": "location", "schema": schema, "strict": True},
             },
+            max_tokens=64,
         )
-        assert completion.choices[0].message.tool_calls
-        assert completion.choices[0].message.tool_calls[0].function.name == "get_weather"
+        assert not completion.choices[0].message.tool_calls
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"city", "country"}
 
 
 @pytest.mark.integration
