@@ -13,7 +13,7 @@ from http import HTTPStatus
 from typing import Any, ClassVar, Literal
 
 from fastapi import UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -184,6 +184,27 @@ class ChatCompletionRequest(OpenAIBaseModel):
     reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     parallel_tool_calls: bool | None = True
     user: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_tools_response_format_compat(self) -> "ChatCompletionRequest":
+        # response_format=json_object/json_schema is enforced via a sampling-time
+        # grammar that excludes any token outside the schema — including the
+        # markers a model would use to emit a tool call (<tool_call>...,
+        # <|python_tag|>..., etc.). The two cannot meaningfully coexist on any
+        # loader we support: vLLM passes both through but the grammar dominates;
+        # llama-cpp-python silently drops json_schema; transformers has no
+        # native machinery to compose them. Reject upfront so callers don't
+        # discover the conflict by watching tool calls never fire in prod.
+        if not self.tools or not self.response_format:
+            return self
+        fmt_type = self.response_format.get("type")
+        if fmt_type in (None, "text"):
+            return self
+        if self.tool_choice == "none":
+            return self
+        raise ValueError(
+            f"response_format with type={fmt_type!r} cannot be combined with tools unless tool_choice='none'."
+        )
 
 
 # ---------------------------------------------------------------------------

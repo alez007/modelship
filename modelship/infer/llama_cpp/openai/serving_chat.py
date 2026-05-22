@@ -10,6 +10,7 @@ from llama_cpp import Llama
 from modelship.infer.base_serving import OpenAIServing
 from modelship.infer.infer_config import RawRequestProxy
 from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
+from modelship.infer.llama_cpp.structured import build_llama_grammar
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
 from modelship.logging import get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
@@ -100,6 +101,22 @@ class OpenAIServingChat(OpenAIServing):
                 self.model_name,
             )
             tools = None
+
+        # Reasoning-enabled deployments emit `<think>...</think>` before content.
+        # A JSON grammar from response_format would exclude the `<` token and
+        # break reasoning emission. Reject upfront so the user picks a
+        # non-reasoning deployment for schema-constrained traffic.
+        if self.reasoning_parser and request.response_format:
+            fmt_type = request.response_format.get("type")
+            if fmt_type not in (None, "text"):
+                msg = (
+                    f"response_format with type={fmt_type!r} cannot be combined with a "
+                    f"reasoning-enabled deployment ({self.model_name!r}). The schema grammar "
+                    "prevents the reasoning parser's required tokens from being emitted. "
+                    "Use a non-reasoning deployment, or drop response_format."
+                )
+                logger.warning("chat request %s rejected: %s", request_id, msg)
+                return create_error_response(msg)
 
         tool_parser_name = self.tool_call_parser if tools else None
         # Renderer presence decides the path (see __init__ comment): when
@@ -285,6 +302,11 @@ class OpenAIServingChat(OpenAIServing):
         if "max_tokens" not in params and "max_completion_tokens" in params:
             params["max_tokens"] = params["max_completion_tokens"]
 
+        # Convert OpenAI-shaped response_format → LlamaGrammar. llama-cpp-python's
+        # own handler only recognizes {"type": "json_object", "schema": ...} and
+        # silently drops {"type": "json_schema", ...}, so we own the conversion.
+        grammar = build_llama_grammar(params.pop("response_format", None))
+
         kwargs: dict = {}
         dropped: list[str] = []
         for k, v in params.items():
@@ -299,6 +321,8 @@ class OpenAIServingChat(OpenAIServing):
                 "llama_cpp: dropping request params not supported by create_chat_completion: %s",
                 dropped,
             )
+        if grammar is not None:
+            kwargs["grammar"] = grammar
         return kwargs
 
     def _build_completion_kwargs(self, request: ChatCompletionRequest, prompt: str) -> dict:
@@ -312,4 +336,9 @@ class OpenAIServingChat(OpenAIServing):
         for k in ("logprobs", "top_logprobs"):
             params.pop(k, None)
 
-        return {k: v for k, v in params.items() if k in self._completion_accepted_params}
+        grammar = build_llama_grammar(params.pop("response_format", None))
+
+        kwargs = {k: v for k, v in params.items() if k in self._completion_accepted_params}
+        if grammar is not None:
+            kwargs["grammar"] = grammar
+        return kwargs
