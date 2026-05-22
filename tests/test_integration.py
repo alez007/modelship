@@ -742,6 +742,130 @@ class TestChatLlamaCpp:
         assert "Paris" in parsed_args["city"]
         assert collected["finish_reason"] == "tool_calls"
 
+    def test_response_format_json_object_constrains_unprompted_output(self, client):
+        """Prompt is natural-language; the grammar constraint produces JSON."""
+        completion = client.chat.completions.create(
+            model="chat-llama-mship",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format={"type": "json_object"},
+            max_tokens=64,
+        )
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert isinstance(parsed, dict)
+
+    def test_response_format_json_schema_constrains_unprompted_output(self, client):
+        """A natural-language question + json_schema → schema-conformant output."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "country": {"type": "string"},
+            },
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        }
+        completion = client.chat.completions.create(
+            model="chat-llama-mship",
+            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "location", "schema": schema, "strict": True},
+            },
+            max_tokens=64,
+        )
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"city", "country"}
+        assert isinstance(parsed["city"], str) and parsed["city"]
+        assert isinstance(parsed["country"], str) and parsed["country"]
+
+    def test_response_format_json_schema_streaming_constrains_unprompted_output(self, client):
+        """Same intent on the streaming path."""
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        stream = client.chat.completions.create(
+            model="chat-llama-mship",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "schema": schema, "strict": True},
+            },
+            max_tokens=64,
+            stream=True,
+        )
+        chunks = []
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                chunks.append(chunk.choices[0].delta.content)
+        content = "".join(chunks)
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"answer"}
+        assert isinstance(parsed["answer"], str) and parsed["answer"]
+
+    def test_response_format_coexists_with_tool_choice_none(self, client):
+        """tool_choice='none' is the safe escape valve: tools listed but inert,
+        schema enforced on content output.
+        """
+        schema = {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        }
+        completion = client.chat.completions.create(
+            model="chat-llama-mship",
+            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="none",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "location", "schema": schema, "strict": True},
+            },
+            max_tokens=64,
+        )
+        assert not completion.choices[0].message.tool_calls
+        content = completion.choices[0].message.content
+        assert content
+        parsed = json.loads(content)
+        assert set(parsed.keys()) == {"city", "country"}
+
+    def test_response_format_with_active_tools_rejected_by_gateway(self):
+        """Protocol-layer validator rejects tools + response_format when
+        tool_choice is anything other than 'none'. The schema grammar would
+        block tool-call markers from being emitted, so we surface the conflict
+        upfront rather than silently breaking tool calling.
+        """
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-llama-mship",
+                "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+                "tools": [_WEATHER_TOOL],
+                "tool_choice": "auto",
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "unused",
+                        "schema": {"type": "object", "properties": {"x": {"type": "string"}}},
+                        "strict": True,
+                    },
+                },
+            },
+            timeout=30,
+        )
+        assert response.status_code in (400, 422), (
+            f"expected client-error status, got {response.status_code}: {response.text}"
+        )
+        assert "tool_choice='none'" in response.text
+
 
 @pytest.mark.integration
 @pytest.mark.llama_cpp
@@ -912,6 +1036,35 @@ class TestChatLlamaCppReasoning:
             assert "</tool_call>" in reasoning, (
                 f"reasoning has an unmatched <tool_call> marker (open without close): {reasoning!r}"
             )
+
+    def test_response_format_with_reasoning_deployment_rejected(self):
+        """A JSON grammar would exclude the `<` token, breaking the reasoning
+        parser's `<think>...` emission. The loader rejects the combination at
+        request time rather than producing malformed output.
+        """
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/chat/completions",
+            json={
+                "model": "chat-llama-reasoning",
+                "messages": [{"role": "user", "content": "What is 2+2?"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                        "strict": True,
+                    },
+                },
+                "max_tokens": 256,
+            },
+            timeout=60,
+        )
+        assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
+        assert "reasoning" in response.text.lower()
 
 
 @pytest.mark.integration
