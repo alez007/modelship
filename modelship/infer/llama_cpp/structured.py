@@ -12,7 +12,6 @@ the ``grammar`` kwarg, which both ``create_chat_completion`` and
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from typing import Any
 
 from llama_cpp import LlamaGrammar
@@ -23,13 +22,12 @@ logger = get_logger("infer.llama_cpp.structured")
 
 # Permissive JSON-object grammar: any valid JSON object. Used when the
 # caller requested ``{"type": "json_object"}`` without a schema.
+# Built fresh per request rather than cached: ``LlamaGrammar`` wraps a
+# stateful C-side parser pointer, so sharing one instance across
+# concurrent requests (or across Llama instances in the same process)
+# would corrupt sampling state. Compilation cost for this trivial
+# schema is negligible.
 _JSON_OBJECT_SCHEMA = {"type": "object"}
-
-
-@lru_cache(maxsize=1)
-def _json_object_grammar() -> LlamaGrammar:
-    """Compile the permissive json_object grammar once per process."""
-    return LlamaGrammar.from_json_schema(json.dumps(_JSON_OBJECT_SCHEMA), verbose=False)
 
 
 def build_llama_grammar(response_format: dict[str, Any] | None) -> LlamaGrammar | None:
@@ -46,7 +44,7 @@ def build_llama_grammar(response_format: dict[str, Any] | None) -> LlamaGrammar 
         return None
 
     if fmt_type == "json_object":
-        return _json_object_grammar()
+        return LlamaGrammar.from_json_schema(json.dumps(_JSON_OBJECT_SCHEMA), verbose=False)
 
     if fmt_type == "json_schema":
         spec = response_format.get("json_schema") or {}

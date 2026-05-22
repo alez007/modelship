@@ -22,12 +22,13 @@ class TestBuildLlamaGrammar:
         g = build_llama_grammar({"type": "json_object"})
         assert isinstance(g, LlamaGrammar)
 
-    def test_json_object_grammar_is_cached(self):
-        # The permissive json_object grammar takes the same input on every
-        # call; it must be compiled once per process, not per request.
+    def test_json_object_returns_fresh_instance(self):
+        # LlamaGrammar wraps a stateful C-side parser pointer; sharing an
+        # instance across concurrent requests would corrupt sampling state.
+        # Each call must compile a fresh grammar.
         g1 = build_llama_grammar({"type": "json_object"})
         g2 = build_llama_grammar({"type": "json_object"})
-        assert g1 is g2
+        assert g1 is not g2
 
     def test_json_schema_compiles_schema(self):
         schema = {
