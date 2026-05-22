@@ -141,3 +141,23 @@ class TestKwargBuilders:
         req = self._request()
         kwargs = chat._build_completion_kwargs(req, prompt="hi")
         assert "grammar" not in kwargs
+
+    def test_max_completion_tokens_mapped_and_dropped(self):
+        # ``max_completion_tokens`` is the modern OpenAI field. llama-cpp-python
+        # only accepts ``max_tokens``. We map the value over and must drop the
+        # original key so it doesn't end up in the "unsupported params" warning.
+        chat = self._serving()
+        from modelship.openai.protocol import ChatCompletionRequest
+
+        req = ChatCompletionRequest(
+            model="x",
+            messages=[{"role": "user", "content": "hi"}],
+            max_completion_tokens=42,
+        )
+        kwargs = chat._build_kwargs(req, messages=[{"role": "user", "content": "hi"}])
+        assert kwargs.get("max_tokens") == 42
+        assert "max_completion_tokens" not in kwargs
+
+        completion_kwargs = chat._build_completion_kwargs(req, prompt="hi")
+        assert completion_kwargs.get("max_tokens") == 42
+        assert "max_completion_tokens" not in completion_kwargs

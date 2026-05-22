@@ -301,6 +301,7 @@ class OpenAIServingChat(OpenAIServing):
         params["messages"] = messages
         if "max_tokens" not in params and "max_completion_tokens" in params:
             params["max_tokens"] = params["max_completion_tokens"]
+        params.pop("max_completion_tokens", None)
 
         # Convert OpenAI-shaped response_format → LlamaGrammar. llama-cpp-python's
         # own handler only recognizes {"type": "json_object", "schema": ...} and
@@ -330,6 +331,7 @@ class OpenAIServingChat(OpenAIServing):
         params["prompt"] = prompt
         if "max_tokens" not in params and "max_completion_tokens" in params:
             params["max_tokens"] = params["max_completion_tokens"]
+        params.pop("max_completion_tokens", None)
         # These are consumed by our renderer/parser, not by `create_completion`.
         for k in ("messages", "tools", "tool_choice", "stream", "stream_options"):
             params.pop(k, None)
