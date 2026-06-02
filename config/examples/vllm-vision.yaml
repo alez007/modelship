@@ -1,0 +1,24 @@
+# vLLM vision (VLM) example — requires an NVIDIA GPU with enough VRAM for the
+# vision encoder plus KV cache. Tested with Qwen2.5-VL-7B-Instruct on a single
+# 24GB GPU. Send chat messages with `image_url` content parts the same way you
+# would against the official OpenAI API.
+
+models:
+  - name: "qwen-vl"
+    model: "Qwen/Qwen2.5-VL-7B-Instruct"
+    usecase: "generate"
+    loader: "vllm"
+    num_gpus: 1
+    vllm_engine_kwargs:
+      # VLMs eat hundreds to thousands of tokens per image; bump the context
+      # so a single user turn with one image still has room for a response.
+      max_model_len: 16384
+      # Cap images per request: protects against accidentally OOM-ing the GPU
+      # when a client sends a 50-image batch. Adjust to your VRAM budget.
+      limit_mm_per_prompt:
+        image: 4
+      # Qwen2.5-VL accepts min/max pixel knobs that trade off latency vs detail.
+      # Defaults are high quality; lower max_pixels to speed up inference.
+      mm_processor_kwargs:
+        min_pixels: 50176   # 224 * 224
+        max_pixels: 1003520 # 1280 * 784
