@@ -103,6 +103,21 @@ def test_transcription_verbose_has_optional_words_segments_usage():
     assert v.usage is not None and v.usage.seconds == 10
 
 
+def test_transcription_verbose_has_task_field_pinned_to_transcribe():
+    # OpenAI emits `"task": "transcribe"` on this response shape (see spec's
+    # own example payload). Wire-fidelity for clients that don't tolerate
+    # unknown field absence.
+    v = TranscriptionResponseVerbose(language="en", duration=10.0, text="hi")
+    assert v.task == "transcribe"
+    assert "task" in v.model_dump()
+
+
+def test_translation_verbose_has_task_field_pinned_to_translate():
+    v = TranslationResponseVerbose(language="english", duration=10.0, text="hi")
+    assert v.task == "translate"
+    assert "task" in v.model_dump()
+
+
 def test_translation_verbose_duration_is_float():
     v = TranslationResponseVerbose(language="english", duration=4.2, text="hi")
     assert v.duration == 4.2

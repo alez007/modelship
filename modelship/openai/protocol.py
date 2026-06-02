@@ -358,6 +358,12 @@ class TranscriptionSegment(OpenAIBaseModel):
 
 
 class TranscriptionResponseVerbose(OpenAIBaseModel):
+    # `task` is missing from the openai-openapi schema definition but is
+    # explicitly emitted by the OpenAI API (see the spec's own example payload)
+    # and expected by strict client deserializers that don't tolerate unknown
+    # field absence. Pinned to "transcribe" — Whisper's only valid value for
+    # this route.
+    task: Literal["transcribe"] = "transcribe"
     language: str
     duration: float = Field(..., description="The duration of the input audio in seconds.")
     text: str
@@ -390,6 +396,10 @@ class TranslationResponse(OpenAIBaseModel):
 
 
 class TranslationResponseVerbose(OpenAIBaseModel):
+    # Same `task` story as TranscriptionResponseVerbose — emitted by the OpenAI
+    # API but missing from the openapi.yaml schema definition. Pinned to
+    # "translate".
+    task: Literal["translate"] = "translate"
     language: str = Field(..., description="The language of the output translation (always `english`).")
     duration: float = Field(..., description="The duration of the input audio in seconds.")
     text: str
