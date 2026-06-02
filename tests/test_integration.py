@@ -46,6 +46,19 @@ MODEL_CONFIGS: dict[str, dict] = {
             "reasoning_parser": "deepseek_r1",
         },
     },
+    "chat-vlm": {
+        "name": "chat-vlm",
+        "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "usecase": "generate",
+        "loader": "vllm",
+        "num_gpus": 1,
+        "vllm_engine_kwargs": {
+            "max_model_len": 8192,
+            "enforce_eager": True,
+            "limit_mm_per_prompt": {"image": 2},
+            "mm_processor_kwargs": {"min_pixels": 50176, "max_pixels": 200704},
+        },
+    },
     "chat-limited": {
         "name": "chat-limited",
         "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
@@ -610,6 +623,69 @@ class TestChatReasoning:
         # Reasoning markers must not leak into either stream.
         assert "<think>" not in "".join(reasoning_parts)
         assert "<think>" not in "".join(content_parts)
+
+
+# 1x1 red pixel PNG
+_RED_PIXEL_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.integration
+@pytest.mark.vllm
+class TestChatVlm:
+    """End-to-end vision: a real Qwen2.5-VL-3B deployment receiving an
+    ``image_url`` content part through the modelship gateway."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-vlm")
+
+    def test_chat_with_image_url_returns_response(self, client):
+        completion = client.chat.completions.create(
+            model="chat-vlm",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What color is this image? Answer in one word."},
+                        {"type": "image_url", "image_url": {"url": _RED_PIXEL_DATA_URI}},
+                    ],
+                }
+            ],
+            max_tokens=16,
+        )
+        assert completion.choices[0].message.content
+        assert completion.choices[0].finish_reason in {"stop", "length"}
+        assert completion.model == "chat-vlm"
+
+    def test_text_only_request_still_works_on_vlm(self, client):
+        completion = client.chat.completions.create(
+            model="chat-vlm",
+            messages=[{"role": "user", "content": "Say hi."}],
+            max_tokens=8,
+        )
+        assert completion.choices[0].message.content
+
+    def test_image_url_streaming(self, client):
+        """Streaming + image input through the gateway end-to-end."""
+        stream = client.chat.completions.create(
+            model="chat-vlm",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe the image briefly."},
+                        {"type": "image_url", "image_url": {"url": _RED_PIXEL_DATA_URI}},
+                    ],
+                }
+            ],
+            max_tokens=16,
+            stream=True,
+        )
+        chunks = [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
+        assert len(chunks) > 0
 
 
 @pytest.mark.integration

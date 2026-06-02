@@ -1,7 +1,7 @@
 import io
 from collections.abc import AsyncGenerator
 from http import HTTPStatus
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from fastapi import UploadFile
 from starlette.requests import Request
@@ -52,8 +52,10 @@ from vllm.v1.engine.async_llm import AsyncLLM
 from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
 from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
+from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.logging import get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
+from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -129,6 +131,14 @@ class VllmInfer(BaseInfer):
         world_size = self.vllm_engine_kwargs.tensor_parallel_size * self.vllm_engine_kwargs.pipeline_parallel_size
         distributed_executor_backend = "ray" if world_size > 1 else None
 
+        # Multimodal knobs: only forward when the user set them so we inherit
+        # vLLM's own defaults (empty dict / None) otherwise.
+        mm_kwargs: dict[str, Any] = {}
+        if self.vllm_engine_kwargs.limit_mm_per_prompt is not None:
+            mm_kwargs["limit_mm_per_prompt"] = self.vllm_engine_kwargs.limit_mm_per_prompt
+        if self.vllm_engine_kwargs.mm_processor_kwargs is not None:
+            mm_kwargs["mm_processor_kwargs"] = self.vllm_engine_kwargs.mm_processor_kwargs
+
         engine_args = AsyncEngineArgs(
             model=self.vllm_engine_kwargs.model,
             tensor_parallel_size=self.vllm_engine_kwargs.tensor_parallel_size,
@@ -149,6 +159,7 @@ class VllmInfer(BaseInfer):
             kv_cache_dtype=self.vllm_engine_kwargs.kv_cache_dtype or "auto",  # type: ignore[arg-type]
             enforce_eager=self.vllm_engine_kwargs.enforce_eager or False,
             max_num_batched_tokens=self.vllm_engine_kwargs.max_num_batched_tokens,
+            **mm_kwargs,
         )
 
         usage_context = UsageContext.OPENAI_API_SERVER
@@ -186,6 +197,9 @@ class VllmInfer(BaseInfer):
         self._set_max_context_length(self.vllm_config.model_config.max_model_len)
         self.supported_tasks = await self.engine.get_supported_tasks()
         logger.info("Supported_tasks: %s", self.supported_tasks)
+
+        self._caps = VllmCapabilities.detect(self.vllm_config.model_config)
+        logger.info("vllm capabilities for '%s': %s", self.model_config.name, self._caps)
 
         self.serving_chat = await self.init_serving_chat()
         self.serving_embedding = await self.init_serving_embeding()
@@ -338,6 +352,14 @@ class VllmInfer(BaseInfer):
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
         if self.serving_chat is None:
             return await super().create_chat_completion(request, raw_request)
+        try:
+            request.messages = normalize_chat_messages(
+                request.messages,
+                supports_image=self._caps.supports_image,
+                supports_audio=self._caps.supports_audio,
+            )
+        except UnsupportedContentError as exc:
+            return create_error_response(exc)
         vllm_request = VllmChatCompletionRequest(**request.model_dump())
         try:
             result = await self.serving_chat.create_chat_completion(vllm_request, cast("Request", raw_request))

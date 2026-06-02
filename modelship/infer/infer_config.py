@@ -65,6 +65,12 @@ class VllmEngineConfig(BaseModel):
     chat_template_content_format: ChatTemplateContentFormatOption = "auto"
     enforce_eager: bool | None = None
     max_num_batched_tokens: int | None = None
+    # Cap on multimodal items per prompt (e.g. {"image": 4}). vLLM allows a
+    # richer per-modality budget shape (dict of caps) so we mirror that.
+    limit_mm_per_prompt: dict[str, int | dict[str, int]] | None = None
+    # Per-model multimodal processor knobs (e.g. min_pixels / max_pixels for
+    # Qwen2.5-VL). Forwarded verbatim to the HF processor.
+    mm_processor_kwargs: dict[str, Any] | None = None
 
 
 class TransformersConfig(BaseModel):
