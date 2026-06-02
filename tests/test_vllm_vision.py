@@ -108,7 +108,7 @@ async def test_image_part_rejected_on_text_only_model_with_400():
     result = await infer.create_chat_completion(request, raw_request=MagicMock())
 
     assert isinstance(result, ErrorResponse)
-    assert result.error.code == 400
+    assert result._http_status == 400
     assert "image" in result.error.message.lower()
     # The reject must happen before we hand off to vLLM.
     infer.serving_chat.create_chat_completion.assert_not_awaited()

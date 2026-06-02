@@ -40,8 +40,8 @@ class OpenAIServingImage:
             request.prompt,
             request.n,
             request.size,
-            request.num_inference_steps,
-            request.guidance_scale,
+            self.config.num_inference_steps,
+            self.config.guidance_scale,
         )
 
         try:
@@ -49,8 +49,8 @@ class OpenAIServingImage:
         except ValueError as e:
             return create_error_response(str(e))
 
-        steps = request.num_inference_steps or self.config.num_inference_steps
-        guidance = request.guidance_scale or self.config.guidance_scale
+        steps = self.config.num_inference_steps
+        guidance = self.config.guidance_scale
 
         loop = asyncio.get_event_loop()
         images = await loop.run_in_executor(

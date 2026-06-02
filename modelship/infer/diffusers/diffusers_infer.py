@@ -84,8 +84,6 @@ class DiffusersInfer(BaseInfer):
             prompt="warmup",
             n=1,
             size="64x64",
-            num_inference_steps=1,
-            guidance_scale=0.0,
         )
         await self.create_image_generation(request, RawRequestProxy(None, {}))
         logger.info("Warmup image generation done for %s", self.model_config.name)

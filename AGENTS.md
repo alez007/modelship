@@ -34,6 +34,17 @@ Agents: when running tests on your own initiative (sanity-checking a change, ver
 
 Pre-commit only runs ruff; it does **not** run pyright or tests, so don't rely on the hook to catch type errors.
 
+## OpenAI protocol fidelity
+
+`modelship/openai/protocol.py` is the request/response surface clients see. When adding or changing models there:
+
+- **Follow the official OpenAI API specification strictly.** Field names, types, defaults, optionality, and shape of nested objects must match what `platform.openai.com/docs` documents for the corresponding route.
+- Do not invent fields to expose loader-specific knobs (Diffusers `strength`, vLLM `stop_reason`, etc.). Carry loader-specific defaults via the per-model `*_config` in `infer_config.py` instead.
+- Missing optional OpenAI fields are fine when a feature is genuinely unsupported. Adding fields that aren't in OpenAI's spec is not — it locks clients into a modelship-specific dialect and breaks the drop-in-replacement guarantee.
+- When OpenAI's spec evolves (new fields, new response_format values, new routes), update the protocol shapes before wiring the backend.
+
+When in doubt, check OpenAI's reference for the exact route. Existing deviations are documented and tracked separately; do not add new ones.
+
 ## Lint / format / typecheck rules
 
 - Line length **120** (not 88). Ruff handles formatting; `E501` is disabled because the formatter owns line length.
