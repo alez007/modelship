@@ -27,8 +27,9 @@ if TYPE_CHECKING:
     from modelship.infer.preflight import HardwareProfile
 
 _NOT_SUPPORTED = ErrorResponse(
-    error=ErrorInfo(message="plugin does not support this action", type="invalid_request_error", code=404)
+    error=ErrorInfo(message="plugin does not support this action", type="invalid_request_error")
 )
+_NOT_SUPPORTED._http_status = 404
 
 
 class BasePlugin(ABC):
@@ -112,8 +113,6 @@ class BasePlugin(ABC):
         prompt: str,
         n: int = 1,
         size: str | None = None,
-        num_inference_steps: int | None = None,
-        guidance_scale: float | None = None,
         request_id: str | None = None,
     ) -> list[bytes] | ErrorResponse:
         """Returns a list of PNG-encoded image bytes."""

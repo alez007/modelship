@@ -13,7 +13,7 @@ from http import HTTPStatus
 from typing import Any, ClassVar, Literal
 
 from fastapi import UploadFile
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,43 +44,53 @@ class ErrorInfo(OpenAIBaseModel):
     message: str
     type: str
     param: str | None = None
-    code: int
+    # OpenAI error code identifier (e.g. "context_length_exceeded"). None when we
+    # haven't mapped the underlying failure to a specific OpenAI-known code.
+    code: str | None = None
 
 
 class ErrorResponse(OpenAIBaseModel):
     error: ErrorInfo
 
+    # HTTP status code carried for the gateway to set on the JSONResponse. Lives
+    # outside `error` because OpenAI's spec has no HTTP status field on the
+    # error object — the spec exposes status purely via the HTTP layer.
+    _http_status: int = PrivateAttr(default=500)
+
 
 def create_error_response(
     message: str | Exception,
-    err_type: str = "BadRequestError",
+    err_type: str = "invalid_request_error",
     status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
     param: str | None = None,
+    code: str | None = None,
 ) -> ErrorResponse:
     if isinstance(message, Exception):
         exc = message
         if isinstance(exc, ValueError | TypeError | OverflowError):
-            err_type = "BadRequestError"
+            err_type = "invalid_request_error"
             status_code = HTTPStatus.BAD_REQUEST
             param = None
         elif isinstance(exc, NotImplementedError):
-            err_type = "NotImplementedError"
+            err_type = "api_error"
             status_code = HTTPStatus.NOT_IMPLEMENTED
             param = None
         else:
-            err_type = "InternalServerError"
+            err_type = "api_error"
             status_code = HTTPStatus.INTERNAL_SERVER_ERROR
             param = None
         message = str(exc)
 
-    return ErrorResponse(
+    resp = ErrorResponse(
         error=ErrorInfo(
             message=message,
             type=err_type,
-            code=status_code.value,
+            code=code,
             param=param,
         )
     )
+    resp._http_status = status_code.value
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +283,7 @@ class ChatCompletionStreamResponse(OpenAIBaseModel):
 
 class EmbeddingCompletionRequest(OpenAIBaseModel):
     input: list[int] | list[list[int]] | str | list[str]
-    model: str | None = None
+    model: str = Field(..., description="ID of the model to use.")
     encoding_format: Literal["float", "base64"] = "float"
     dimensions: int | None = None
     user: str | None = None
@@ -311,13 +321,15 @@ class TranscriptionUsageAudio(OpenAIBaseModel):
 
 class TranscriptionRequest(OpenAIBaseModel):
     file: UploadFile
-    model: str | None = None
+    model: str = Field(..., description="ID of the model to use.")
     language: str | None = None
     prompt: str = Field(default="")
     response_format: AudioResponseFormat = Field(default="json")
     timestamp_granularities: list[Literal["word", "segment"]] = Field(alias="timestamp_granularities[]", default=[])
     stream: bool | None = False
     temperature: float = Field(default=0.0)
+    # modelship extension (not in OpenAI spec) — used for deterministic sampling
+    # in evals/regression tests. Documented in docs/extensions.md.
     seed: int | None = None
 
 
@@ -326,10 +338,32 @@ class TranscriptionResponse(OpenAIBaseModel):
     usage: TranscriptionUsageAudio
 
 
-class TranscriptionResponseVerbose(OpenAIBaseModel):
-    duration: str
-    language: str
+class TranscriptionWord(OpenAIBaseModel):
+    word: str
+    start: float = Field(..., description="start time in seconds")
+    end: float = Field(..., description="end time in seconds")
+
+
+class TranscriptionSegment(OpenAIBaseModel):
+    id: int
+    seek: int = 0
+    start: float = Field(..., description="start time in seconds")
+    end: float = Field(..., description="end time in seconds")
     text: str
+    tokens: list[int] = Field(default_factory=list)
+    temperature: float = 0.0
+    avg_logprob: float = 0.0
+    compression_ratio: float = 0.0
+    no_speech_prob: float = 0.0
+
+
+class TranscriptionResponseVerbose(OpenAIBaseModel):
+    language: str
+    duration: float = Field(..., description="The duration of the input audio in seconds.")
+    text: str
+    words: list[TranscriptionWord] = Field(default_factory=list)
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
+    usage: TranscriptionUsageAudio | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +373,13 @@ class TranscriptionResponseVerbose(OpenAIBaseModel):
 
 class TranslationRequest(OpenAIBaseModel):
     file: UploadFile
-    model: str | None = None
+    model: str = Field(..., description="ID of the model to use.")
     prompt: str = Field(default="")
     response_format: AudioResponseFormat = Field(default="json")
-    stream: bool | None = False
     temperature: float = Field(default=0.0)
+    # modelship extensions (not in OpenAI spec). Documented in
+    # docs/extensions.md.
+    stream: bool | None = False
     seed: int | None = None
     language: str | None = None
     to_language: str | None = None
@@ -354,9 +390,11 @@ class TranslationResponse(OpenAIBaseModel):
 
 
 class TranslationResponseVerbose(OpenAIBaseModel):
-    duration: str
-    language: str
+    language: str = Field(..., description="The language of the output translation (always `english`).")
+    duration: float = Field(..., description="The duration of the input audio in seconds.")
     text: str
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
+    usage: TranscriptionUsageAudio | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +501,6 @@ class ImageGenerationRequest(OpenAIBaseModel):
         default="b64_json",
         description="The format in which the generated images are returned.",
     )
-    num_inference_steps: int | None = Field(default=None, description="Override default inference steps.")
-    guidance_scale: float | None = Field(default=None, description="Override default guidance scale.")
 
 
 class ImageObject(OpenAIBaseModel):
@@ -522,7 +558,9 @@ __all__ = [
     "TranscriptionRequest",
     "TranscriptionResponse",
     "TranscriptionResponseVerbose",
+    "TranscriptionSegment",
     "TranscriptionUsageAudio",
+    "TranscriptionWord",
     "TranslationRequest",
     "TranslationResponse",
     "TranslationResponseVerbose",

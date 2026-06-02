@@ -112,7 +112,7 @@ class OpenaiModelList(BaseModel):
 
 
 def _error_response(result: ErrorResponse) -> JSONResponse:
-    return JSONResponse(content=result.model_dump(mode="json"), status_code=result.error.code if result.error else 500)
+    return JSONResponse(content=result.model_dump(mode="json"), status_code=result._http_status)
 
 
 def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:

@@ -25,8 +25,9 @@ from modelship.openai.protocol import (
 logger = get_logger("infer")
 
 _NOT_SUPPORTED = ErrorResponse(
-    error=ErrorInfo(message="model does not support this action", type="invalid_request_error", code=404)
+    error=ErrorInfo(message="model does not support this action", type="invalid_request_error")
 )
+_NOT_SUPPORTED._http_status = 404
 
 # 44-byte WAV header + 2 bytes of silence (one 16-bit sample at 16 kHz mono)
 _MINIMAL_WAV_HEADER = struct.pack(
