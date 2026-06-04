@@ -106,7 +106,10 @@ class OpenAIServingImage:
             return create_error_response(str(e))
 
         try:
-            image = _load_image(image_data, width, height)
+            # Decode the input once; derive both the RGB image and (if needed)
+            # the alpha mask from it.
+            src = _decode_image(image_data)
+            image = src.convert("RGB").resize((width, height))
             # Determine the inpaint mask. An explicit `mask` upload wins;
             # otherwise, per the OpenAI edits spec, the input image's own
             # transparency is used as the mask (transparent areas mark the
@@ -114,7 +117,7 @@ class OpenAIServingImage:
             if mask_data is not None:
                 mask = _load_image(mask_data, width, height, mode="L")
             else:
-                mask = _alpha_mask(image_data, width, height)
+                mask = _alpha_mask(src, width, height)
         except ValueError as e:
             return create_error_response(str(e))
 
@@ -210,24 +213,24 @@ def _build_response(images: list, revised_prompt: str | None) -> ImageGeneration
     return ImageGenerationResponse(created=int(time.time()), data=data)
 
 
+def _decode_image(data: bytes) -> Image.Image:
+    try:
+        return Image.open(io.BytesIO(data))
+    except Exception as e:
+        raise ValueError(f"Could not decode input image: {e}") from e
+
+
 def _load_image(data: bytes, width: int, height: int, mode: str = "RGB") -> Image.Image:
-    try:
-        img = Image.open(io.BytesIO(data)).convert(mode)
-    except Exception as e:
-        raise ValueError(f"Could not decode input image: {e}") from e
-    return img.resize((width, height))
+    return _decode_image(data).convert(mode).resize((width, height))
 
 
-def _alpha_mask(data: bytes, width: int, height: int) -> Image.Image | None:
-    """Derive an inpaint mask from the input image's alpha channel, per the
-    OpenAI edits spec: when no separate mask is supplied, transparent areas of
-    the image mark the region to edit. Returns a diffusers mask (white = edit,
-    black = keep) sized to (width, height), or None when the image has no alpha
-    channel or is fully opaque (so the caller falls back to img2img)."""
-    try:
-        img = Image.open(io.BytesIO(data))
-    except Exception as e:
-        raise ValueError(f"Could not decode input image: {e}") from e
+def _alpha_mask(img: Image.Image, width: int, height: int) -> Image.Image | None:
+    """Derive an inpaint mask from an already-decoded image's alpha channel,
+    per the OpenAI edits spec: when no separate mask is supplied, transparent
+    areas of the image mark the region to edit. Returns a diffusers mask
+    (white = edit, black = keep) sized to (width, height), or None when the
+    image has no alpha channel or is fully opaque (so the caller falls back to
+    img2img)."""
     if "A" not in img.mode and "transparency" not in img.info:
         return None
     alpha = img.convert("RGBA").getchannel("A")
