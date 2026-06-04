@@ -173,6 +173,19 @@ class TestImageEdit:
         assert mask.getpixel((8, 8)) == 255  # transparent center -> edit
         assert mask.getpixel((0, 0)) == 0  # opaque corner -> keep
 
+    async def test_edit_mask_has_soft_edges_when_resized(self):
+        # Thresholding before the resize lets interpolation soften the binary
+        # edge into a gradient when the mask is scaled to a different size.
+        inpaint = _StubPipeline()
+        serving = _serving(img2img=_StubPipeline(), inpaint=inpaint)
+        request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="64x64", strength=None)
+
+        await serving.create_image_edit(_rgba_png(16, 16, transparent=True), None, request, _proxy())
+
+        mask = inpaint.calls[0]["mask_image"]
+        assert mask.size == (64, 64)
+        assert any(0 < v < 255 for v in mask.getdata())  # anti-aliased boundary
+
     async def test_edit_missing_img2img_pipeline_errors(self):
         serving = _serving(img2img=None)
         request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="16x16", strength=None)

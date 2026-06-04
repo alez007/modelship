@@ -265,12 +265,15 @@ def _alpha_mask(img: Image.Image, width: int, height: int) -> Image.Image | None
     if "A" not in img.mode and "transparency" not in img.info:
         return None
     alpha = img.convert("RGBA").getchannel("A")
-    lo = alpha.getextrema()[0]  # single-band L image -> numeric (min, max)
-    if not isinstance(lo, int | float) or lo >= 255:
-        return None  # fully opaque — nothing marked for editing
-    # Transparent (alpha 0) -> white (repaint); opaque -> black (keep).
+    extrema = alpha.getextrema()  # single-band "L" -> (min, max)
+    if not extrema or not isinstance(extrema[0], int | float) or extrema[0] >= 255:
+        return None  # empty band or fully opaque — nothing marked for editing
+    # Transparent (alpha 0) -> white (repaint); opaque -> black (keep). Threshold
+    # at the source resolution, then resize: the interpolation softens the
+    # binary edge into a gradient, which blends better in inpainting than a hard,
+    # aliased boundary.
     lut = [255 if a < 128 else 0 for a in range(256)]
-    return alpha.resize((width, height)).point(lut)
+    return alpha.point(lut).resize((width, height))
 
 
 def _parse_size(size: str) -> tuple[int, int]:
