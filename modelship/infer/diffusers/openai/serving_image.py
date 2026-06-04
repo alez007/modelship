@@ -26,9 +26,10 @@ from modelship.utils import base_request_id
 logger = get_logger("infer.diffusers.image")
 
 # Default img2img strength when the request omits it. Edits stay closer to the
-# source (lower strength); variations diverge more (higher strength).
-_DEFAULT_EDIT_STRENGTH = 0.8
-_DEFAULT_VARIATION_STRENGTH = 0.7
+# source (lower strength) since the prompt guides the change; variations have
+# no prompt, so they need a higher strength to diverge from the input.
+_DEFAULT_EDIT_STRENGTH = 0.7
+_DEFAULT_VARIATION_STRENGTH = 0.8
 
 
 class OpenAIServingImage:
