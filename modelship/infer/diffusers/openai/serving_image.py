@@ -72,22 +72,21 @@ class OpenAIServingImage:
         steps = self.config.num_inference_steps
         guidance = self.config.guidance_scale
 
-        loop = asyncio.get_event_loop()
-        images = await loop.run_in_executor(
-            None,
-            lambda: (
-                self.pipeline(  # type: ignore[reportCallIssue]
-                    prompt=request.prompt,
-                    num_images_per_prompt=request.n,
-                    width=width,
-                    height=height,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance,
-                ).images
-            ),
-        )
+        def _run() -> ImageGenerationResponse:
+            images = self.pipeline(  # type: ignore[reportCallIssue]
+                prompt=request.prompt,
+                num_images_per_prompt=request.n,
+                width=width,
+                height=height,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+            ).images
+            return _build_response(images, revised_prompt=request.prompt)
 
-        response = _build_response(images, revised_prompt=request.prompt)
+        # Inference and PNG/base64 encoding are both CPU-bound; run the whole
+        # chain in the executor so the event loop stays responsive.
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _run)
         logger.log(TRACE, "image response %s: num_images=%d", request_id, len(response.data))
         return response
 
@@ -138,23 +137,20 @@ class OpenAIServingImage:
             pipeline = self.img2img_pipeline
             kwargs = {}
 
-        loop = asyncio.get_event_loop()
-        images = await loop.run_in_executor(
-            None,
-            lambda: (
-                pipeline(  # type: ignore[reportCallIssue]
-                    prompt=request.prompt,
-                    image=image,
-                    num_images_per_prompt=request.n,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance,
-                    strength=strength,
-                    **kwargs,
-                ).images
-            ),
-        )
+        def _run() -> ImageGenerationResponse:
+            images = pipeline(  # type: ignore[reportCallIssue]
+                prompt=request.prompt,
+                image=image,
+                num_images_per_prompt=request.n,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                strength=strength,
+                **kwargs,
+            ).images
+            return _build_response(images, revised_prompt=request.prompt)
 
-        response = _build_response(images, revised_prompt=request.prompt)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _run)
         logger.log(TRACE, "image edit response %s: num_images=%d", request_id, len(response.data))
         return response
 
@@ -181,22 +177,19 @@ class OpenAIServingImage:
         guidance = self.config.guidance_scale
         strength = request.strength if request.strength is not None else _DEFAULT_VARIATION_STRENGTH
 
-        loop = asyncio.get_event_loop()
-        images = await loop.run_in_executor(
-            None,
-            lambda: (
-                self.img2img_pipeline(  # type: ignore[reportCallIssue]
-                    prompt="",
-                    image=image,
-                    num_images_per_prompt=request.n,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance,
-                    strength=strength,
-                ).images
-            ),
-        )
+        def _run() -> ImageGenerationResponse:
+            images = self.img2img_pipeline(  # type: ignore[reportCallIssue]
+                prompt="",
+                image=image,
+                num_images_per_prompt=request.n,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                strength=strength,
+            ).images
+            return _build_response(images, revised_prompt=None)
 
-        response = _build_response(images, revised_prompt=None)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _run)
         logger.log(TRACE, "image variation response %s: num_images=%d", request_id, len(response.data))
         return response
 
