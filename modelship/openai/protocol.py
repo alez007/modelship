@@ -513,6 +513,41 @@ class ImageGenerationRequest(OpenAIBaseModel):
     )
 
 
+class ImageEditRequest(OpenAIBaseModel):
+    image: UploadFile = Field(..., description="The image to edit.")
+    prompt: str = Field(..., description="A text description of the desired edit.")
+    mask: UploadFile | None = Field(
+        default=None,
+        description="An optional mask; fully transparent areas indicate where the image should be edited (inpainting).",
+    )
+    model: str = Field(..., description="The model to use for image editing.")
+    n: int = Field(default=1, ge=1, le=10, description="The number of edited images to generate.")
+    size: str = Field(default="512x512", description="The size of the generated images in WxH format.")
+    response_format: Literal["b64_json"] = Field(
+        default="b64_json",
+        description="The format in which the generated images are returned.",
+    )
+    # modelship extension (not in OpenAI spec) — controls how far the output may
+    # diverge from the input image (0.0 keeps it, 1.0 ignores it). Defaults are
+    # applied serving-side. Documented in docs/extensions.md.
+    strength: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class ImageVariationRequest(OpenAIBaseModel):
+    image: UploadFile = Field(..., description="The image to use as the basis for the variation(s).")
+    model: str = Field(..., description="The model to use for image variations.")
+    n: int = Field(default=1, ge=1, le=10, description="The number of variations to generate.")
+    size: str = Field(default="512x512", description="The size of the generated images in WxH format.")
+    response_format: Literal["b64_json"] = Field(
+        default="b64_json",
+        description="The format in which the generated images are returned.",
+    )
+    # modelship extension (not in OpenAI spec) — controls how far each variation
+    # diverges from the input image (0.0 keeps it, 1.0 ignores it). Defaults are
+    # applied serving-side. Documented in docs/extensions.md.
+    strength: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class ImageObject(OpenAIBaseModel):
     b64_json: str = Field(..., description="The base64-encoded JSON of the generated image.")
     revised_prompt: str | None = Field(default=None, description="The prompt that was used to generate the image.")
@@ -549,9 +584,11 @@ __all__ = [
     "ErrorInfo",
     "ErrorResponse",
     "FunctionCall",
+    "ImageEditRequest",
     "ImageGenerationRequest",
     "ImageGenerationResponse",
     "ImageObject",
+    "ImageVariationRequest",
     "OpenAIBaseModel",
     "PromptTokenUsageInfo",
     "RawChatCompletion",

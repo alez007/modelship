@@ -154,6 +154,7 @@ markers = [
     "integration: tests that require a running Ray cluster and external models",
     "llama_cpp: integration tests that exercise the llama_cpp loader",
     "vllm: integration tests that exercise the vllm loader",
+    "diffusers: integration tests that exercise the diffusers loader",
 ]
 
 [tool.pyright]

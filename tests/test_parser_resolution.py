@@ -84,7 +84,7 @@ class TestResolveReasoningParsers:
         assert cfg._resolved_reasoning_parser is None
 
     def test_skips_non_applicable_loader(self):
-        cfg = _make_cfg(loader=ModelLoader.diffusers)
+        cfg = _make_cfg(loader=ModelLoader.diffusers, usecase=ModelUsecase.image)
         cfg._resolved_chat_template = "<think>x</think>"
         resolve_all_reasoning_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_reasoning_parser is None

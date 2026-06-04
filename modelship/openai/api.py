@@ -30,8 +30,10 @@ from modelship.openai.protocol import (
     EmbeddingRequest,
     EmbeddingResponse,
     ErrorResponse,
+    ImageEditRequest,
     ImageGenerationRequest,
     ImageGenerationResponse,
+    ImageVariationRequest,
     RawSpeechResponse,
     SpeechRequest,
     TranscriptionRequest,
@@ -424,7 +426,10 @@ class ModelshipAPI:
         logger.info("transcription model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file field.
-        audio_data = await request.file.read()
+        try:
+            audio_data = await request.file.read()
+        finally:
+            await request.file.close()
         request_no_file = TranscriptionRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.transcribe.options(stream=True).remote(
             audio_data, request_no_file, headers, watcher.event, req_id
@@ -442,7 +447,10 @@ class ModelshipAPI:
         logger.info("translation model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file field.
-        audio_data = await request.file.read()
+        try:
+            audio_data = await request.file.read()
+        finally:
+            await request.file.close()
         request_no_file = TranslationRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.translate.options(stream=True).remote(
             audio_data, request_no_file, headers, watcher.event, req_id
@@ -473,3 +481,52 @@ class ModelshipAPI:
         headers = dict(raw_request.headers)
         response_gen = handle.imagine.options(stream=True).remote(request, headers, watcher.event, req_id)
         return await self._handle_response(response_gen, watcher, request.model, "create_image")
+
+    @app.post("/v1/images/edits")
+    async def create_image_edit(self, request: Annotated[ImageEditRequest, Form()], raw_request: Request):
+        req_id = random_uuid()
+        self._set_request_id(req_id)
+        logger.info(
+            "image_edit model=%s prompt=%r n=%d size=%s mask=%s",
+            request.model,
+            request.prompt,
+            request.n,
+            request.size,
+            request.mask is not None,
+        )
+        handle = self._get_handle(request.model)
+        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_edit")
+        headers = dict(raw_request.headers)
+        # Read image bytes before crossing the process boundary — UploadFile is not serializable.
+        # The bytes are passed separately; the request is reconstructed without the file fields.
+        try:
+            image_data = await request.image.read()
+            mask_data = await request.mask.read() if request.mask is not None else None
+        finally:
+            await request.image.close()
+            if request.mask is not None:
+                await request.mask.close()
+        request_no_file = ImageEditRequest.model_construct(**request.model_dump(exclude={"image", "mask"}))
+        response_gen = handle.edit_image.options(stream=True).remote(
+            image_data, mask_data, request_no_file, headers, watcher.event, req_id
+        )
+        return await self._handle_response(response_gen, watcher, request.model, "create_image_edit")
+
+    @app.post("/v1/images/variations")
+    async def create_image_variation(self, request: Annotated[ImageVariationRequest, Form()], raw_request: Request):
+        req_id = random_uuid()
+        self._set_request_id(req_id)
+        logger.info("image_variation model=%s n=%d size=%s", request.model, request.n, request.size)
+        handle = self._get_handle(request.model)
+        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_variation")
+        headers = dict(raw_request.headers)
+        # Read image bytes before crossing the process boundary — UploadFile is not serializable.
+        try:
+            image_data = await request.image.read()
+        finally:
+            await request.image.close()
+        request_no_file = ImageVariationRequest.model_construct(**request.model_dump(exclude={"image"}))
+        response_gen = handle.vary_image.options(stream=True).remote(
+            image_data, request_no_file, headers, watcher.event, req_id
+        )
+        return await self._handle_response(response_gen, watcher, request.model, "create_image_variation")
