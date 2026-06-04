@@ -88,8 +88,22 @@ class DiffusersInfer(BaseInfer):
         if tokenizer is not None:
             self._set_max_context_length(getattr(tokenizer, "model_max_length", None))
 
-        self._img2img = AutoPipelineForImage2Image.from_pipe(self._pipeline)
-        self._inpaint = AutoPipelineForInpainting.from_pipe(self._pipeline)
+        # img2img / inpaint back /v1/images/edits and /v1/images/variations.
+        # from_pipe can fail for models AutoPipeline can't map; degrade
+        # gracefully (those endpoints return a clear error) rather than crash
+        # the whole deployment, which still serves text2img generation.
+        try:
+            self._img2img = AutoPipelineForImage2Image.from_pipe(self._pipeline)
+        except Exception as e:
+            self._img2img = None
+            logger.warning(
+                "img2img pipeline unavailable for %s (edits/variations disabled): %s", self.model_config.name, e
+            )
+        try:
+            self._inpaint = AutoPipelineForInpainting.from_pipe(self._pipeline)
+        except Exception as e:
+            self._inpaint = None
+            logger.warning("inpaint pipeline unavailable for %s (masked edits disabled): %s", self.model_config.name, e)
 
         self.serving_image: OpenAIServingImage | None = (
             OpenAIServingImage(
