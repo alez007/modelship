@@ -493,8 +493,13 @@ class ModelshipAPI:
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file fields.
-        image_data = await request.image.read()
-        mask_data = await request.mask.read() if request.mask is not None else None
+        try:
+            image_data = await request.image.read()
+            mask_data = await request.mask.read() if request.mask is not None else None
+        finally:
+            await request.image.close()
+            if request.mask is not None:
+                await request.mask.close()
         request_no_file = ImageEditRequest.model_construct(**request.model_dump(exclude={"image", "mask"}))
         response_gen = handle.edit_image.options(stream=True).remote(
             image_data, mask_data, request_no_file, headers, watcher.event, req_id
@@ -510,7 +515,10 @@ class ModelshipAPI:
         watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_variation")
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
-        image_data = await request.image.read()
+        try:
+            image_data = await request.image.read()
+        finally:
+            await request.image.close()
         request_no_file = ImageVariationRequest.model_construct(**request.model_dump(exclude={"image"}))
         response_gen = handle.vary_image.options(stream=True).remote(
             image_data, request_no_file, headers, watcher.event, req_id
