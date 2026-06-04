@@ -111,7 +111,7 @@ class OpenAIServingImage:
             # transparency is used as the mask (transparent areas mark the
             # region to edit). With neither, this is a plain img2img edit.
             if mask_data is not None:
-                mask = _load_image(mask_data, width, height)
+                mask = _load_image(mask_data, width, height, mode="L")
             else:
                 mask = _alpha_mask(image_data, width, height)
         except ValueError as e:
@@ -209,9 +209,9 @@ def _build_response(images: list, revised_prompt: str | None) -> ImageGeneration
     return ImageGenerationResponse(created=int(time.time()), data=data)
 
 
-def _load_image(data: bytes, width: int, height: int) -> Image.Image:
+def _load_image(data: bytes, width: int, height: int, mode: str = "RGB") -> Image.Image:
     try:
-        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = Image.open(io.BytesIO(data)).convert(mode)
     except Exception as e:
         raise ValueError(f"Could not decode input image: {e}") from e
     return img.resize((width, height))
