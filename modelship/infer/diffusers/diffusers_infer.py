@@ -43,15 +43,20 @@ class DiffusersInfer(BaseInfer):
             torch.cuda.set_per_process_memory_fraction(mem_frac)
 
     def shutdown(self) -> None:
-        pass
+        # The img2img / inpaint pipelines and the serving wrapper all hold
+        # references to the text2img pipeline's shared components (VAE / UNet /
+        # text-encoder). Every holder must be dropped before empty_cache() can
+        # actually reclaim the GPU memory. Idempotent — the getattr guards make
+        # repeat calls (e.g. graceful shutdown then __del__) safe.
+        for attr in ("serving_image", "_img2img", "_inpaint", "_pipeline"):
+            if getattr(self, attr, None) is not None:
+                delattr(self, attr)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def __del__(self):
         try:
-            for attr in ("serving_image", "_img2img", "_inpaint", "_pipeline"):
-                if getattr(self, attr, None) is not None:
-                    delattr(self, attr)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            self.shutdown()
         except Exception:
             from modelship.metrics import RESOURCE_CLEANUP_ERRORS_TOTAL
 
