@@ -98,15 +98,6 @@ class OpenAIServingImage:
         raw_request: RawRequestProxy,
     ) -> ImageGenerationResponse | ErrorResponse:
         request_id = f"{self.request_id_prefix}-{base_request_id(raw_request)}"
-        inpaint = mask_data is not None
-        logger.info(
-            "image edit request %s: prompt=%r, n=%d, size=%s, mask=%s",
-            request_id,
-            request.prompt,
-            request.n,
-            request.size,
-            inpaint,
-        )
 
         try:
             width, height = _parse_size(request.size)
@@ -115,8 +106,26 @@ class OpenAIServingImage:
 
         try:
             image = _load_image(image_data, width, height)
+            # Determine the inpaint mask. An explicit `mask` upload wins;
+            # otherwise, per the OpenAI edits spec, the input image's own
+            # transparency is used as the mask (transparent areas mark the
+            # region to edit). With neither, this is a plain img2img edit.
+            if mask_data is not None:
+                mask = _load_image(mask_data, width, height)
+            else:
+                mask = _alpha_mask(image_data, width, height)
         except ValueError as e:
             return create_error_response(str(e))
+
+        inpaint = mask is not None
+        logger.info(
+            "image edit request %s: prompt=%r, n=%d, size=%s, inpaint=%s",
+            request_id,
+            request.prompt,
+            request.n,
+            request.size,
+            inpaint,
+        )
 
         steps = self.config.num_inference_steps
         guidance = self.config.guidance_scale
@@ -125,10 +134,6 @@ class OpenAIServingImage:
         if inpaint:
             if self.inpaint_pipeline is None:
                 return create_error_response("model does not support image editing")
-            try:
-                mask = _load_image(mask_data, width, height)  # type: ignore[arg-type]
-            except ValueError as e:
-                return create_error_response(str(e))
             pipeline = self.inpaint_pipeline
             kwargs = {"mask_image": mask}
         else:
@@ -210,6 +215,27 @@ def _load_image(data: bytes, width: int, height: int) -> Image.Image:
     except Exception as e:
         raise ValueError(f"Could not decode input image: {e}") from e
     return img.resize((width, height))
+
+
+def _alpha_mask(data: bytes, width: int, height: int) -> Image.Image | None:
+    """Derive an inpaint mask from the input image's alpha channel, per the
+    OpenAI edits spec: when no separate mask is supplied, transparent areas of
+    the image mark the region to edit. Returns a diffusers mask (white = edit,
+    black = keep) sized to (width, height), or None when the image has no alpha
+    channel or is fully opaque (so the caller falls back to img2img)."""
+    try:
+        img = Image.open(io.BytesIO(data))
+    except Exception as e:
+        raise ValueError(f"Could not decode input image: {e}") from e
+    if "A" not in img.mode and "transparency" not in img.info:
+        return None
+    alpha = img.convert("RGBA").getchannel("A")
+    lo = alpha.getextrema()[0]  # single-band L image -> numeric (min, max)
+    if not isinstance(lo, int | float) or lo >= 255:
+        return None  # fully opaque — nothing marked for editing
+    # Transparent (alpha 0) -> white (repaint); opaque -> black (keep).
+    lut = [255 if a < 128 else 0 for a in range(256)]
+    return alpha.resize((width, height)).point(lut)
 
 
 def _parse_size(size: str) -> tuple[int, int]:

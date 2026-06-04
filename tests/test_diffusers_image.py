@@ -41,6 +41,19 @@ def _png_bytes(w: int = 16, h: int = 16) -> bytes:
     return buf.getvalue()
 
 
+def _rgba_png(w: int = 16, h: int = 16, *, transparent: bool) -> bytes:
+    """An RGBA PNG. With ``transparent=True`` a central square has alpha 0
+    (the OpenAI 'edit here' region); otherwise the image is fully opaque."""
+    img = Image.new("RGBA", (w, h), (200, 100, 50, 255))
+    if transparent:
+        for x in range(w // 4, w * 3 // 4):
+            for y in range(h // 4, h * 3 // 4):
+                img.putpixel((x, y), (0, 0, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _serving(img2img=None, inpaint=None) -> OpenAIServingImage:
     return OpenAIServingImage(
         pipeline=_StubPipeline(),  # type: ignore[arg-type]
@@ -95,6 +108,33 @@ class TestImageEdit:
         call = inpaint.calls[0]
         assert call["strength"] == 0.5
         assert "mask_image" in call
+
+    async def test_edit_transparent_image_no_mask_uses_inpaint(self):
+        # RGBA input with transparency + no separate mask -> alpha is the mask.
+        img2img = _StubPipeline()
+        inpaint = _StubPipeline()
+        serving = _serving(img2img=img2img, inpaint=inpaint)
+        request = ImageEditRequest.model_construct(model="m", prompt="fill", n=1, size="16x16", strength=None)
+
+        result = await serving.create_image_edit(_rgba_png(transparent=True), None, request, _proxy())
+
+        assert isinstance(result, ImageGenerationResponse)
+        assert len(inpaint.calls) == 1
+        assert len(img2img.calls) == 0
+        assert "mask_image" in inpaint.calls[0]
+
+    async def test_edit_opaque_rgba_no_mask_uses_img2img(self):
+        # RGBA input with no transparent pixels falls back to plain img2img.
+        img2img = _StubPipeline()
+        inpaint = _StubPipeline()
+        serving = _serving(img2img=img2img, inpaint=inpaint)
+        request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="16x16", strength=None)
+
+        result = await serving.create_image_edit(_rgba_png(transparent=False), None, request, _proxy())
+
+        assert isinstance(result, ImageGenerationResponse)
+        assert len(img2img.calls) == 1
+        assert len(inpaint.calls) == 0
 
     async def test_edit_missing_img2img_pipeline_errors(self):
         serving = _serving(img2img=None)
