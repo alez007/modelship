@@ -220,7 +220,12 @@ def _build_response(images: list, revised_prompt: str | None) -> ImageGeneration
 
 def _decode_image(data: bytes) -> Image.Image:
     try:
-        return Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data))
+        # Image.open is lazy (headers only); force decoding now so truncated /
+        # corrupt pixel data raises here and is wrapped, rather than later
+        # during convert()/resize() where it would escape as an OSError.
+        img.load()
+        return img
     except Exception as e:
         raise ValueError(f"Could not decode input image: {e}") from e
 

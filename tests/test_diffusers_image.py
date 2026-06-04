@@ -169,6 +169,15 @@ class TestImageEdit:
         result = await serving.create_image_edit(b"not an image", None, request, _proxy())
         assert isinstance(result, ErrorResponse)
 
+    async def test_edit_truncated_image_errors(self):
+        # Headers parse but pixel data is cut off — must surface as an error,
+        # not an uncaught OSError from a later convert()/resize().
+        full = _png_bytes(64, 64)
+        serving = _serving(img2img=_StubPipeline())
+        request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="64x64", strength=None)
+        result = await serving.create_image_edit(full[: len(full) // 2], None, request, _proxy())
+        assert isinstance(result, ErrorResponse)
+
     async def test_edit_invalid_size_errors(self):
         serving = _serving(img2img=_StubPipeline())
         request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="nonsense", strength=None)
