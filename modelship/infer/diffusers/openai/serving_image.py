@@ -105,48 +105,51 @@ class OpenAIServingImage:
         except ValueError as e:
             return create_error_response(str(e))
 
-        try:
-            # Decode the input once; derive both the RGB image and (if needed)
-            # the alpha mask from it.
-            src = _decode_image(image_data)
-            image = src.convert("RGB").resize((width, height))
-            # Determine the inpaint mask. An explicit `mask` upload wins;
-            # otherwise, per the OpenAI edits spec, the input image's own
-            # transparency is used as the mask (transparent areas mark the
-            # region to edit). With neither, this is a plain img2img edit.
-            if mask_data is not None:
-                mask = _load_image(mask_data, width, height, mode="L")
-            else:
-                mask = _alpha_mask(src, width, height)
-        except ValueError as e:
-            return create_error_response(str(e))
-
-        inpaint = mask is not None
-        logger.info(
-            "image edit request %s: prompt=%r, n=%d, size=%s, inpaint=%s",
-            request_id,
-            request.prompt,
-            request.n,
-            request.size,
-            inpaint,
-        )
-
         steps = self.config.num_inference_steps
         guidance = self.config.guidance_scale
         strength = request.strength if request.strength is not None else _DEFAULT_EDIT_STRENGTH
 
-        if inpaint:
-            if self.inpaint_pipeline is None:
-                return create_error_response("model does not support image editing")
-            pipeline = self.inpaint_pipeline
-            kwargs = {"mask_image": mask}
-        else:
-            if self.img2img_pipeline is None:
-                return create_error_response("model does not support image editing")
-            pipeline = self.img2img_pipeline
-            kwargs = {}
+        # All image decode / resize / mask work is CPU-bound; run it in the
+        # executor alongside inference and encoding so the event loop is never
+        # blocked. _run returns the final response (or an error response).
+        def _run() -> ImageGenerationResponse | ErrorResponse:
+            try:
+                # Decode the input once; derive both the RGB image and (if
+                # needed) the alpha mask from it.
+                src = _decode_image(image_data)
+                image = src.convert("RGB").resize((width, height))
+                # Determine the inpaint mask. An explicit `mask` upload wins;
+                # otherwise, per the OpenAI edits spec, the input image's own
+                # transparency is used as the mask (transparent areas mark the
+                # region to edit). With neither, this is a plain img2img edit.
+                if mask_data is not None:
+                    mask = _load_mask(mask_data, width, height)
+                else:
+                    mask = _alpha_mask(src, width, height)
+            except ValueError as e:
+                return create_error_response(str(e))
 
-        def _run() -> ImageGenerationResponse:
+            inpaint = mask is not None
+            logger.info(
+                "image edit request %s: prompt=%r, n=%d, size=%s, inpaint=%s",
+                request_id,
+                request.prompt,
+                request.n,
+                request.size,
+                inpaint,
+            )
+
+            if inpaint:
+                if self.inpaint_pipeline is None:
+                    return create_error_response("model does not support image editing")
+                pipeline = self.inpaint_pipeline
+                kwargs = {"mask_image": mask}
+            else:
+                if self.img2img_pipeline is None:
+                    return create_error_response("model does not support image editing")
+                pipeline = self.img2img_pipeline
+                kwargs = {}
+
             images = pipeline(  # type: ignore[reportCallIssue]
                 prompt=request.prompt,
                 image=image,
@@ -160,7 +163,8 @@ class OpenAIServingImage:
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _run)
-        logger.log(TRACE, "image edit response %s: num_images=%d", request_id, len(response.data))
+        if isinstance(response, ImageGenerationResponse):
+            logger.log(TRACE, "image edit response %s: num_images=%d", request_id, len(response.data))
         return response
 
     async def create_image_variation(
@@ -177,16 +181,16 @@ class OpenAIServingImage:
         except ValueError as e:
             return create_error_response(str(e))
 
-        try:
-            image = _load_image(image_data, width, height)
-        except ValueError as e:
-            return create_error_response(str(e))
-
         steps = self.config.num_inference_steps
         guidance = self.config.guidance_scale
         strength = request.strength if request.strength is not None else _DEFAULT_VARIATION_STRENGTH
 
-        def _run() -> ImageGenerationResponse:
+        # Decode / resize / encode are CPU-bound; keep them off the event loop.
+        def _run() -> ImageGenerationResponse | ErrorResponse:
+            try:
+                image = _load_image(image_data, width, height)
+            except ValueError as e:
+                return create_error_response(str(e))
             images = self.img2img_pipeline(  # type: ignore[reportCallIssue]
                 prompt="",
                 image=image,
@@ -199,7 +203,8 @@ class OpenAIServingImage:
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _run)
-        logger.log(TRACE, "image variation response %s: num_images=%d", request_id, len(response.data))
+        if isinstance(response, ImageGenerationResponse):
+            logger.log(TRACE, "image variation response %s: num_images=%d", request_id, len(response.data))
         return response
 
 
@@ -222,6 +227,18 @@ def _decode_image(data: bytes) -> Image.Image:
 
 def _load_image(data: bytes, width: int, height: int, mode: str = "RGB") -> Image.Image:
     return _decode_image(data).convert(mode).resize((width, height))
+
+
+def _load_mask(data: bytes, width: int, height: int) -> Image.Image:
+    """Load an uploaded edit mask into a diffusers mask (white = edit region).
+    Per the OpenAI spec a mask encodes the edit region in its alpha channel
+    (transparent = edit), so prefer that; fall back to luminance for an
+    opaque / grayscale mask (white = edit)."""
+    img = _decode_image(data)
+    mask = _alpha_mask(img, width, height)
+    if mask is not None:
+        return mask
+    return img.convert("L").resize((width, height))
 
 
 def _alpha_mask(img: Image.Image, width: int, height: int) -> Image.Image | None:

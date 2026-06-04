@@ -136,6 +136,21 @@ class TestImageEdit:
         assert len(img2img.calls) == 1
         assert len(inpaint.calls) == 0
 
+    async def test_edit_rgba_mask_uses_alpha_channel(self):
+        # OpenAI masks encode the edit region in the alpha channel (transparent
+        # = edit), not luminance. The derived diffusers mask must be white
+        # (repaint) where the upload was transparent and black where opaque.
+        inpaint = _StubPipeline()
+        serving = _serving(img2img=_StubPipeline(), inpaint=inpaint)
+        request = ImageEditRequest.model_construct(model="m", prompt="fill", n=1, size="16x16", strength=None)
+
+        result = await serving.create_image_edit(_png_bytes(), _rgba_png(transparent=True), request, _proxy())
+
+        assert isinstance(result, ImageGenerationResponse)
+        mask = inpaint.calls[0]["mask_image"]
+        assert mask.getpixel((8, 8)) == 255  # transparent center -> edit
+        assert mask.getpixel((0, 0)) == 0  # opaque corner -> keep
+
     async def test_edit_missing_img2img_pipeline_errors(self):
         serving = _serving(img2img=None)
         request = ImageEditRequest.model_construct(model="m", prompt="x", n=1, size="16x16", strength=None)
