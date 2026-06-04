@@ -47,8 +47,9 @@ class DiffusersInfer(BaseInfer):
 
     def __del__(self):
         try:
-            if pipeline := getattr(self, "_pipeline", None):
-                del pipeline
+            for attr in ("serving_image", "_img2img", "_inpaint", "_pipeline"):
+                if getattr(self, attr, None) is not None:
+                    delattr(self, attr)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:
