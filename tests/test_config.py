@@ -107,6 +107,32 @@ class TestModelshipModelConfig:
                 usecase=ModelUsecase.generate,
             )
 
+    def test_diffusers_usecase_defaults_to_image(self):
+        config = ModelshipModelConfig(
+            name="test-image",
+            model="stabilityai/sdxl-turbo",
+            loader=ModelLoader.diffusers,
+        )
+        assert config.usecase is ModelUsecase.image
+
+    def test_diffusers_explicit_image_usecase_ok(self):
+        config = ModelshipModelConfig(
+            name="test-image",
+            model="stabilityai/sdxl-turbo",
+            usecase=ModelUsecase.image,
+            loader=ModelLoader.diffusers,
+        )
+        assert config.usecase is ModelUsecase.image
+
+    def test_diffusers_rejects_non_image_usecase(self):
+        with pytest.raises(ValidationError, match="loader='diffusers' only supports usecase='image'"):
+            ModelshipModelConfig(
+                name="test-image",
+                model="stabilityai/sdxl-turbo",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.diffusers,
+            )
+
     def test_gpu_allocation_fraction(self):
         config = ModelshipModelConfig(
             name="test-llm",
@@ -224,7 +250,9 @@ class TestModelshipModelConfig:
 
     def test_all_loaders_valid(self):
         for loader in ModelLoader:
-            kwargs = {"name": "test", "model": "some-model", "usecase": ModelUsecase.generate}
+            # diffusers is image-only; every other loader supports generate.
+            usecase = ModelUsecase.image if loader == ModelLoader.diffusers else ModelUsecase.generate
+            kwargs = {"name": "test", "model": "some-model", "usecase": usecase}
             if loader == ModelLoader.custom:
                 kwargs["plugin"] = "test-plugin"
             config = ModelshipModelConfig(loader=loader, **kwargs)

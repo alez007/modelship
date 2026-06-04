@@ -129,12 +129,23 @@ class ModelshipModelConfig(BaseModel):
     # default.
     _resolved_skip_special_tokens: bool | None = PrivateAttr(default=None)
 
+    @model_validator(mode="before")
+    @classmethod
+    def default_diffusers_usecase(cls, data):
+        # Diffusers is image-only, so `usecase` is implicit — let configs omit
+        # it. (An explicit non-image usecase is still rejected below.)
+        if isinstance(data, dict) and data.get("loader") == ModelLoader.diffusers and data.get("usecase") is None:
+            data = {**data, "usecase": ModelUsecase.image}
+        return data
+
     @model_validator(mode="after")
     def check_custom_requires_plugin(self):
         if self.loader == ModelLoader.custom and self.plugin is None:
             raise ValueError("loader='custom' requires plugin to be set")
         if self.loader != ModelLoader.custom and not self.model:
             raise ValueError(f"`model:` is required for loader={self.loader!r}")
+        if self.loader == ModelLoader.diffusers and self.usecase is not ModelUsecase.image:
+            raise ValueError(f"loader='diffusers' only supports usecase='image', got {self.usecase!r}")
         return self
 
     @model_validator(mode="after")
