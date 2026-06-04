@@ -10,8 +10,10 @@ from modelship.openai.protocol import (
     EmbeddingRequest,
     ErrorInfo,
     ErrorResponse,
+    ImageEditRequest,
     ImageGenerationRequest,
     ImageGenerationResponse,
+    ImageVariationRequest,
     RawSpeechResponse,
     SpeechRequest,
     TranscriptionRequest,
@@ -109,5 +111,19 @@ class BaseInfer(ABC):
 
     async def create_image_generation(
         self, request: ImageGenerationRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ImageGenerationResponse:
+        return _NOT_SUPPORTED
+
+    async def create_image_edit(
+        self,
+        image_data: bytes,
+        mask_data: bytes | None,
+        request: ImageEditRequest,
+        raw_request: RawRequestProxy,
+    ) -> ErrorResponse | ImageGenerationResponse:
+        return _NOT_SUPPORTED
+
+    async def create_image_variation(
+        self, image_data: bytes, request: ImageVariationRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ImageGenerationResponse:
         return _NOT_SUPPORTED

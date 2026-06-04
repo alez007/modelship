@@ -118,6 +118,30 @@ class BasePlugin(ABC):
         """Returns a list of PNG-encoded image bytes."""
         return _NOT_SUPPORTED
 
+    async def create_image_edit(
+        self,
+        image_data: bytes,
+        mask_data: bytes | None = None,
+        prompt: str | None = None,
+        n: int = 1,
+        size: str | None = None,
+        strength: float | None = None,
+        request_id: str | None = None,
+    ) -> list[bytes] | ErrorResponse:
+        """Returns a list of PNG-encoded image bytes."""
+        return _NOT_SUPPORTED
+
+    async def create_image_variation(
+        self,
+        image_data: bytes,
+        n: int = 1,
+        size: str | None = None,
+        strength: float | None = None,
+        request_id: str | None = None,
+    ) -> list[bytes] | ErrorResponse:
+        """Returns a list of PNG-encoded image bytes."""
+        return _NOT_SUPPORTED
+
 
 class PluginProto(Protocol):
     ModelPlugin: type[BasePlugin]

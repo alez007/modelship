@@ -25,7 +25,9 @@ from modelship.metrics import (
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     EmbeddingRequest,
+    ImageEditRequest,
     ImageGenerationRequest,
+    ImageVariationRequest,
     SpeechRequest,
     TranscriptionRequest,
     TranslationRequest,
@@ -317,6 +319,45 @@ class ModelDeployment:
         proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_generation(request, proxy)
+        IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
+        if isinstance(result, AsyncGenerator):
+            async for chunk in result:
+                yield chunk
+        else:
+            yield result
+
+    async def edit_image(
+        self,
+        image_data: bytes,
+        mask_data: bytes | None,
+        request: ImageEditRequest,
+        request_headers: dict[str, str],
+        disconnect_event: Any,
+        request_id: str | None = None,
+    ):
+        self._set_request_id(request_id)
+        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        start = time.monotonic()
+        result = await self.infer.create_image_edit(image_data, mask_data, request, proxy)
+        IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
+        if isinstance(result, AsyncGenerator):
+            async for chunk in result:
+                yield chunk
+        else:
+            yield result
+
+    async def vary_image(
+        self,
+        image_data: bytes,
+        request: ImageVariationRequest,
+        request_headers: dict[str, str],
+        disconnect_event: Any,
+        request_id: str | None = None,
+    ):
+        self._set_request_id(request_id)
+        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        start = time.monotonic()
+        result = await self.infer.create_image_variation(image_data, request, proxy)
         IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
         if isinstance(result, AsyncGenerator):
             async for chunk in result:

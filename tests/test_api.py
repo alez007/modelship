@@ -1,6 +1,6 @@
 """Tests for ModelshipAPI model discovery and routing."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -194,6 +194,77 @@ class TestGetHandle:
 
         with pytest.raises(HTTPException):
             api._get_handle(None)
+
+
+class TestImageEditRoutes:
+    @pytest.mark.asyncio
+    async def test_edit_reads_upload_before_ray_boundary(self, api):
+        import io
+
+        from fastapi import UploadFile
+
+        from modelship.openai.protocol import ImageEditRequest
+
+        handle = MagicMock()
+        remote = handle.edit_image.options.return_value.remote
+        api.models = {"sdxl": {"sdxl-a1b2c": handle}}
+        api._round_robin = {"sdxl": 0}
+
+        request = ImageEditRequest(
+            image=UploadFile(file=io.BytesIO(b"IMAGE_BYTES"), filename="i.png"),
+            mask=UploadFile(file=io.BytesIO(b"MASK_BYTES"), filename="m.png"),
+            prompt="add a hat",
+            model="sdxl",
+        )
+        raw_request = MagicMock()
+        raw_request.headers = {}
+
+        with (
+            patch("modelship.openai.api.RequestWatcher"),
+            patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")) as handle_response,
+        ):
+            result = await api.create_image_edit(request, raw_request)
+
+        assert result == "OK"
+        # The upload bytes must be read in the gateway, not handed to the actor as UploadFile.
+        args, _ = remote.call_args
+        image_data, mask_data, request_no_file = args[0], args[1], args[2]
+        assert image_data == b"IMAGE_BYTES"
+        assert mask_data == b"MASK_BYTES"
+        # The UploadFile must not cross the boundary; bytes are passed separately.
+        dumped = request_no_file.model_dump()
+        assert "image" not in dumped
+        assert dumped.get("mask") is None
+        handle_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_variation_reads_upload_and_omits_mask(self, api):
+        import io
+
+        from fastapi import UploadFile
+
+        from modelship.openai.protocol import ImageVariationRequest
+
+        handle = MagicMock()
+        remote = handle.vary_image.options.return_value.remote
+        api.models = {"sdxl": {"sdxl-a1b2c": handle}}
+        api._round_robin = {"sdxl": 0}
+
+        request = ImageVariationRequest(
+            image=UploadFile(file=io.BytesIO(b"IMAGE_BYTES"), filename="i.png"),
+            model="sdxl",
+        )
+        raw_request = MagicMock()
+        raw_request.headers = {}
+
+        with (
+            patch("modelship.openai.api.RequestWatcher"),
+            patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")),
+        ):
+            await api.create_image_variation(request, raw_request)
+
+        args, _ = remote.call_args
+        assert args[0] == b"IMAGE_BYTES"
 
 
 class TestHandleResponse:

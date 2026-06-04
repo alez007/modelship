@@ -6,11 +6,25 @@ from modelship.infer.infer_config import DiffusersConfig, ModelshipModelConfig, 
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ErrorResponse,
+    ImageEditRequest,
     ImageGenerationRequest,
     ImageGenerationResponse,
+    ImageVariationRequest,
 )
 
 logger = get_logger("infer.diffusers")
+
+
+def _dummy_png(width: int, height: int) -> bytes:
+    """A solid-grey PNG used to exercise the edit/variation paths during warmup."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (127, 127, 127)).save(buf, format="PNG")
+    return buf.getvalue()
+
 
 _TORCH_DTYPES = {
     "float16": torch.float16,
@@ -43,7 +57,11 @@ class DiffusersInfer(BaseInfer):
             RESOURCE_CLEANUP_ERRORS_TOTAL.inc(tags={"model": self.model_config.name, "component": "diffusers_pipeline"})
 
     async def start(self):
-        from diffusers.pipelines.auto_pipeline import AutoPipelineForText2Image
+        from diffusers.pipelines.auto_pipeline import (
+            AutoPipelineForImage2Image,
+            AutoPipelineForInpainting,
+            AutoPipelineForText2Image,
+        )
 
         config = self.model_config.diffusers_config or DiffusersConfig()
         dtype = _TORCH_DTYPES.get(config.torch_dtype, torch.float16)
@@ -69,8 +87,16 @@ class DiffusersInfer(BaseInfer):
         if tokenizer is not None:
             self._set_max_context_length(getattr(tokenizer, "model_max_length", None))
 
+        self._img2img = AutoPipelineForImage2Image.from_pipe(self._pipeline)
+        self._inpaint = AutoPipelineForInpainting.from_pipe(self._pipeline)
+
         self.serving_image: OpenAIServingImage | None = (
-            OpenAIServingImage(pipeline=self._pipeline, config=config)
+            OpenAIServingImage(
+                pipeline=self._pipeline,
+                config=config,
+                img2img_pipeline=self._img2img,
+                inpaint_pipeline=self._inpaint,
+            )
             if self.model_config.usecase is ModelUsecase.image
             else None
         )
@@ -79,13 +105,24 @@ class DiffusersInfer(BaseInfer):
         if self.serving_image is None:
             return
         logger.info("Warming up diffusers model: %s", self.model_config.name)
-        request = ImageGenerationRequest(
+        proxy = RawRequestProxy(None, {})
+        gen_request = ImageGenerationRequest(
             model=self.model_config.name,
             prompt="warmup",
             n=1,
             size="64x64",
         )
-        await self.create_image_generation(request, RawRequestProxy(None, {}))
+        await self.create_image_generation(gen_request, proxy)
+
+        dummy_png = _dummy_png(64, 64)
+        edit_request = ImageEditRequest.model_construct(
+            model=self.model_config.name, prompt="warmup", n=1, size="64x64", strength=None
+        )
+        await self.create_image_edit(dummy_png, None, edit_request, proxy)
+        variation_request = ImageVariationRequest.model_construct(
+            model=self.model_config.name, n=1, size="64x64", strength=None
+        )
+        await self.create_image_variation(dummy_png, variation_request, proxy)
         logger.info("Warmup image generation done for %s", self.model_config.name)
 
     async def create_image_generation(
@@ -94,3 +131,21 @@ class DiffusersInfer(BaseInfer):
         if self.serving_image is None:
             return await super().create_image_generation(request, raw_request)
         return await self.serving_image.create_image_generation(request, raw_request)
+
+    async def create_image_edit(
+        self,
+        image_data: bytes,
+        mask_data: bytes | None,
+        request: ImageEditRequest,
+        raw_request: RawRequestProxy,
+    ) -> ErrorResponse | ImageGenerationResponse:
+        if self.serving_image is None:
+            return await super().create_image_edit(image_data, mask_data, request, raw_request)
+        return await self.serving_image.create_image_edit(image_data, mask_data, request, raw_request)
+
+    async def create_image_variation(
+        self, image_data: bytes, request: ImageVariationRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ImageGenerationResponse:
+        if self.serving_image is None:
+            return await super().create_image_variation(image_data, request, raw_request)
+        return await self.serving_image.create_image_variation(image_data, request, raw_request)
