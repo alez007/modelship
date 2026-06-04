@@ -426,7 +426,10 @@ class ModelshipAPI:
         logger.info("transcription model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file field.
-        audio_data = await request.file.read()
+        try:
+            audio_data = await request.file.read()
+        finally:
+            await request.file.close()
         request_no_file = TranscriptionRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.transcribe.options(stream=True).remote(
             audio_data, request_no_file, headers, watcher.event, req_id
@@ -444,7 +447,10 @@ class ModelshipAPI:
         logger.info("translation model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file field.
-        audio_data = await request.file.read()
+        try:
+            audio_data = await request.file.read()
+        finally:
+            await request.file.close()
         request_no_file = TranslationRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.translate.options(stream=True).remote(
             audio_data, request_no_file, headers, watcher.event, req_id
