@@ -46,6 +46,12 @@ class OpenAIServingImage:
         self.config = config
         self.img2img_pipeline = img2img_pipeline
         self.inpaint_pipeline = inpaint_pipeline
+        # Diffusers pipelines are not thread-safe and the three pipelines share
+        # the same UNet/VAE/text-encoder, so concurrent forward passes (across
+        # executor threads within a replica) would race. Serialize all GPU
+        # inference through this lock; it gates only the executor hop, so the
+        # event loop stays free while a pass runs.
+        self._gpu_lock = asyncio.Lock()
 
     async def create_image_generation(
         self, request: ImageGenerationRequest, raw_request: RawRequestProxy
@@ -87,7 +93,8 @@ class OpenAIServingImage:
         # Inference and PNG/base64 encoding are both CPU-bound; run the whole
         # chain in the executor so the event loop stays responsive.
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, _run)
+        async with self._gpu_lock:
+            response = await loop.run_in_executor(None, _run)
         logger.log(TRACE, "image response %s: num_images=%d", request_id, len(response.data))
         return response
 
@@ -162,7 +169,8 @@ class OpenAIServingImage:
             return _build_response(images, revised_prompt=request.prompt)
 
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, _run)
+        async with self._gpu_lock:
+            response = await loop.run_in_executor(None, _run)
         if isinstance(response, ImageGenerationResponse):
             logger.log(TRACE, "image edit response %s: num_images=%d", request_id, len(response.data))
         return response
@@ -202,7 +210,8 @@ class OpenAIServingImage:
             return _build_response(images, revised_prompt=None)
 
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, _run)
+        async with self._gpu_lock:
+            response = await loop.run_in_executor(None, _run)
         if isinstance(response, ImageGenerationResponse):
             logger.log(TRACE, "image variation response %s: num_images=%d", request_id, len(response.data))
         return response

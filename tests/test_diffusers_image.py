@@ -1,5 +1,8 @@
+import asyncio
 import base64
 import io
+import threading
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -33,6 +36,25 @@ class _StubPipeline:
         n = kwargs.get("num_images_per_prompt", 1)
         images = [Image.new("RGB", (8, 8), (10, 20, 30)) for _ in range(n)]
         return type("Result", (), {"images": images})()
+
+
+class _ConcurrencyProbe:
+    """Stub pipeline that records the peak number of overlapping calls."""
+
+    def __init__(self):
+        self.active = 0
+        self.max_active = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, **kwargs):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(0.05)  # widen the window so unserialized calls would overlap
+        with self._lock:
+            self.active -= 1
+        n = kwargs.get("num_images_per_prompt", 1)
+        return type("Result", (), {"images": [Image.new("RGB", (8, 8)) for _ in range(n)]})()
 
 
 def _png_bytes(w: int = 16, h: int = 16) -> bytes:
@@ -215,6 +237,18 @@ class TestImageVariation:
         request = ImageVariationRequest.model_construct(model="m", n=1, size="16x16", strength=None)
         result = await serving.create_image_variation(_png_bytes(), request, _proxy())
         assert isinstance(result, ErrorResponse)
+
+    async def test_concurrent_inference_is_serialized(self):
+        # The GPU lock must serialize pipeline forward passes — two concurrent
+        # requests should never overlap inside the (non-thread-safe) pipeline.
+        probe = _ConcurrencyProbe()
+        serving = _serving(img2img=probe)
+        request = ImageVariationRequest.model_construct(model="m", n=1, size="16x16", strength=None)
+        await asyncio.gather(
+            serving.create_image_variation(_png_bytes(), request, _proxy()),
+            serving.create_image_variation(_png_bytes(), request, _proxy()),
+        )
+        assert probe.max_active == 1
 
 
 class TestProtocolResponseFormat:
