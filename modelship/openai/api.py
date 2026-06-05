@@ -506,6 +506,9 @@ class ModelshipAPI:
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file fields.
+        # `image` is Optional on the model (to accept the `image[]` alias) but the validator
+        # guarantees it is set post-validation.
+        assert request.image is not None
         try:
             image_data = await request.image.read()
             mask_data = await request.mask.read() if request.mask is not None else None
@@ -528,6 +531,9 @@ class ModelshipAPI:
         watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_variation")
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
+        # `image` is Optional on the model (to accept the `image[]` alias) but the validator
+        # guarantees it is set post-validation.
+        assert request.image is not None
         try:
             image_data = await request.image.read()
         finally:
