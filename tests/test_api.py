@@ -266,6 +266,33 @@ class TestImageEditRoutes:
         args, _ = remote.call_args
         assert args[0] == b"IMAGE_BYTES"
 
+    def test_edit_accepts_bracketed_image_array_field(self):
+        # Open WebUI (and OpenAI's gpt-image-1 form) send the upload as `image[]`.
+        import io
+
+        from fastapi import UploadFile
+
+        from modelship.openai.protocol import ImageEditRequest
+
+        upload = UploadFile(file=io.BytesIO(b"IMAGE_BYTES"), filename="goat.png")
+        request = ImageEditRequest.model_validate({"image[]": upload, "prompt": "add a sombrero", "model": "sdxl"})
+        assert request.image is upload
+        # `image[]` must not linger as an extra (it would carry an UploadFile
+        # through model_dump and fail to serialize across the Ray boundary).
+        assert "image[]" not in request.model_dump(exclude={"image"})
+
+    def test_variation_accepts_bracketed_image_array_field(self):
+        import io
+
+        from fastapi import UploadFile
+
+        from modelship.openai.protocol import ImageVariationRequest
+
+        upload = UploadFile(file=io.BytesIO(b"IMAGE_BYTES"), filename="goat.png")
+        request = ImageVariationRequest.model_validate({"image[]": upload, "model": "sdxl"})
+        assert request.image is upload
+        assert "image[]" not in request.model_dump(exclude={"image"})
+
 
 class TestHandleResponse:
     @pytest.mark.asyncio

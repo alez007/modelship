@@ -4,6 +4,8 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -84,6 +86,11 @@ def build_app():
         logger.info("API key authentication enabled (%d key(s))", len(api_keys))
     else:
         logger.warning("API key authentication disabled (MSHIP_API_KEYS not set)")
+
+    @app.exception_handler(RequestValidationError)
+    async def log_validation_error(request: Request, exc: RequestValidationError):
+        logger.warning("%s %s -> 422 validation error: %s", request.method, request.url.path, exc.errors())
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     @app.exception_handler(HTTPException)
     async def log_http_exception(request: Request, exc: HTTPException):

@@ -513,6 +513,24 @@ class ImageGenerationRequest(OpenAIBaseModel):
     )
 
 
+def _accept_bracketed_image(data: Any) -> Any:
+    """Map the `image[]` array form key onto the singular `image` field.
+
+    OpenAI's gpt-image-1 edits/variations accept the upload as an array under
+    `image[]` (multiple input images), while the older DALL·E 2 form uses the
+    singular `image`. Clients such as Open WebUI send `image[]`; accept it and
+    take the first image (the diffusers img2img path uses a single image)."""
+    if isinstance(data, dict) and "image" not in data and "image[]" in data:
+        data = dict(data)
+        # Pop, not copy: extra="allow" would otherwise keep `image[]` as an
+        # extra attribute holding an UploadFile, which then rides along through
+        # model_dump() and fails to serialize across the Ray process boundary.
+        value = data.pop("image[]")
+        # A repeated form key may arrive as a list of uploads; take the first.
+        data["image"] = value[0] if isinstance(value, list) else value
+    return data
+
+
 class ImageEditRequest(OpenAIBaseModel):
     image: UploadFile = Field(..., description="The image to edit.")
     prompt: str = Field(..., description="A text description of the desired edit.")
@@ -532,6 +550,8 @@ class ImageEditRequest(OpenAIBaseModel):
     # applied serving-side. Documented in docs/extensions.md.
     strength: float | None = Field(default=None, ge=0.0, le=1.0)
 
+    _accept_image_array = model_validator(mode="before")(_accept_bracketed_image)
+
 
 class ImageVariationRequest(OpenAIBaseModel):
     image: UploadFile = Field(..., description="The image to use as the basis for the variation(s).")
@@ -546,6 +566,8 @@ class ImageVariationRequest(OpenAIBaseModel):
     # diverges from the input image (0.0 keeps it, 1.0 ignores it). Defaults are
     # applied serving-side. Documented in docs/extensions.md.
     strength: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    _accept_image_array = model_validator(mode="before")(_accept_bracketed_image)
 
 
 class ImageObject(OpenAIBaseModel):
