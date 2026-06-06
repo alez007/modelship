@@ -309,6 +309,19 @@ class TestStartGateway:
         assert kwargs["num_replicas"] == 3
         assert kwargs["max_ongoing_requests"] == 256
 
+    @pytest.mark.parametrize(
+        "name, value",
+        [
+            ("MSHIP_GATEWAY_REPLICAS", "0"),
+            ("MSHIP_GATEWAY_REPLICAS", "-2"),
+            ("MSHIP_GATEWAY_MAX_ONGOING", "0"),
+            ("MSHIP_GATEWAY_MAX_ONGOING", "notanint"),
+        ],
+    )
+    def test_rejects_invalid_env(self, name, value):
+        with pytest.raises(ValueError, match=name):
+            self._run({name: value})
+
 
 class TestResolvePluginWheel:
     def test_resolves_latest_wheel(self, tmp_path):
