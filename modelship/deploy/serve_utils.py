@@ -89,17 +89,24 @@ def start_serve(serve_logging_config: LoggingConfig) -> None:
 
 def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> None:
     logger.info("Starting API gateway...")
+    gateway_replicas = int(os.environ.get("MSHIP_GATEWAY_REPLICAS", "1"))
+    gateway_max_ongoing = int(os.environ.get("MSHIP_GATEWAY_MAX_ONGOING", "1024"))
     serve.run(
         ModelshipAPI.options(
             name=gateway_name,
-            num_replicas=1,
+            num_replicas=gateway_replicas,
+            max_ongoing_requests=gateway_max_ongoing,
             ray_actor_options={"num_cpus": 0},
             logging_config=serve_logging_config,
         ).bind(),
         name=gateway_name,
         route_prefix="/",
     )
-    logger.info("Gateway up — /health and /readyz now serving.")
+    logger.info(
+        "Gateway up — /health and /readyz now serving. (replicas=%d, max_ongoing=%d)",
+        gateway_replicas,
+        gateway_max_ongoing,
+    )
 
 
 def seed_expected_models(gateway_handle, yml_conf: ModelshipConfig) -> None:

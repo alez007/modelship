@@ -58,6 +58,8 @@ The following environment variables are set in the dev image with sensible defau
 | `RAY_HEAD_GPU_NUM` | *(unset)* | **Optional override:** GPUs allocated to Ray head. If unset, Ray auto-detects. |
 | `MSHIP_CACHE_DIR` | `/.cache` | Model cache directory |
 | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to skip starting a Ray head node |
+| `MSHIP_GATEWAY_REPLICAS` | `1` | Number of API gateway replicas. Raise to spread request-proxying load across processes under high concurrency. |
+| `MSHIP_GATEWAY_MAX_ONGOING` | `1024` | Per-replica Ray Serve concurrency cap for the gateway. The gateway holds a slot for the whole lifetime of each streamed response, so a low cap throttles before the engine does. |
 
 ### Installing plugin dependencies for IntelliSense
 

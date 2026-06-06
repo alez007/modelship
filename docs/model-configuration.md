@@ -72,6 +72,7 @@ python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
 | `num_replicas` | int | Number of identical Ray Serve replicas for this deployment (default `1`) |
+| `max_ongoing_requests` | int | Per-replica Ray Serve concurrency cap (default: Ray Serve's own default of `100`). Streaming requests hold a slot for the whole generation, so a low cap throttles upstream of the engine; raise it for high-concurrency models. Omit to inherit the default. |
 | `vllm_engine_kwargs` | object | Passed directly to the vLLM engine (see below) |
 | `transformers_config` | object | Transformers loader options (see below) |
 | `diffusers_config` | object | Diffusers pipeline options (see below) |

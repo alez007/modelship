@@ -109,6 +109,8 @@ class ModelshipModelConfig(BaseModel):
     num_gpus: float = 0
     num_cpus: float = 0.1
     num_replicas: int = 1
+    # Ray Serve's per-replica concurrency cap.
+    max_ongoing_requests: int | None = None
     vllm_engine_kwargs: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
     transformers_config: TransformersConfig | None = None
     diffusers_config: DiffusersConfig | None = None

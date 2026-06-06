@@ -181,6 +181,44 @@ class TestBuildDeploymentOptions:
         assert opts["ray_actor_options"]["num_gpus"] == 0.3
         assert "placement_group_bundles" not in opts
 
+    def test_max_ongoing_requests_omitted_by_default(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=1,
+        )
+        opts = build_deployment_options(config)
+        assert "max_ongoing_requests" not in opts
+
+    def test_max_ongoing_requests_forwarded_when_set(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=1,
+            max_ongoing_requests=256,
+        )
+        opts = build_deployment_options(config)
+        assert opts["max_ongoing_requests"] == 256
+
+    def test_max_ongoing_requests_forwarded_for_multi_slot(self):
+        # Multi-slot (PG) deploys carry the cap alongside placement_group_bundles.
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=2,
+            vllm_engine_kwargs=VllmEngineConfig(tensor_parallel_size=2),
+            max_ongoing_requests=64,
+        )
+        opts = build_deployment_options(config)
+        assert opts["max_ongoing_requests"] == 64
+        assert len(opts["placement_group_bundles"]) == 2
+
 
 class TestReservationTotals:
     def test_single_slot_uses_actor_options(self):
@@ -239,6 +277,37 @@ class TestRemoveApps:
             mship_deploy.remove_apps(gateway, ["a-1234567890", "b-1234567890"])
         # Both deletes attempted even though the first raised.
         assert mock_delete.call_count == 2
+
+
+class TestStartGateway:
+    def _run(self, env):
+        from modelship.deploy import serve_utils
+
+        bound = MagicMock()
+        options = MagicMock()
+        options.return_value.bind.return_value = bound
+        logging_config = MagicMock()
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.object(serve_utils.ModelshipAPI, "options", options),
+            patch.object(serve_utils.serve, "run") as mock_run,
+        ):
+            serve_utils.start_gateway("gw", logging_config)
+        return options, mock_run
+
+    def test_defaults(self):
+        # Ensure no leftover env from the ambient process leaks the assertion.
+        options, mock_run = self._run({"MSHIP_GATEWAY_REPLICAS": "1", "MSHIP_GATEWAY_MAX_ONGOING": "1024"})
+        _, kwargs = options.call_args
+        assert kwargs["num_replicas"] == 1
+        assert kwargs["max_ongoing_requests"] == 1024
+        mock_run.assert_called_once()
+
+    def test_env_overrides(self):
+        options, _ = self._run({"MSHIP_GATEWAY_REPLICAS": "3", "MSHIP_GATEWAY_MAX_ONGOING": "256"})
+        _, kwargs = options.call_args
+        assert kwargs["num_replicas"] == 3
+        assert kwargs["max_ongoing_requests"] == 256
 
 
 class TestResolvePluginWheel:
