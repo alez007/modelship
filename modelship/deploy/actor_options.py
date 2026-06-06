@@ -112,28 +112,30 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
                 config.name,
             )
         opts: dict = {"ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env}}
-    elif _world_size(config) == 1:
-        # Single slot: scalar Ray allocation. Fractional num_gpus (0 < n < 1)
-        # lets Ray pack other actors onto the same physical GPU.
-        opts = {
-            "ray_actor_options": {
-                "num_gpus": config.num_gpus,
-                "num_cpus": config.num_cpus,
-                "runtime_env": runtime_env,
-            }
-        }
     else:
-        # Multi-slot: one PG bundle per slot, STRICT_PACK keeps them on the same
-        # node (NVLink). Outer actor sits in bundle 0 with 0 GPU; vLLM's ray
-        # executor reuses the PG via get_current_placement_group() and pins each
-        # worker actor to its bundle. Each bundle requests a whole GPU, so Ray
-        # spreads across distinct physical GPUs.
-        bundles = [{"GPU": 1, "CPU": config.num_cpus} for _ in range(_world_size(config))]
-        opts = {
-            "ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env},
-            "placement_group_bundles": bundles,
-            "placement_group_strategy": "STRICT_PACK",
-        }
+        world_size = _world_size(config)
+        if world_size == 1:
+            # Single slot: scalar Ray allocation. Fractional num_gpus (0 < n < 1)
+            # lets Ray pack other actors onto the same physical GPU.
+            opts = {
+                "ray_actor_options": {
+                    "num_gpus": config.num_gpus,
+                    "num_cpus": config.num_cpus,
+                    "runtime_env": runtime_env,
+                }
+            }
+        else:
+            # Multi-slot: one PG bundle per slot, STRICT_PACK keeps them on the
+            # same node (NVLink). Outer actor sits in bundle 0 with 0 GPU; vLLM's
+            # ray executor reuses the PG via get_current_placement_group() and
+            # pins each worker actor to its bundle. Each bundle requests a whole
+            # GPU, so Ray spreads across distinct physical GPUs.
+            bundles = [{"GPU": 1, "CPU": config.num_cpus} for _ in range(world_size)]
+            opts = {
+                "ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env},
+                "placement_group_bundles": bundles,
+                "placement_group_strategy": "STRICT_PACK",
+            }
 
     # Per-model Ray Serve concurrency cap; only override the default when set.
     # The reservation helpers read only the GPU/CPU keys, so this is inert there.
