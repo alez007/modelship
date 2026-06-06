@@ -30,8 +30,16 @@ mkdir -p "$RESULTS_DIR"
 CACHE_DIR="${MSHIP_CACHE_DIR:-$REPO_ROOT/models-cache}"
 mkdir -p "$CACHE_DIR"
 
-SERVED_NAME="$(grep -m1 -E '^\s*-\s*name:' "$BENCH_DIR/configs/bench.yaml" | sed -E 's/.*name:\s*"?([^"]+)"?\s*$/\1/')"
-MODEL_ID="$(grep -m1 -E '^\s*model:' "$BENCH_DIR/configs/bench.yaml" | sed -E 's/.*model:\s*"?([^"]+)"?\s*$/\1/')"
+# Extract the first scalar matching a key regex from bench.yaml. Tolerates
+# double-quoted, single-quoted, and unquoted values: strips everything up to
+# the first colon, trims surrounding whitespace, then removes a matched pair of
+# surrounding quotes (only when both ends use the same quote char).
+yaml_scalar() {
+    grep -m1 -E "$1" "$BENCH_DIR/configs/bench.yaml" \
+        | sed -E "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*\$//; s/^(['\"])(.*)\1\$/\2/"
+}
+SERVED_NAME="$(yaml_scalar '^[[:space:]]*-[[:space:]]*name:')"
+MODEL_ID="$(yaml_scalar '^[[:space:]]*model:')"
 [[ -n "$MODEL_ID" && -n "$SERVED_NAME" ]] || { echo "failed to parse bench.yaml" >&2; exit 2; }
 
 cleanup() {
