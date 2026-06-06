@@ -81,7 +81,10 @@ start_mem_sampler() {
         while :; do
             local ts vram cmem
             ts=$(date +%s)
-            vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+            # || true: under pipefail+set -e a failing nvidia-smi/docker stats
+            # would otherwise abort this backgrounded subshell and silently stop
+            # sampling. Empty values fall back to 0 in the printf below.
+            vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ') || true
             # Mem usage like "1.234GiB / 64GiB" — take first field, normalize to MiB.
             cmem=$(docker stats --no-stream --format '{{.MemUsage}}' "$container" 2>/dev/null \
                 | awk -F'/' '{print $1}' \
@@ -93,7 +96,7 @@ start_mem_sampler() {
                     else if (u=="KiB") v/=1024;
                     else if (u=="B")   v/=1048576;
                     printf "%.1f", v
-                  }')
+                  }') || true
             printf '%s\t%s\t%s\n' "${ts:-0}" "${vram:-0}" "${cmem:-0}" >> "$out"
             sleep 1
         done
@@ -113,8 +116,11 @@ vram_gate() {
     local deadline=$(( $(date +%s) + 60 ))
     while (( $(date +%s) < deadline )); do
         local used
-        used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
-        if (( used < 500 )); then return 0; fi
+        # tr -dc digits → "" when nvidia-smi is missing, errors, or prints
+        # non-numeric output; || true keeps pipefail+set -e from aborting the
+        # run. Guard the arithmetic so an empty operand isn't a syntax error.
+        used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9') || true
+        if [[ -n "$used" ]] && (( used < 500 )); then return 0; fi
         sleep 1
     done
     echo "warn: VRAM not freed within 60s" >&2
