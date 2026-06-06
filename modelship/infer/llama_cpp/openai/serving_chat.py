@@ -345,8 +345,14 @@ class OpenAIServingChat(OpenAIServing):
             params["max_tokens"] = params["max_completion_tokens"]
         params.pop("max_completion_tokens", None)
         # These are consumed by our renderer/parser, not by `create_completion`.
-        # (logprobs/top_logprobs are rejected up front in create_chat_completion.)
         for k in ("messages", "tools", "tool_choice", "stream", "stream_options"):
+            params.pop(k, None)
+        # logprobs/top_logprobs are rejected up front in create_chat_completion when
+        # truthy, but `model_dump(exclude_none=True)` still keeps their falsy defaults
+        # (False / 0). `create_completion` accepts `logprobs` (Optional[int]), so a
+        # leftover `logprobs=False` is `not None` and triggers needless logprob work
+        # in llama-cpp-python. Drop both unconditionally.
+        for k in ("logprobs", "top_logprobs"):
             params.pop(k, None)
 
         grammar = build_llama_grammar(params.pop("response_format", None))
