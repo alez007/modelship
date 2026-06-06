@@ -82,6 +82,18 @@ class OpenAIServingChat(OpenAIServing):
         request_id = f"{self.request_id_prefix}-{base_request_id(raw_request)}"
         logger.info("chat completion request %s: stream=%s", request_id, request.stream)
 
+        # llama.cpp can produce token logprobs, but the modelship wrapper does
+        # not yet thread them into the OpenAI `choices[].logprobs` response.
+        # Reject explicitly rather than silently dropping the request fields,
+        # which used to leave clients waiting for logprobs that never arrived.
+        if request.logprobs or request.top_logprobs:
+            msg = (
+                "logprobs / top_logprobs are not yet supported on the llama.cpp loader. "
+                "Resend the request without them."
+            )
+            logger.warning("chat request %s rejected: %s", request_id, msg)
+            return create_error_response(msg)
+
         try:
             messages = normalize_chat_messages(
                 request.messages,
@@ -333,9 +345,8 @@ class OpenAIServingChat(OpenAIServing):
             params["max_tokens"] = params["max_completion_tokens"]
         params.pop("max_completion_tokens", None)
         # These are consumed by our renderer/parser, not by `create_completion`.
+        # (logprobs/top_logprobs are rejected up front in create_chat_completion.)
         for k in ("messages", "tools", "tool_choice", "stream", "stream_options"):
-            params.pop(k, None)
-        for k in ("logprobs", "top_logprobs"):
             params.pop(k, None)
 
         grammar = build_llama_grammar(params.pop("response_format", None))
