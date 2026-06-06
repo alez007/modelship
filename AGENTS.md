@@ -93,6 +93,11 @@ The Docker image's `CMD` (`scripts/start.sh`) starts the Ray head (auto-detectin
 
 Commit messages matter: use Conventional Commits prefixes so the changelog generator picks them up.
 
+## Working with git
+
+- **The maintainer pushes; agents don't.** Create branches and commits locally, but leave `git push` to the human (this environment has no `ssh`, and the remote is SSH anyway). Hand back the branch name and let them push and open the PR.
+- **Never amend; always add a new commit.** Don't `git commit --amend` (or rebase/squash) unless explicitly asked. Follow-up work — review feedback, refactors, even bug fixes to a just-made commit — goes in its own commit stacked on top of the original, so history stays reviewable.
+
 ## Gotchas
 
 - `config/models.yaml` is gitignored; `mship_deploy.py` errors out with a pointer to `config/examples/` if missing.

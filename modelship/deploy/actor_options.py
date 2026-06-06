@@ -88,7 +88,8 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
     Always contains ``ray_actor_options``; for multi-slot vLLM deploys also
     contains ``placement_group_bundles`` and ``placement_group_strategy`` so
     Ray Serve allocates one whole-GPU bundle per slot and vLLM's ray executor
-    inherits the PG.
+    inherits the PG. When the model config sets ``max_ongoing_requests`` it is
+    forwarded as the per-replica Ray Serve concurrency cap.
     """
     env_vars = build_cache_env_vars()
     for log_var in _LOG_PASSTHROUGH_ENV_VARS:
@@ -110,29 +111,34 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
                 config.num_gpus,
                 config.name,
             )
-        return {"ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env}}
-
-    world_size = _world_size(config)
-
-    if world_size == 1:
-        # Single slot: scalar Ray allocation. Fractional num_gpus (0 < n < 1)
-        # lets Ray pack other actors onto the same physical GPU.
-        return {
-            "ray_actor_options": {
-                "num_gpus": config.num_gpus,
-                "num_cpus": config.num_cpus,
-                "runtime_env": runtime_env,
+        opts: dict = {"ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env}}
+    else:
+        world_size = _world_size(config)
+        if world_size == 1:
+            # Single slot: scalar Ray allocation. Fractional num_gpus (0 < n < 1)
+            # lets Ray pack other actors onto the same physical GPU.
+            opts = {
+                "ray_actor_options": {
+                    "num_gpus": config.num_gpus,
+                    "num_cpus": config.num_cpus,
+                    "runtime_env": runtime_env,
+                }
             }
-        }
+        else:
+            # Multi-slot: one PG bundle per slot, STRICT_PACK keeps them on the
+            # same node (NVLink). Outer actor sits in bundle 0 with 0 GPU; vLLM's
+            # ray executor reuses the PG via get_current_placement_group() and
+            # pins each worker actor to its bundle. Each bundle requests a whole
+            # GPU, so Ray spreads across distinct physical GPUs.
+            bundles = [{"GPU": 1, "CPU": config.num_cpus} for _ in range(world_size)]
+            opts = {
+                "ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env},
+                "placement_group_bundles": bundles,
+                "placement_group_strategy": "STRICT_PACK",
+            }
 
-    # Multi-slot: one PG bundle per slot, STRICT_PACK keeps them on the same
-    # node (NVLink). Outer actor sits in bundle 0 with 0 GPU; vLLM's ray
-    # executor reuses the PG via get_current_placement_group() and pins each
-    # worker actor to its bundle. Each bundle requests a whole GPU, so Ray
-    # spreads across distinct physical GPUs.
-    bundles = [{"GPU": 1, "CPU": config.num_cpus} for _ in range(world_size)]
-    return {
-        "ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env},
-        "placement_group_bundles": bundles,
-        "placement_group_strategy": "STRICT_PACK",
-    }
+    # Per-model Ray Serve concurrency cap; only override the default when set.
+    # The reservation helpers read only the GPU/CPU keys, so this is inert there.
+    if config.max_ongoing_requests is not None:
+        opts["max_ongoing_requests"] = config.max_ongoing_requests
+    return opts

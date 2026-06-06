@@ -87,19 +87,44 @@ def start_serve(serve_logging_config: LoggingConfig) -> None:
     )
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    """Read an env var as an int >= 1, failing fast with a clear message.
+
+    Ray Serve rejects num_replicas / max_ongoing_requests < 1 deep in
+    deployment, so validate up front to surface the misconfiguration plainly.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1, got {value}")
+    return value
+
+
 def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> None:
     logger.info("Starting API gateway...")
+    gateway_replicas = _positive_int_env("MSHIP_GATEWAY_REPLICAS", 1)
+    gateway_max_ongoing = _positive_int_env("MSHIP_GATEWAY_MAX_ONGOING", 1024)
     serve.run(
         ModelshipAPI.options(
             name=gateway_name,
-            num_replicas=1,
+            num_replicas=gateway_replicas,
+            max_ongoing_requests=gateway_max_ongoing,
             ray_actor_options={"num_cpus": 0},
             logging_config=serve_logging_config,
         ).bind(),
         name=gateway_name,
         route_prefix="/",
     )
-    logger.info("Gateway up — /health and /readyz now serving.")
+    logger.info(
+        "Gateway up — /health and /readyz now serving. (replicas=%d, max_ongoing=%d)",
+        gateway_replicas,
+        gateway_max_ongoing,
+    )
 
 
 def seed_expected_models(gateway_handle, yml_conf: ModelshipConfig) -> None:
