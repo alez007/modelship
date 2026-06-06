@@ -1,0 +1,16 @@
+models:
+  - name: "llm"
+    model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    usecase: "generate"
+    loader: "vllm"
+    num_gpus: 0.9
+    # Lift Ray Serve's per-replica concurrency cap (default 100) so the model
+    # deployment isn't the bottleneck during the sweep.
+    max_ongoing_requests: 256
+    vllm_engine_kwargs:
+      tensor_parallel_size: 1
+      max_model_len: 8192
+      # Keep this equal to num_gpus: for fractional num_gpus modelship overrides
+      # gpu_memory_utilization to num_gpus, so a different value here would make
+      # the raw-vLLM phase (which reads this field verbatim) an unfair comparison.
+      gpu_memory_utilization: 0.9
