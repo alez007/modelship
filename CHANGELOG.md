@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] - 2026-06-06
+
+### Added
+- make Ray Serve concurrency caps configurable
+- default usecase to image and reject non-image
+- /v1/images/edits and /v1/images/variations
+- vision / image_url input support
+- structured outputs + tools/response_format compat gate
+- enforce tools-supersede-response_format precedence
+- extend hardware-aware preflight to llama_cpp loader
+- qwen3-coder tool parser and custom-loader preflight
+
+### Fixed
+- robust memory-unit parsing for docker stats output
+- tolerate single/unquoted yaml values when parsing bench.yaml
+- guard nvidia-smi/docker stats against pipefail+set -e
+- validate gateway concurrency env vars are positive ints
+- accept Open WebUI image[] edit uploads and log 422s
+- guard getextrema and soften alpha mask edges
+- serialize GPU inference with an asyncio lock
+- force image decode so truncated uploads error cleanly
+- tolerate from_pipe failures for img2img/inpaint
+- decode images in executor and honor alpha masks
+- release all shared pipelines on teardown
+- swap edit/variation default strengths
+- close audio upload files after reading
+- close image upload files after reading
+- use input image alpha as mask on edits
+- emit task field on verbose transcription/translation responses
+- drop max_completion_tokens after mapping to max_tokens
+- unwrap numpy arrays from gguf ReaderField.contents()
+- cap llama_cpp n_ctx when GGUF omits context_length
+- accept `call <name>` (whitespace) in addition to `call:<name>`
+- account for PG bundle CPUs in coordinator reservation
+- strip only structural JSON suffix in streamed args
+
+### Changed
+- add modelship vs raw vLLM A/B benchmark harness
+- record push ownership and no-amend commit policy
+- compute _world_size once in build_deployment_options
+- declare image[] as an explicit aliased field
+- move teardown into shutdown(), delegate from __del__
+- decode edit input image only once
+- load uploaded edit mask as grayscale
+- run image PNG/base64 encoding in the executor
+- tighten protocol shapes to OpenAI spec
+- cache the json_object LlamaGrammar
+- drop tools/response_format precedence validator
+- always use ray placement groups for multi-slot deploys
+
 ## [0.1.36] - 2026-05-14
 
 ### Added
