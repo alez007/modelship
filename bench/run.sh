@@ -93,17 +93,27 @@ start_mem_sampler() {
             # would otherwise abort this backgrounded subshell and silently stop
             # sampling. Empty values fall back to 0 in the printf below.
             vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ') || true
-            # Mem usage like "1.234GiB / 64GiB" — take first field, normalize to MiB.
+            # Mem usage like "1.234GiB / 64GiB" — take first field, normalize to
+            # MiB. Handle binary (GiB/MiB/KiB) and decimal (GB/MB/KB) units,
+            # any case, with or without a space before the unit; unknown units
+            # fall back to assuming the value is already in MiB.
             cmem=$(docker stats --no-stream --format '{{.MemUsage}}' "$container" 2>/dev/null \
                 | awk -F'/' '{print $1}' \
                 | awk '{
-                    v=$1; u=$1;
-                    sub(/[0-9.]+/,"",u); sub(/[A-Za-z]+$/,"",v);
-                    if (u=="GiB") v*=1024;
-                    else if (u=="MiB") v*=1;
-                    else if (u=="KiB") v/=1024;
-                    else if (u=="B")   v/=1048576;
-                    printf "%.1f", v
+                    s=$0; gsub(/[[:space:]]/,"",s);   # e.g. "1.234GiB"
+                    num=s; unit=s;
+                    sub(/[A-Za-z]+$/,"",num);         # numeric part
+                    sub(/^[0-9.]+/,"",unit);          # unit part
+                    U=toupper(unit);
+                    base=(U ~ /I/)?1024:1000;         # *iB binary, *B decimal
+                    p=substr(U,1,1);
+                    if      (p=="T") mib=num*base*base*base*base/1048576;
+                    else if (p=="G") mib=num*base*base*base/1048576;
+                    else if (p=="M") mib=num*base*base/1048576;
+                    else if (p=="K") mib=num*base/1048576;
+                    else if (U=="B") mib=num/1048576;
+                    else             mib=num;         # unknown/unitless: assume MiB
+                    printf "%.1f", mib
                   }') || true
             printf '%s\t%s\t%s\n' "${ts:-0}" "${vram:-0}" "${cmem:-0}" >> "$out"
             sleep 1
