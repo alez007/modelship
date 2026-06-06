@@ -231,10 +231,13 @@ class TestImageEditRoutes:
         image_data, mask_data, request_no_file = args[0], args[1], args[2]
         assert image_data == b"IMAGE_BYTES"
         assert mask_data == b"MASK_BYTES"
-        # The UploadFile must not cross the boundary; bytes are passed separately.
+        # No UploadFile may cross the boundary; the image/mask fields are dropped
+        # to None and the bytes are passed separately. (image[] is exclude=True,
+        # so it never appears in the dump regardless.)
         dumped = request_no_file.model_dump()
-        assert "image" not in dumped
+        assert dumped.get("image") is None
         assert dumped.get("mask") is None
+        assert "image[]" not in dumped and "image_array" not in dumped
         handle_response.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -265,6 +268,83 @@ class TestImageEditRoutes:
 
         args, _ = remote.call_args
         assert args[0] == b"IMAGE_BYTES"
+
+
+class TestImageFormDecomposition:
+    """Exercise the request models through FastAPI's real multipart/form-data
+    decomposition (not a direct model_validate), since that is what Open WebUI
+    hits and where the `image[]` array field must be picked up."""
+
+    @staticmethod
+    def _client():
+        import io
+        from typing import Annotated
+
+        from fastapi import FastAPI, Form, Request
+        from fastapi.testclient import TestClient
+
+        from modelship.openai.protocol import ImageEditRequest, ImageVariationRequest
+
+        app = FastAPI()
+
+        @app.post("/v1/images/edits")
+        async def edit(request: Annotated[ImageEditRequest, Form()], raw: Request):
+            return {
+                "image": request.image.filename if request.image else None,
+                # The UploadFile must never survive into model_dump (it would
+                # fail to serialize across the Ray process boundary).
+                "image_keys_in_dump": [k for k in request.model_dump(exclude={"image", "mask"}) if "image" in k],
+            }
+
+        @app.post("/v1/images/variations")
+        async def variation(request: Annotated[ImageVariationRequest, Form()], raw: Request):
+            return {
+                "image": request.image.filename if request.image else None,
+                "image_keys_in_dump": [k for k in request.model_dump(exclude={"image"}) if "image" in k],
+            }
+
+        return TestClient(app), io
+
+    def test_edit_accepts_bracketed_image_array_field(self):
+        # Open WebUI (and OpenAI's gpt-image-1 form) send the upload as `image[]`.
+        client, io = self._client()
+        resp = client.post(
+            "/v1/images/edits",
+            data={"prompt": "add a sombrero", "model": "sdxl"},
+            files={"image[]": ("goat.png", io.BytesIO(b"IMAGE_BYTES"), "image/png")},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["image"] == "goat.png"
+        assert body["image_keys_in_dump"] == []
+
+    def test_edit_accepts_singular_image_field(self):
+        # The legacy DALL·E 2 singular `image` form must keep working.
+        client, io = self._client()
+        resp = client.post(
+            "/v1/images/edits",
+            data={"prompt": "add a sombrero", "model": "sdxl"},
+            files={"image": ("goat.png", io.BytesIO(b"IMAGE_BYTES"), "image/png")},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["image"] == "goat.png"
+
+    def test_edit_missing_image_is_422(self):
+        client, _ = self._client()
+        resp = client.post("/v1/images/edits", data={"prompt": "add a sombrero", "model": "sdxl"})
+        assert resp.status_code == 422
+
+    def test_variation_accepts_bracketed_image_array_field(self):
+        client, io = self._client()
+        resp = client.post(
+            "/v1/images/variations",
+            data={"model": "sdxl"},
+            files={"image[]": ("goat.png", io.BytesIO(b"IMAGE_BYTES"), "image/png")},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["image"] == "goat.png"
+        assert body["image_keys_in_dump"] == []
 
 
 class TestHandleResponse:

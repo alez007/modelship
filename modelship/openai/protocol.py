@@ -513,8 +513,37 @@ class ImageGenerationRequest(OpenAIBaseModel):
     )
 
 
+# Type for the OpenAI `image[]` array field: a single upload, a list of uploads
+# (the spec allows several), or absent. Declared as an explicit aliased field on
+# the request models below rather than relying on extra-field forwarding.
+_ImageArray = UploadFile | list[UploadFile] | None
+
+
+def _coalesce_image_array(image: UploadFile | None, image_array: _ImageArray) -> UploadFile:
+    """Fold the OpenAI `image[]` array form onto the singular `image`.
+
+    OpenAI's gpt-image-1 edits/variations accept the upload as an array under
+    `image[]` (multiple input images), while the older DALL·E 2 form uses the
+    singular `image`. Clients such as Open WebUI send `image[]`. Prefer an
+    explicit `image`; otherwise take the first `image[]` entry (the diffusers
+    img2img path uses a single image). Raise if neither was supplied."""
+    if image is not None:
+        return image
+    if isinstance(image_array, list):
+        image_array = image_array[0] if image_array else None
+    if image_array is None:
+        raise ValueError("Field required: provide 'image' (or 'image[]')")
+    return image_array
+
+
 class ImageEditRequest(OpenAIBaseModel):
-    image: UploadFile = Field(..., description="The image to edit.")
+    image: UploadFile | None = Field(default=None, description="The image to edit.")
+    # OpenAI gpt-image-1 sends the upload as the array field `image[]`; declare it
+    # explicitly (aliased) so FastAPI's form decomposition extracts it without
+    # depending on extra-field forwarding. exclude=True keeps the UploadFile out
+    # of model_dump() so it never crosses the Ray process boundary; the validator
+    # folds it into `image`.
+    image_array: _ImageArray = Field(default=None, alias="image[]", exclude=True)
     prompt: str = Field(..., description="A text description of the desired edit.")
     mask: UploadFile | None = Field(
         default=None,
@@ -532,9 +561,16 @@ class ImageEditRequest(OpenAIBaseModel):
     # applied serving-side. Documented in docs/extensions.md.
     strength: float | None = Field(default=None, ge=0.0, le=1.0)
 
+    @model_validator(mode="after")
+    def _accept_image_array(self) -> "ImageEditRequest":
+        self.image = _coalesce_image_array(self.image, self.image_array)
+        self.image_array = None
+        return self
+
 
 class ImageVariationRequest(OpenAIBaseModel):
-    image: UploadFile = Field(..., description="The image to use as the basis for the variation(s).")
+    image: UploadFile | None = Field(default=None, description="The image to use as the basis for the variation(s).")
+    image_array: _ImageArray = Field(default=None, alias="image[]", exclude=True)
     model: str = Field(..., description="The model to use for image variations.")
     n: int = Field(default=1, ge=1, le=10, description="The number of variations to generate.")
     size: str = Field(default="512x512", description="The size of the generated images in WxH format.")
@@ -546,6 +582,12 @@ class ImageVariationRequest(OpenAIBaseModel):
     # diverges from the input image (0.0 keeps it, 1.0 ignores it). Defaults are
     # applied serving-side. Documented in docs/extensions.md.
     strength: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _accept_image_array(self) -> "ImageVariationRequest":
+        self.image = _coalesce_image_array(self.image, self.image_array)
+        self.image_array = None
+        return self
 
 
 class ImageObject(OpenAIBaseModel):

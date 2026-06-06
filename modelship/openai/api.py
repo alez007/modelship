@@ -4,6 +4,8 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -84,6 +86,11 @@ def build_app():
         logger.info("API key authentication enabled (%d key(s))", len(api_keys))
     else:
         logger.warning("API key authentication disabled (MSHIP_API_KEYS not set)")
+
+    @app.exception_handler(RequestValidationError)
+    async def log_validation_error(request: Request, exc: RequestValidationError):
+        logger.warning("%s %s -> 422 validation error: %s", request.method, request.url.path, exc.errors())
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     @app.exception_handler(HTTPException)
     async def log_http_exception(request: Request, exc: HTTPException):
@@ -499,6 +506,9 @@ class ModelshipAPI:
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file fields.
+        # `image` is Optional on the model (to accept the `image[]` alias) but the validator
+        # guarantees it is set post-validation.
+        assert request.image is not None
         try:
             image_data = await request.image.read()
             mask_data = await request.mask.read() if request.mask is not None else None
@@ -521,6 +531,9 @@ class ModelshipAPI:
         watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_variation")
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
+        # `image` is Optional on the model (to accept the `image[]` alias) but the validator
+        # guarantees it is set post-validation.
+        assert request.image is not None
         try:
             image_data = await request.image.read()
         finally:
