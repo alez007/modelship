@@ -28,7 +28,7 @@ class ErrorResponse(OpenAIBaseModel):
 def create_error_response(
     message: str | Exception,
     err_type: str = "invalid_request_error",
-    status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
+    status_code: HTTPStatus | int = HTTPStatus.BAD_REQUEST,
     param: str | None = None,
     code: str | None = None,
 ) -> ErrorResponse:
@@ -56,7 +56,7 @@ def create_error_response(
             param=param,
         )
     )
-    resp._http_status = status_code.value
+    resp._http_status = int(status_code)
     return resp
 
 

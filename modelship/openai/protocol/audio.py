@@ -25,7 +25,9 @@ class TranscriptionRequest(OpenAIBaseModel):
     language: str | None = None
     prompt: str = Field(default="")
     response_format: AudioResponseFormat = Field(default="json")
-    timestamp_granularities: list[Literal["word", "segment"]] = Field(alias="timestamp_granularities[]", default=[])
+    timestamp_granularities: list[Literal["word", "segment"]] = Field(
+        alias="timestamp_granularities[]", default_factory=list
+    )
     stream: bool | None = False
     temperature: float = Field(default=0.0)
     # modelship extension (not in OpenAI spec) — used for deterministic sampling
