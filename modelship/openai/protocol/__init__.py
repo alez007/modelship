@@ -71,6 +71,21 @@ from modelship.openai.protocol.raw import (
     RawTranscription,
     RawTranslation,
 )
+from modelship.openai.protocol.responses import (
+    ResponseFunctionToolCall,
+    ResponseInputItem,
+    ResponseInputTokensDetails,
+    ResponseObject,
+    ResponseOutputItem,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseOutputTokensDetails,
+    ResponseReasoningItem,
+    ResponseReasoningSummary,
+    ResponseReasoningText,
+    ResponsesRequest,
+    ResponseUsage,
+)
 from modelship.openai.protocol.usage import PromptTokenUsageInfo, UsageInfo
 
 __all__ = [
@@ -109,6 +124,19 @@ __all__ = [
     "RawToolCall",
     "RawTranscription",
     "RawTranslation",
+    "ResponseFunctionToolCall",
+    "ResponseInputItem",
+    "ResponseInputTokensDetails",
+    "ResponseObject",
+    "ResponseOutputItem",
+    "ResponseOutputMessage",
+    "ResponseOutputText",
+    "ResponseOutputTokensDetails",
+    "ResponseReasoningItem",
+    "ResponseReasoningSummary",
+    "ResponseReasoningText",
+    "ResponseUsage",
+    "ResponsesRequest",
     "SpeechRequest",
     "SpeechResponse",
     "StreamOptions",
