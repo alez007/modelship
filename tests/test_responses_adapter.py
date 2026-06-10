@@ -6,7 +6,9 @@ from modelship.openai.protocol import (
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
     ChatMessage,
+    CompletionTokenUsageInfo,
     FunctionCall,
+    PromptTokenUsageInfo,
     ResponsesRequest,
     ToolCall,
     UsageInfo,
@@ -129,6 +131,12 @@ class TestRequestRejections:
         with pytest.raises(UnsupportedResponsesFeatureError, match="hosted tool"):
             responses_request_to_chat(_req(tools=[{"type": "web_search"}]))
 
+    def test_text_format_as_string_rejected(self):
+        # A malformed text.format (string instead of object) must be a clean
+        # 400, not an AttributeError -> 500.
+        with pytest.raises(UnsupportedResponsesFeatureError, match="must be an object"):
+            responses_request_to_chat(_req(text={"format": "json_object"}))
+
     def test_store_true_is_accepted(self):
         # store defaults to true on OpenAI; we accept-but-don't-persist rather than reject.
         chat = responses_request_to_chat(_req(store=True))
@@ -185,10 +193,44 @@ class TestResponseTranslation:
         assert resp.usage.output_tokens == 7
         assert resp.usage.total_tokens == 12
 
+    def test_token_details_propagated_when_present(self):
+        # vLLM (prefix caching / reasoning models) reports these; they must
+        # reach the client, not be discarded.
+        chat = ChatCompletionResponse(
+            model="m",
+            choices=[
+                ChatCompletionResponseChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content="x"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=UsageInfo(
+                prompt_tokens=5,
+                completion_tokens=7,
+                total_tokens=12,
+                prompt_tokens_details=PromptTokenUsageInfo(cached_tokens=3),
+                completion_tokens_details=CompletionTokenUsageInfo(reasoning_tokens=4),
+            ),
+        )
+        resp = chat_response_to_responses(chat, _req())
+        assert resp.usage.input_tokens_details.cached_tokens == 3
+        assert resp.usage.output_tokens_details.reasoning_tokens == 4
+
+    def test_token_details_default_zero_when_absent(self):
+        resp = chat_response_to_responses(_chat_response(content="x"), _req())
+        assert resp.usage.input_tokens_details.cached_tokens == 0
+        assert resp.usage.output_tokens_details.reasoning_tokens == 0
+
     def test_length_finish_reason_is_incomplete(self):
         resp = chat_response_to_responses(_chat_response(content="x", finish_reason="length"), _req())
         assert resp.status == "incomplete"
         assert resp.incomplete_details == {"reason": "max_output_tokens"}
+
+    def test_content_filter_finish_reason_is_incomplete(self):
+        resp = chat_response_to_responses(_chat_response(content="x", finish_reason="content_filter"), _req())
+        assert resp.status == "incomplete"
+        assert resp.incomplete_details == {"reason": "content_filter"}
 
     def test_store_always_false_and_settings_echoed(self):
         resp = chat_response_to_responses(

@@ -39,6 +39,7 @@ from modelship.openai.protocol.responses.schemas import (
     ResponsesRequest,
     ResponseUsage,
 )
+from modelship.openai.protocol.usage import UsageInfo
 
 
 class UnsupportedResponsesFeatureError(ValueError):
@@ -198,6 +199,10 @@ def _response_format_from_text(text: dict[str, Any] | None) -> dict[str, Any] | 
     fmt = text.get("format")
     if not fmt:
         return None
+    if not isinstance(fmt, dict):
+        raise UnsupportedResponsesFeatureError(
+            f"text.format must be an object with a 'type' field, got {type(fmt).__name__}."
+        )
     ftype = fmt.get("type")
     if ftype == "json_schema":
         # Responses flattens name/schema/strict; chat nests them under json_schema.
@@ -235,19 +240,11 @@ def chat_response_to_responses(chat: ChatCompletionResponse, request: ResponsesR
 
     status, incomplete = _status_for(choice.finish_reason)
 
-    usage = ResponseUsage(
-        input_tokens=chat.usage.prompt_tokens,
-        output_tokens=chat.usage.completion_tokens or 0,
-        total_tokens=chat.usage.total_tokens,
-        input_tokens_details=ResponseInputTokensDetails(cached_tokens=0),
-        output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0),
-    )
-
     return ResponseObject(
         model=chat.model,
         status=status,
         output=output,
-        usage=usage,
+        usage=_usage_from_chat(chat.usage),
         incomplete_details=incomplete,
         # Echo the request settings OpenAI returns on the response object.
         instructions=request.instructions,
@@ -264,9 +261,38 @@ def chat_response_to_responses(chat: ChatCompletionResponse, request: ResponsesR
     )
 
 
+def _usage_from_chat(usage: UsageInfo) -> ResponseUsage:
+    """Remap chat usage to Responses usage, preserving token details.
+
+    ``cached_tokens`` / ``reasoning_tokens`` are surfaced by vLLM (prefix
+    caching / reasoning models) under the OpenAI-standard ``prompt_tokens_details``
+    / ``completion_tokens_details``. Responses uses the same sub-field names, so
+    this is a direct field-to-field copy; loaders that report no details
+    (llama_cpp/transformers) leave them at the zero default.
+    """
+    prompt_details = usage.prompt_tokens_details
+    completion_details = usage.completion_tokens_details
+    return ResponseUsage(
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens or 0,
+        total_tokens=usage.total_tokens,
+        input_tokens_details=ResponseInputTokensDetails(
+            cached_tokens=(prompt_details.cached_tokens or 0) if prompt_details else 0
+        ),
+        output_tokens_details=ResponseOutputTokensDetails(
+            reasoning_tokens=(completion_details.reasoning_tokens or 0) if completion_details else 0
+        ),
+    )
+
+
 def _status_for(
     finish_reason: str | None,
 ) -> tuple[Literal["completed", "incomplete"], dict[str, Any] | None]:
+    # chat finish_reason -> Responses status + incomplete_details.reason.
+    # The Responses spec's incomplete_details.reason enum is
+    # {max_output_tokens, content_filter}.
     if finish_reason == "length":
         return "incomplete", {"reason": "max_output_tokens"}
+    if finish_reason == "content_filter":
+        return "incomplete", {"reason": "content_filter"}
     return "completed", None

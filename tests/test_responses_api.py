@@ -77,6 +77,17 @@ class TestResponsesRoute:
         assert "previous_response_id" in body["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_invalid_param_returns_400_not_500(self, api):
+        # An invalid reasoning.effort fails when constructing the
+        # ChatCompletionRequest (pydantic ValidationError, not a ValueError);
+        # the route must convert it to a 400, not let it 500.
+        request = ResponsesRequest(model="m", input="hi", reasoning={"effort": "turbo"})
+        result = await api.create_response(request, _raw_request())
+        assert result.status_code == 400
+        body = json.loads(bytes(result.body))
+        assert body["error"]["type"] == "invalid_request_error"
+
+    @pytest.mark.asyncio
     async def test_end_to_end_adaptation_through_handle_response(self, api):
         # Drive the real _handle_response with a mock generator yielding a chat
         # response, and assert the body comes back in Responses shape.

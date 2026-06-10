@@ -86,7 +86,7 @@ from modelship.openai.protocol.responses import (
     ResponsesRequest,
     ResponseUsage,
 )
-from modelship.openai.protocol.usage import PromptTokenUsageInfo, UsageInfo
+from modelship.openai.protocol.usage import CompletionTokenUsageInfo, PromptTokenUsageInfo, UsageInfo
 
 __all__ = [
     "AudioResponseFormat",
@@ -100,6 +100,7 @@ __all__ = [
     "ChatCompletionResponseStreamChoice",
     "ChatCompletionStreamResponse",
     "ChatMessage",
+    "CompletionTokenUsageInfo",
     "DeltaFunctionCall",
     "DeltaMessage",
     "DeltaToolCall",

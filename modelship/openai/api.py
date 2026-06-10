@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from ray import serve
 from ray.exceptions import RayTaskError
 from ray.serve.handle import DeploymentHandle
@@ -449,6 +449,11 @@ class ModelshipAPI:
             chat_request = responses_request_to_chat(request)
         except UnsupportedResponsesFeatureError as e:
             return _error_response(create_error_response(e))
+        except ValidationError as e:
+            # Translating into ChatCompletionRequest can surface invalid params
+            # (e.g. a bad reasoning.effort value) as a pydantic ValidationError,
+            # which is not a ValueError — return a 400 rather than a generic 500.
+            return _error_response(_validation_error_from_cause(e))
 
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, model=model, endpoint="create_response")
