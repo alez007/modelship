@@ -63,15 +63,24 @@ class TestSseParsing:
     def test_parses_data_chunk(self):
         chunk = _chunk(DeltaMessage(content="hi"))
         raw = f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
-        parsed = _parse_chat_sse(raw)
-        assert parsed is not None
-        assert parsed.choices[0].delta.content == "hi"
+        parsed = list(_parse_chat_sse(raw))
+        assert len(parsed) == 1
+        assert parsed[0].choices[0].delta.content == "hi"
 
-    def test_done_sentinel_is_none(self):
-        assert _parse_chat_sse("data: [DONE]\n\n") is None
+    def test_done_sentinel_yields_nothing(self):
+        assert list(_parse_chat_sse("data: [DONE]\n\n")) == []
 
-    def test_non_data_line_is_none(self):
-        assert _parse_chat_sse(": keep-alive\n\n") is None
+    def test_non_data_line_yields_nothing(self):
+        assert list(_parse_chat_sse(": keep-alive\n\n")) == []
+
+    def test_bundled_messages_all_parsed(self):
+        # A single raw string may bundle several SSE messages; every data line
+        # must be parsed (not just the first), [DONE] skipped.
+        a = json.dumps(_chunk(DeltaMessage(content="a")).model_dump(mode="json"))
+        b = json.dumps(_chunk(DeltaMessage(content="b")).model_dump(mode="json"))
+        raw = f"data: {a}\n\ndata: {b}\n\ndata: [DONE]\n\n"
+        parsed = list(_parse_chat_sse(raw))
+        assert [c.choices[0].delta.content for c in parsed] == ["a", "b"]
 
 
 class TestTextStream:
