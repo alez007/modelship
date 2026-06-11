@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A/B benchmark: modelship vLLM loader vs raw vLLM, same image, same config.
 # Usage: bench/run.sh [--image TAG] [--num-prompts N] [--concurrency N] [--input-len N] [--output-len N]
+#                     [--num-warmups N] [--repeats N]
 set -euo pipefail
 
 IMAGE="${IMAGE:-modelship:prod}"
@@ -8,6 +9,13 @@ NUM_PROMPTS=100
 CONCURRENCY=8
 INPUT_LEN=128
 OUTPUT_LEN=512
+# Warmup requests sent (and discarded) before timing begins. Warms CUDA graph
+# capture / lazy compilation so the first few real requests don't eat a
+# multi-second cold-start tail that skews mean/p99 TTFT and throughput.
+NUM_WARMUPS=20
+# Timed sweeps per stack. We report the median across repeats so a single cold
+# or noisy run can't dominate; tail metrics on one ~100-prompt run are unstable.
+REPEATS=3
 READY_TIMEOUT=900
 
 while [[ $# -gt 0 ]]; do
@@ -17,6 +25,8 @@ while [[ $# -gt 0 ]]; do
         --concurrency) CONCURRENCY="$2"; shift 2 ;;
         --input-len) INPUT_LEN="$2"; shift 2 ;;
         --output-len) OUTPUT_LEN="$2"; shift 2 ;;
+        --num-warmups) NUM_WARMUPS="$2"; shift 2 ;;
+        --repeats) REPEATS="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -146,9 +156,8 @@ vram_gate() {
 
 run_sweep() {
     local stack="$1"
+    local fname="$2"
     local out_dir="$RESULTS_DIR/$stack"
-    mkdir -p "$out_dir"
-    chmod 777 "$out_dir"
     docker run --rm --network host -v "$out_dir:/out:rw" "$IMAGE" \
         bash -lc "cd /modelship && uv run --active --no-sync vllm bench serve \
             --backend openai-chat \
@@ -161,9 +170,23 @@ run_sweep() {
             --random-output-len $OUTPUT_LEN \
             --num-prompts $NUM_PROMPTS \
             --max-concurrency $CONCURRENCY \
+            --num-warmups $NUM_WARMUPS \
             --save-result \
             --result-dir /out \
-            --result-filename result.json"
+            --result-filename $fname"
+}
+
+# Run REPEATS timed sweeps against an already-ready stack, saving each to its
+# own result_<n>.json. The summary takes the median across them.
+run_stack() {
+    local stack="$1"
+    local out_dir="$RESULTS_DIR/$stack"
+    mkdir -p "$out_dir"
+    chmod 777 "$out_dir"
+    for i in $(seq 1 "$REPEATS"); do
+        echo "  sweep $i/$REPEATS ($stack)..."
+        run_sweep "$stack" "result_${i}.json"
+    done
 }
 
 start_modelship() {
@@ -201,16 +224,16 @@ scrape_prom() {
         > "$out" || true
 }
 
-echo "=== bench $TS — image=$IMAGE prompts=$NUM_PROMPTS conc=$CONCURRENCY in=$INPUT_LEN out=$OUTPUT_LEN ==="
+echo "=== bench $TS — image=$IMAGE prompts=$NUM_PROMPTS conc=$CONCURRENCY in=$INPUT_LEN out=$OUTPUT_LEN warmups=$NUM_WARMUPS repeats=$REPEATS ==="
 
 # Phase A — modelship
 echo "[A] starting modelship..."
 start_modelship
 wait_ready bench-modelship
-echo "[A] running sweep..."
+echo "[A] running $REPEATS sweep(s)..."
 mkdir -p "$RESULTS_DIR/modelship"
 start_mem_sampler modelship bench-modelship
-run_sweep modelship
+run_stack modelship
 stop_mem_sampler
 scrape_prom "$RESULTS_DIR/modelship/prom.txt"
 docker rm -f bench-modelship >/dev/null
@@ -220,10 +243,10 @@ vram_gate
 echo "[B] starting rawvllm..."
 start_rawvllm
 wait_ready bench-rawvllm
-echo "[B] running sweep..."
+echo "[B] running $REPEATS sweep(s)..."
 mkdir -p "$RESULTS_DIR/rawvllm"
 start_mem_sampler rawvllm bench-rawvllm
-run_sweep rawvllm
+run_stack rawvllm
 stop_mem_sampler
 docker rm -f bench-rawvllm >/dev/null
 
@@ -232,16 +255,25 @@ SUMMARY="$RESULTS_DIR/summary.md"
 {
     echo "# bench $TS"
     echo
-    echo "image: \`$IMAGE\`  prompts: $NUM_PROMPTS  concurrency: $CONCURRENCY  input/output: $INPUT_LEN/$OUTPUT_LEN"
+    echo "image: \`$IMAGE\`  prompts: $NUM_PROMPTS  concurrency: $CONCURRENCY  input/output: $INPUT_LEN/$OUTPUT_LEN  warmups: $NUM_WARMUPS  repeats: $REPEATS"
+    echo
+    echo "Values are the median across \`repeats\` sweeps."
     echo
     echo "| metric | modelship | rawvllm | overhead |"
     echo "| --- | ---: | ---: | ---: |"
     python3 - "$RESULTS_DIR" <<'PY'
-import json, sys
+import json, sys, statistics
 from pathlib import Path
 root = Path(sys.argv[1])
 def load(stack):
-    return json.loads((root / stack / "result.json").read_text())
+    # One result_<n>.json per repeat; return them all so we can take medians.
+    runs = [json.loads(p.read_text()) for p in sorted((root / stack).glob("result_*.json"))]
+    if not runs:
+        sys.exit(f"no result_*.json found for {stack}")
+    return runs
+def med(runs, key):
+    vals = [r[key] for r in runs if r.get(key) is not None]
+    return statistics.median(vals) if vals else None
 m = load("modelship"); r = load("rawvllm")
 keys = [
     ("request_throughput", "req/s", 3),
@@ -256,7 +288,7 @@ keys = [
     ("p95_e2el_ms",        "E2E p95 (ms)", 1),
 ]
 for key, label, prec in keys:
-    mv = m.get(key); rv = r.get(key)
+    mv = med(m, key); rv = med(r, key)
     if mv is None or rv is None:
         continue
     if rv == 0:
@@ -266,7 +298,7 @@ for key, label, prec in keys:
     print(f"| {label} | {mv:.{prec}f} | {rv:.{prec}f} | {ratio} |")
 PY
     echo
-    echo "## memory (peak during sweep)"
+    echo "## memory (peak across all sweeps)"
     python3 - "$RESULTS_DIR" <<'PY'
 import sys
 from pathlib import Path
@@ -301,31 +333,38 @@ row("peak container RSS", mc, rc, "MiB")
 PY
     echo
     echo "## modelship internal (Prometheus)"
+    echo
+    # NOTE: modelship_request_duration_seconds and modelship_generation_duration_seconds
+    # are observed when the streaming generator is *created*, not after it drains
+    # (model_deployment.py:230, api.py:347), so for streaming responses they capture
+    # setup/TTFT only — not end-to-end or full-generation time. We therefore do NOT
+    # derive "gateway overhead" from them (it's meaningless and was wildly wrong).
+    # Only the router fulfillment time below reflects real request handling.
     if [[ -s "$RESULTS_DIR/modelship/prom.txt" ]]; then
         python3 - "$RESULTS_DIR/modelship/prom.txt" <<'PY'
 import sys, re
 sums = {}; counts = {}
 pat = re.compile(
-    r'(ray_modelship_(?:request|generation)_duration_seconds'
-    r'|ray_serve_request_router_fulfillment_time_ms)'
+    r'(ray_serve_request_router_fulfillment_time_ms)'
     r'_(sum|count)\S*\s+([0-9eE+\-.]+)'
 )
 for line in open(sys.argv[1]):
     m = pat.match(line)
     if not m: continue
     name, kind, val = m.group(1), m.group(2), float(m.group(3))
-    (sums if kind=="sum" else counts).setdefault(name, 0.0)
+    (sums if kind == "sum" else counts).setdefault(name, 0.0)
     if kind == "sum": sums[name] += val
     else: counts[name] += val
-def mean(n, scale=1.0):
-    return (sums.get(n, 0.0) / counts[n] * scale) if counts.get(n) else float("nan")
-e2e = mean("ray_modelship_request_duration_seconds")            # seconds
-eng = mean("ray_modelship_generation_duration_seconds")         # seconds
-qms = mean("ray_serve_request_router_fulfillment_time_ms")      # already ms
-print(f"- mean E2E (gateway):       **{e2e*1000:.1f} ms**")
-print(f"- mean engine (vllm):       **{eng*1000:.1f} ms**")
-print(f"- mean router queue wait:   **{qms:.1f} ms**")
-print(f"- gateway internal overhead: **{(e2e-eng)*1000:.1f} ms** ({(e2e-eng)/e2e*100:.1f}% of E2E)" if e2e else "- no data")
+n = "ray_serve_request_router_fulfillment_time_ms"
+cnt = counts.get(n, 0.0)
+if cnt:
+    print(f"- mean router fulfillment (routing + queue wait): **{sums.get(n, 0.0) / cnt:.1f} ms** "
+          f"over {cnt:.0f} routed requests")
+else:
+    print("- no router metrics scraped")
+print()
+print("_E2E / engine durations omitted: their histograms are recorded before "
+      "streaming completes and are not meaningful for streaming responses._")
 PY
     else
         echo "_no metrics scraped_"
