@@ -86,7 +86,7 @@ class OpenAIServingImage:
             images = self._generate(prompt=request.prompt, width=width, height=height, batch_count=request.n)
             return build_response(images, revised_prompt=request.prompt)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._lock:
             response = await loop.run_in_executor(None, _run)
         logger.log(TRACE, "image response %s: num_images=%d", request_id, len(response.data))
@@ -143,7 +143,7 @@ class OpenAIServingImage:
             images = self._generate(**kwargs)
             return build_response(images, revised_prompt=request.prompt)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._lock:
             response = await loop.run_in_executor(None, _run)
         if isinstance(response, ImageGenerationResponse):
@@ -173,7 +173,7 @@ class OpenAIServingImage:
             )
             return build_response(images, revised_prompt=None)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._lock:
             response = await loop.run_in_executor(None, _run)
         if isinstance(response, ImageGenerationResponse):

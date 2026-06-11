@@ -79,7 +79,7 @@ class StableDiffusionCppInfer(BaseInfer):
                 f"Check driver logs for resolution errors."
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         sd = await loop.run_in_executor(None, self._load, model_path)
         self.sd = sd
         self.serving_image = OpenAIServingImage(sd, self.config)
