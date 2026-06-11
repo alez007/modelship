@@ -1,7 +1,7 @@
 import os
 import time
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from ray import serve
 from ray.exceptions import RayTaskError
-from ray.serve.handle import DeploymentHandle
+from ray.serve.handle import DeploymentHandle, DeploymentResponseGenerator
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -46,10 +46,12 @@ from modelship.openai.protocol import (
     TranslationResponse,
     create_error_response,
 )
+from modelship.openai.protocol.chat import StreamOptions
 from modelship.openai.protocol.responses import (
     UnsupportedResponsesFeatureError,
-    chat_response_to_responses,
+    responses_from_chat,
     responses_request_to_chat,
+    responses_stream_from_chat,
 )
 from modelship.utils import random_uuid
 
@@ -141,20 +143,6 @@ def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
         status_code=HTTPStatus.BAD_REQUEST,
         param=getattr(cause, "parameter", None),
     )
-
-
-async def _responses_from_chat(response_gen, request: ResponsesRequest):
-    """Adapt a chat-completion response generator into Responses output.
-
-    Lets ``/v1/responses`` reuse ``_handle_response`` unchanged: chat
-    response objects are translated to ``ResponseObject`` while errors and
-    Ray exceptions pass through to the same handling as every other endpoint.
-    """
-    async for item in response_gen:
-        if isinstance(item, ChatCompletionResponse):
-            yield chat_response_to_responses(item, request)
-        else:
-            yield item
 
 
 @serve.deployment
@@ -435,16 +423,6 @@ class ModelshipAPI:
         req_id = random_uuid()
         self._set_request_id(req_id)
         model = request.model or ""
-        if request.stream:
-            # Phase A is non-streaming only; the Responses streaming event
-            # protocol is a separate (A2) deliverable. Reject rather than
-            # silently downgrade to a single non-streamed body.
-            return _error_response(
-                create_error_response(
-                    "streaming is not yet supported on /v1/responses; set stream=false.",
-                    status_code=HTTPStatus.BAD_REQUEST,
-                )
-            )
         try:
             chat_request = responses_request_to_chat(request)
         except UnsupportedResponsesFeatureError as e:
@@ -455,17 +433,35 @@ class ModelshipAPI:
             # which is not a ValueError — return a 400 rather than a generic 500.
             return _error_response(_validation_error_from_cause(e))
 
+        if request.stream:
+            # Drive the chat pipeline in streaming mode and translate its SSE
+            # chunks into the Responses event protocol. include_usage so the
+            # terminal response.completed event carries token counts.
+            chat_request.stream = True
+            chat_request.stream_options = StreamOptions(include_usage=True)
+
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, model=model, endpoint="create_response")
         headers = dict(raw_request.headers)
         logger.info(
-            "responses model=%s input_items=%s max_output_tokens=%s",
+            "responses model=%s input_items=%s max_output_tokens=%s stream=%s",
             model,
             1 if isinstance(request.input, str) else len(request.input),
             request.max_output_tokens,
+            bool(request.stream),
         )
-        response_gen = handle.generate.options(stream=True).remote(chat_request, headers, watcher.event, req_id)
-        adapted = _responses_from_chat(response_gen, request)
+        # Under stream=True the remote() result is an async-iterable
+        # DeploymentResponseGenerator; Ray's stub widens it to a union because it
+        # doesn't overload on the stream literal, so narrow it explicitly.
+        response_gen = cast(
+            "DeploymentResponseGenerator[Any]",
+            handle.generate.options(stream=True).remote(chat_request, headers, watcher.event, req_id),
+        )
+        adapted = (
+            responses_stream_from_chat(response_gen, request)
+            if request.stream
+            else responses_from_chat(response_gen, request)
+        )
         return await self._handle_response(adapted, watcher, model, "create_response")
 
     @app.post("/v1/embeddings")

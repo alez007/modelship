@@ -65,7 +65,7 @@ class ResponseOutputMessage(OpenAIBaseModel):
     type: Literal["message"] = "message"
     id: str = Field(default_factory=lambda: f"msg_{random_uuid()}")
     role: Literal["assistant"] = "assistant"
-    status: Literal["completed", "incomplete"] = "completed"
+    status: Literal["in_progress", "completed", "incomplete"] = "completed"
     content: list[ResponseOutputText] = Field(default_factory=list)
 
 
@@ -93,7 +93,7 @@ class ResponseFunctionToolCall(OpenAIBaseModel):
     call_id: str = Field(default_factory=lambda: f"call_{random_uuid()}")
     name: str
     arguments: str
-    status: Literal["completed", "incomplete"] = "completed"
+    status: Literal["in_progress", "completed", "incomplete"] = "completed"
 
 
 # Discriminated only by the literal ``type``; kept as a plain union since we
