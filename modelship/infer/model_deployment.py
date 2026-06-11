@@ -164,6 +164,10 @@ class ModelDeployment:
                 from modelship.infer.llama_cpp.llama_cpp_infer import LlamaCppInfer
 
                 self.infer = LlamaCppInfer(config)
+            elif config.loader == ModelLoader.stable_diffusion_cpp:
+                from modelship.infer.stable_diffusion_cpp.stable_diffusion_cpp_infer import StableDiffusionCppInfer
+
+                self.infer = StableDiffusionCppInfer(config)
             else:
                 from modelship.infer.custom.custom_infer import CustomInfer
 

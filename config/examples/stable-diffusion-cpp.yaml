@@ -1,0 +1,28 @@
+# stable-diffusion.cpp loader — CPU-only image generation.
+# Runs GGUF-quantized diffusion models (SD1.5 / SDXL / SD-Turbo, all-in-one Flux)
+# with no GPU. Ideal for NAS / mini-PC hosts. Serves /v1/images/generations,
+# /v1/images/edits and /v1/images/variations.
+
+models:
+  # SDXL-Turbo: fast, few-step single-file GGUF pulled from a HuggingFace repo
+  # (the glob after `:` picks the quant).
+  - name: "sdxl-turbo"
+    model: "second-state/stable-diffusion-xl-turbo-GGUF:*Q4_0.gguf"
+    usecase: "image"
+    loader: "stable_diffusion_cpp"
+    num_cpus: 4
+    stable_diffusion_cpp_config:
+      sample_steps: 4
+      cfg_scale: 1.0
+
+  # All-in-one Flux-schnell from a local path (bind-mount the file into the
+  # container). High quality, 4 steps. Enable vae_tiling to cap peak RAM.
+  - name: "flux-schnell"
+    model: "/.cache/models/flux1-schnell-q4_k.gguf"
+    usecase: "image"
+    loader: "stable_diffusion_cpp"
+    num_cpus: 6
+    stable_diffusion_cpp_config:
+      sample_steps: 4
+      cfg_scale: 1.0
+      vae_tiling: true

@@ -67,7 +67,7 @@ python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 | `name` | string | Model identifier used in API requests |
 | `model` | string | HuggingFace repo ID, local path, or `repo:filename` (see [Model source](#model-source)). Required for built-in loaders; optional for `loader: custom` |
 | `usecase` | string | `generate`, `embed`, `transcription`, `translation`, `tts`, or `image` |
-| `loader` | string | `vllm`, `transformers`, `diffusers`, `llama_cpp`, or `custom` |
+| `loader` | string | `vllm`, `transformers`, `diffusers`, `llama_cpp`, `stable_diffusion_cpp`, or `custom` |
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
@@ -77,6 +77,7 @@ python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 | `transformers_config` | object | Transformers loader options (see below) |
 | `diffusers_config` | object | Diffusers pipeline options (see below) |
 | `llama_cpp_config` | object | llama.cpp loader options (see below) |
+| `stable_diffusion_cpp_config` | object | stable-diffusion.cpp loader options (see below) |
 | `plugin_config` | object | Plugin-specific options passed through to the plugin |
 
 ## Model source
@@ -370,6 +371,40 @@ models:
     model: "nomic-ai/nomic-embed-text-v1.5-GGUF:nomic-embed-text-v1.5.Q4_K_M.gguf"
     usecase: embed
     loader: llama_cpp
+```
+
+## stable-diffusion.cpp Loader
+
+The `stable_diffusion_cpp` loader uses [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (via [stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)) for **CPU-only image generation** — the image counterpart to the `llama_cpp` text loader. It runs GGUF-quantized single-file diffusion checkpoints (SD1.5, SDXL, SD-Turbo, all-in-one Flux) in a few GB of RAM, with no GPU. Any `num_gpus` is ignored (a warning is logged and the actor is allocated `num_gpus: 0`). `usecase` is always `image` (defaulted if omitted) and it serves `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `sample_steps` | int | `20` | Denoising steps (sd.cpp analogue of `num_inference_steps`) |
+| `cfg_scale` | float | `7.0` | Classifier-free guidance scale (analogue of `guidance_scale`) |
+| `sample_method` | string | `default` | Sampler; `default` lets sd.cpp pick per architecture |
+| `scheduler` | string | `default` | Denoiser sigma scheduler |
+| `wtype` | string | `default` | On-the-fly weight quantization type (e.g. `q4_0`, `q8_0`, `f16`); `default` auto-detects |
+| `n_threads` | int | `-1` | CPU threads; `-1` uses half the cores |
+| `vae_tiling` | bool | `false` | Tile the VAE decode to cut peak RAM (auto-recommended by preflight on low-RAM hosts) |
+| `diffusion_model_path` / `clip_l_path` / `clip_g_path` / `t5xxl_path` / `vae_path` | string | — | Standalone component paths for split checkpoints (accepted as pre-placed local paths; single-file models are the v1 focus) |
+| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `StableDiffusion` constructor |
+
+> **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` enables `verbose` mode in the underlying stable-diffusion.cpp engine.
+
+GGUF variants in a HuggingFace repo are picked via the `:filename` syntax on the `model:` field (see [Model source](#model-source)), exactly like the llama.cpp loader.
+
+### Image Generation (GGUF, CPU)
+
+```yaml
+models:
+  - name: sdxl-turbo
+    model: "second-state/stable-diffusion-xl-turbo-GGUF:*Q4_0.gguf"
+    usecase: image
+    loader: stable_diffusion_cpp
+    num_cpus: 4
+    stable_diffusion_cpp_config:
+      sample_steps: 4
+      cfg_scale: 1.0
 ```
 
 ## Custom Loader (Plugins)

@@ -133,6 +133,31 @@ class TestModelshipModelConfig:
                 loader=ModelLoader.diffusers,
             )
 
+    def test_stable_diffusion_cpp_usecase_defaults_to_image(self):
+        config = ModelshipModelConfig(
+            name="test-image",
+            model="org/sd-gguf:*.gguf",
+            loader=ModelLoader.stable_diffusion_cpp,
+        )
+        assert config.usecase is ModelUsecase.image
+
+    def test_stable_diffusion_cpp_rejects_non_image_usecase(self):
+        with pytest.raises(ValidationError, match="loader='stable_diffusion_cpp' only supports usecase='image'"):
+            ModelshipModelConfig(
+                name="test-image",
+                model="org/sd-gguf:*.gguf",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.stable_diffusion_cpp,
+            )
+
+    def test_stable_diffusion_cpp_requires_model(self):
+        with pytest.raises(ValidationError, match="`model:` is required"):
+            ModelshipModelConfig(
+                name="test-image",
+                usecase=ModelUsecase.image,
+                loader=ModelLoader.stable_diffusion_cpp,
+            )
+
     def test_gpu_allocation_fraction(self):
         config = ModelshipModelConfig(
             name="test-llm",
@@ -249,9 +274,10 @@ class TestModelshipModelConfig:
             assert config.usecase == usecase
 
     def test_all_loaders_valid(self):
+        image_only = (ModelLoader.diffusers, ModelLoader.stable_diffusion_cpp)
         for loader in ModelLoader:
-            # diffusers is image-only; every other loader supports generate.
-            usecase = ModelUsecase.image if loader == ModelLoader.diffusers else ModelUsecase.generate
+            # diffusers / stable_diffusion_cpp are image-only; the rest support generate.
+            usecase = ModelUsecase.image if loader in image_only else ModelUsecase.generate
             kwargs = {"name": "test", "model": "some-model", "usecase": usecase}
             if loader == ModelLoader.custom:
                 kwargs["plugin"] = "test-plugin"
