@@ -71,6 +71,18 @@ class TestRequestInputTranslation:
         assert chat.messages[1]["tool_calls"][0]["function"]["name"] == "get_weather"
         assert chat.messages[2] == {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
 
+    def test_function_call_missing_name_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="function_call"):
+            responses_request_to_chat(_req(input=[{"type": "function_call", "call_id": "call_1", "arguments": "{}"}]))
+
+    def test_function_call_missing_call_id_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="function_call"):
+            responses_request_to_chat(_req(input=[{"type": "function_call", "name": "f", "arguments": "{}"}]))
+
+    def test_function_call_output_missing_call_id_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="function_call_output"):
+            responses_request_to_chat(_req(input=[{"type": "function_call_output", "output": "sunny"}]))
+
     def test_reasoning_input_item_is_dropped(self):
         chat = responses_request_to_chat(
             _req(

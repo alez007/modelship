@@ -117,17 +117,25 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
     for item in input_:
         itype = item.get("type")
         if itype == "function_call":
-            # A prior assistant tool call being replayed as context.
+            # A prior assistant tool call being replayed as context. call_id and
+            # name identify the call; without them the loader's chat-template /
+            # tool-call handling fails downstream, so reject up front with a 400.
+            call_id = item.get("call_id") or item.get("id")
+            name = item.get("name")
+            if not call_id or not name:
+                raise UnsupportedResponsesFeatureError(
+                    "function_call input items require both 'call_id' (or 'id') and 'name'."
+                )
             messages.append(
                 {
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [
                         {
-                            "id": item.get("call_id") or item.get("id"),
+                            "id": call_id,
                             "type": "function",
                             "function": {
-                                "name": item.get("name"),
+                                "name": name,
                                 "arguments": item.get("arguments", ""),
                             },
                         }
@@ -135,10 +143,15 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
                 }
             )
         elif itype == "function_call_output":
+            # call_id ties the result back to its call; a missing one can't be
+            # associated, so reject rather than emit a tool message with no id.
+            call_id = item.get("call_id")
+            if not call_id:
+                raise UnsupportedResponsesFeatureError("function_call_output input items require 'call_id'.")
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": item.get("call_id"),
+                    "tool_call_id": call_id,
                     "content": _text_of(item.get("output")),
                 }
             )
