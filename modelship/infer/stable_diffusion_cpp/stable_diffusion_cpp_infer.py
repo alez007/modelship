@@ -64,10 +64,8 @@ class StableDiffusionCppInfer(BaseInfer):
     def shutdown(self) -> None:
         if self.sd is not None:
             logger.info("Shutting down stable-diffusion.cpp engine for %s", self.model_config.name)
-            # The binding releases the native context in __del__.
-            del self.sd
-            self.sd = None
         self.serving_image = None
+        self.sd = None
 
     def __del__(self):
         self.shutdown()
