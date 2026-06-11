@@ -1685,14 +1685,58 @@ class TestResponsesEndpoint:
         assert function_calls[0].name == "get_weather"
         assert "Paris" in function_calls[0].arguments
 
-    def test_stream_true_rejected_400(self):
-        response = httpx.post(
-            f"{OPENAI_API_BASE}/responses",
-            json={"model": "chat-capable", "input": "hi", "stream": True},
-            timeout=60,
+    def test_streaming_emits_event_protocol(self, client):
+        # stream=True drives the chat pipeline in streaming mode and translates
+        # its chunks into the Responses event protocol. The official SDK parses
+        # the named events and reconstructs the final response.
+        stream = client.responses.create(
+            model="chat-capable",
+            input="Say hello in one word.",
+            max_output_tokens=20,
+            stream=True,
         )
-        assert response.status_code == 400, response.text
-        assert "streaming" in response.json()["error"]["message"]
+        types: list[str] = []
+        text_deltas: list[str] = []
+        completed = None
+        for event in stream:
+            types.append(event.type)
+            if event.type == "response.output_text.delta":
+                text_deltas.append(event.delta)
+            elif event.type == "response.completed":
+                completed = event.response
+
+        assert types[0] == "response.created"
+        assert "response.output_text.delta" in types
+        assert types[-1] == "response.completed"
+        assert "".join(text_deltas).strip(), "expected streamed output text"
+        assert completed is not None
+        assert completed.status in {"completed", "incomplete"}
+        # The streamed deltas must reconstruct the final message text.
+        assert "".join(text_deltas).strip() == completed.output_text.strip()
+        assert completed.usage.input_tokens > 0
+
+    def test_streaming_tool_call_emits_argument_deltas(self, client):
+        stream = client.responses.create(
+            model="chat-capable",
+            input="What is the weather in Paris?",
+            tools=[_WEATHER_TOOL_RESPONSES],
+            tool_choice="required",
+            max_output_tokens=128,
+            stream=True,
+        )
+        arg_deltas: list[str] = []
+        completed = None
+        for event in stream:
+            if event.type == "response.function_call_arguments.delta":
+                arg_deltas.append(event.delta)
+            elif event.type == "response.completed":
+                completed = event.response
+        assert completed is not None
+        function_calls = [item for item in completed.output if item.type == "function_call"]
+        assert function_calls, f"expected a function_call item, got {[i.type for i in completed.output]}"
+        assert function_calls[0].name == "get_weather"
+        # streamed argument fragments must reconstruct the final arguments
+        assert "".join(arg_deltas) == function_calls[0].arguments
 
     def test_previous_response_id_rejected_400(self):
         response = httpx.post(
@@ -1743,6 +1787,26 @@ class TestResponsesReasoning:
         message_items = [item for item in output if item["type"] == "message"]
         assert message_items, "expected an assistant message output item alongside reasoning"
 
+    def test_streaming_emits_reasoning_summary_deltas(self, client):
+        stream = client.responses.create(
+            model="chat-reasoning",
+            input="Briefly: what is 7 times 8?",
+            max_output_tokens=512,
+            stream=True,
+        )
+        reasoning_deltas: list[str] = []
+        completed = None
+        for event in stream:
+            if event.type == "response.reasoning_summary_text.delta":
+                reasoning_deltas.append(event.delta)
+            elif event.type == "response.completed":
+                completed = event.response
+        assert reasoning_deltas, "expected streamed reasoning summary deltas"
+        assert "<think>" not in "".join(reasoning_deltas)
+        assert completed is not None
+        reasoning_items = [item for item in completed.output if item.type == "reasoning"]
+        assert reasoning_items, "expected a reasoning output item in the completed response"
+
 
 @pytest.mark.integration
 @pytest.mark.llama_cpp
@@ -1762,3 +1826,23 @@ class TestResponsesLlamaCpp:
         )
         assert resp.status in {"completed", "incomplete"}
         assert resp.output_text.strip()
+
+    def test_streaming_response_through_llama_cpp(self, client):
+        # The streaming translator is loader-agnostic too: it consumes the same
+        # chat SSE chunk stream llama_cpp emits.
+        stream = client.responses.create(
+            model="chat-llama-mship",
+            input="Say hello in one word.",
+            max_output_tokens=20,
+            stream=True,
+        )
+        text_deltas: list[str] = []
+        completed = None
+        for event in stream:
+            if event.type == "response.output_text.delta":
+                text_deltas.append(event.delta)
+            elif event.type == "response.completed":
+                completed = event.response
+        assert "".join(text_deltas).strip()
+        assert completed is not None
+        assert completed.status in {"completed", "incomplete"}

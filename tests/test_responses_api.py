@@ -10,7 +10,10 @@ from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
+    ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse,
     ChatMessage,
+    DeltaMessage,
     ResponsesRequest,
     UsageInfo,
 )
@@ -61,12 +64,42 @@ class TestResponsesRoute:
         assert hr.call_args.args[3] == "create_response"
 
     @pytest.mark.asyncio
-    async def test_stream_true_rejected_400(self, api):
+    async def test_stream_true_drives_streaming_translation(self, api):
+        # stream=True sets stream + include_usage on the chat request and routes
+        # the chat SSE chunks through the Responses event translator, yielding a
+        # text/event-stream of Responses events.
+        handle = MagicMock()
+
+        async def gen():
+            chunk = ChatCompletionStreamResponse(
+                model="m",
+                choices=[
+                    ChatCompletionResponseStreamChoice(
+                        index=0, delta=DeltaMessage(content="hello!"), finish_reason="stop"
+                    )
+                ],
+            )
+            yield f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
+            yield "data: [DONE]\n\n"
+
+        handle.generate.options.return_value.remote.return_value = gen()
+        api.models = {"m": {"m-a1b2c": handle}}
+        api._round_robin = {"m": 0}
+
         request = ResponsesRequest(model="m", input="hi", stream=True)
-        result = await api.create_response(request, _raw_request())
-        assert result.status_code == 400
-        body = json.loads(bytes(result.body))
-        assert "streaming" in body["error"]["message"]
+        with patch("modelship.openai.api.RequestWatcher"):
+            result = await api.create_response(request, _raw_request())
+
+        assert result.media_type == "text/event-stream"
+        # The chat request handed to the loader must be streaming with usage on.
+        chat_request = handle.generate.options.return_value.remote.call_args.args[0]
+        assert chat_request.stream is True
+        assert chat_request.stream_options is not None and chat_request.stream_options.include_usage is True
+
+        body = "".join([chunk async for chunk in result.body_iterator])
+        assert "event: response.created" in body
+        assert "event: response.output_text.delta" in body
+        assert "event: response.completed" in body
 
     @pytest.mark.asyncio
     async def test_previous_response_id_rejected_400(self, api):

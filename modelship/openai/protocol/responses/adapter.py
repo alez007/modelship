@@ -24,6 +24,7 @@ imports this one, so reaching back into it would create an import cycle.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from modelship.openai.protocol.chat import ChatCompletionRequest, ChatCompletionResponse
@@ -253,25 +254,72 @@ def chat_response_to_responses(chat: ChatCompletionResponse, request: ResponsesR
 
     status, incomplete = _status_for(choice.finish_reason)
 
-    return ResponseObject(
-        model=chat.model,
+    return build_response_object(
+        request,
         status=status,
         output=output,
         usage=_usage_from_chat(chat.usage),
-        incomplete_details=incomplete,
-        # Echo the request settings OpenAI returns on the response object.
-        instructions=request.instructions,
-        max_output_tokens=request.max_output_tokens,
-        temperature=request.temperature,
-        top_p=request.top_p,
-        tools=request.tools or [],
-        tool_choice=request.tool_choice if request.tool_choice is not None else "auto",
-        parallel_tool_calls=request.parallel_tool_calls if request.parallel_tool_calls is not None else True,
-        text=request.text,
-        reasoning=request.reasoning,
-        metadata=request.metadata or {},
-        store=False,
+        incomplete=incomplete,
+        model=chat.model,
     )
+
+
+async def responses_from_chat(response_gen: AsyncIterator[Any], request: ResponsesRequest) -> AsyncIterator[Any]:
+    """Adapt a non-streaming chat response generator into Responses output.
+
+    Lets ``/v1/responses`` reuse ``_handle_response`` unchanged: chat response
+    objects are translated to ``ResponseObject`` while errors and Ray exceptions
+    pass through to the same handling as every other endpoint. The streaming
+    counterpart is ``responses_stream_from_chat`` in :mod:`.streaming`.
+    """
+    async for item in response_gen:
+        if isinstance(item, ChatCompletionResponse):
+            yield chat_response_to_responses(item, request)
+        else:
+            yield item
+
+
+def build_response_object(
+    request: ResponsesRequest,
+    *,
+    status: str,
+    output: list[Any],
+    usage: ResponseUsage | None,
+    incomplete: dict[str, Any] | None,
+    model: str | None = None,
+    response_id: str | None = None,
+    created_at: int | None = None,
+) -> ResponseObject:
+    """Build a ``ResponseObject``, echoing the request settings OpenAI returns.
+
+    Shared by the non-streaming adapter and the streaming translator so the
+    ``response.created`` / ``response.completed`` envelopes and the
+    non-streaming body carry an identical shape. ``response_id`` / ``created_at``
+    let the streaming translator keep one stable id across all of its events.
+    """
+    kwargs: dict[str, Any] = {
+        "model": model or request.model or "",
+        "status": status,
+        "output": output,
+        "usage": usage,
+        "incomplete_details": incomplete,
+        "instructions": request.instructions,
+        "max_output_tokens": request.max_output_tokens,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "tools": request.tools or [],
+        "tool_choice": request.tool_choice if request.tool_choice is not None else "auto",
+        "parallel_tool_calls": request.parallel_tool_calls if request.parallel_tool_calls is not None else True,
+        "text": request.text,
+        "reasoning": request.reasoning,
+        "metadata": request.metadata or {},
+        "store": False,
+    }
+    if response_id is not None:
+        kwargs["id"] = response_id
+    if created_at is not None:
+        kwargs["created_at"] = created_at
+    return ResponseObject(**kwargs)
 
 
 def _usage_from_chat(usage: UsageInfo) -> ResponseUsage:
