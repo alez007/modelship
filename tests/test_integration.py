@@ -1622,3 +1622,143 @@ class TestChatTransformersFunctionGemma:
         assert parsed_args.get("city")
         assert "Paris" in parsed_args["city"]
         assert collected["finish_reason"] == "tool_calls"
+
+
+# Responses tools use the *flattened* function shape (name/parameters at the
+# top level), unlike chat completions which nests them under "function".
+_WEATHER_TOOL_RESPONSES = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get weather for a city",
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+@pytest.mark.integration
+@pytest.mark.vllm
+class TestResponsesEndpoint:
+    """End-to-end /v1/responses through the stateless adapter over the vLLM
+    chat pipeline. Verifies the official OpenAI SDK's ``responses.create``
+    parses our payload and that unsupported features are rejected, not
+    silently dropped."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-capable")
+
+    def test_basic_response_parses_with_openai_sdk(self, client):
+        resp = client.responses.create(
+            model="chat-capable",
+            input="Say hello in one word.",
+            max_output_tokens=20,
+        )
+        assert resp.object == "response"
+        assert resp.status in {"completed", "incomplete"}
+        assert resp.output_text.strip()
+        assert resp.usage.input_tokens > 0
+        # Phase A never persists, so the echoed store flag must be False.
+        assert resp.store is False
+
+    def test_instructions_and_message_list_input(self, client):
+        resp = client.responses.create(
+            model="chat-capable",
+            instructions="Answer in exactly one word.",
+            input=[{"role": "user", "content": "What color is a clear daytime sky?"}],
+            max_output_tokens=20,
+        )
+        assert resp.output_text.strip()
+
+    def test_tool_call_emits_function_call_item(self, client):
+        resp = client.responses.create(
+            model="chat-capable",
+            input="What is the weather in Paris?",
+            tools=[_WEATHER_TOOL_RESPONSES],
+            tool_choice="required",
+            max_output_tokens=128,
+        )
+        function_calls = [item for item in resp.output if item.type == "function_call"]
+        assert function_calls, f"expected a function_call output item, got {[i.type for i in resp.output]}"
+        assert function_calls[0].name == "get_weather"
+        assert "Paris" in function_calls[0].arguments
+
+    def test_stream_true_rejected_400(self):
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "hi", "stream": True},
+            timeout=60,
+        )
+        assert response.status_code == 400, response.text
+        assert "streaming" in response.json()["error"]["message"]
+
+    def test_previous_response_id_rejected_400(self):
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "hi", "previous_response_id": "resp_does_not_exist"},
+            timeout=60,
+        )
+        assert response.status_code == 400, response.text
+        assert "previous_response_id" in response.json()["error"]["message"]
+
+    def test_hosted_tool_rejected_400(self):
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "search the web", "tools": [{"type": "web_search"}]},
+            timeout=60,
+        )
+        assert response.status_code == 400, response.text
+        assert "hosted tool" in response.json()["error"]["message"]
+
+
+@pytest.mark.integration
+@pytest.mark.vllm
+class TestResponsesReasoning:
+    """Reasoning surfaces as a first-class ``reasoning`` output item on
+    /v1/responses (its spec-correct home), distinct from the off-spec
+    ``message.reasoning`` field on chat completions."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-reasoning")
+
+    def test_reasoning_output_item_present(self):
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-reasoning", "input": "Briefly: what is 7 times 8?", "max_output_tokens": 512},
+            timeout=120,
+        )
+        assert response.status_code == 200, response.text
+        output = response.json()["output"]
+
+        reasoning_items = [item for item in output if item["type"] == "reasoning"]
+        assert reasoning_items, f"expected a reasoning output item, got {[i['type'] for i in output]}"
+        summary_text = "".join(s["text"] for item in reasoning_items for s in item.get("summary", []))
+        assert summary_text.strip(), "expected non-empty reasoning summary text"
+        # `<think>` markers must be stripped before reshaping into the item.
+        assert "<think>" not in summary_text
+
+        message_items = [item for item in output if item["type"] == "message"]
+        assert message_items, "expected an assistant message output item alongside reasoning"
+
+
+@pytest.mark.integration
+@pytest.mark.llama_cpp
+class TestResponsesLlamaCpp:
+    """The adapter is loader-agnostic: /v1/responses works over the llama_cpp
+    chat pipeline with no loader-side changes, same as it does over vLLM."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-llama-mship")
+
+    def test_basic_response_through_llama_cpp(self, client):
+        resp = client.responses.create(
+            model="chat-llama-mship",
+            input="Say hello in one word.",
+            max_output_tokens=20,
+        )
+        assert resp.status in {"completed", "incomplete"}
+        assert resp.output_text.strip()

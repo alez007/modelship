@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from ray import serve
 from ray.exceptions import RayTaskError
 from ray.serve.handle import DeploymentHandle
@@ -37,12 +37,19 @@ from modelship.openai.protocol import (
     ImageGenerationResponse,
     ImageVariationRequest,
     RawSpeechResponse,
+    ResponseObject,
+    ResponsesRequest,
     SpeechRequest,
     TranscriptionRequest,
     TranscriptionResponse,
     TranslationRequest,
     TranslationResponse,
     create_error_response,
+)
+from modelship.openai.protocol.responses import (
+    UnsupportedResponsesFeatureError,
+    chat_response_to_responses,
+    responses_request_to_chat,
 )
 from modelship.utils import random_uuid
 
@@ -134,6 +141,20 @@ def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
         status_code=HTTPStatus.BAD_REQUEST,
         param=getattr(cause, "parameter", None),
     )
+
+
+async def _responses_from_chat(response_gen, request: ResponsesRequest):
+    """Adapt a chat-completion response generator into Responses output.
+
+    Lets ``/v1/responses`` reuse ``_handle_response`` unchanged: chat
+    response objects are translated to ``ResponseObject`` while errors and
+    Ray exceptions pass through to the same handling as every other endpoint.
+    """
+    async for item in response_gen:
+        if isinstance(item, ChatCompletionResponse):
+            yield chat_response_to_responses(item, request)
+        else:
+            yield item
 
 
 @serve.deployment
@@ -301,6 +322,7 @@ class ModelshipAPI:
             if isinstance(
                 first,
                 ChatCompletionResponse
+                | ResponseObject
                 | EmbeddingResponse
                 | TranscriptionResponse
                 | TranslationResponse
@@ -407,6 +429,44 @@ class ModelshipAPI:
         logger.debug("chat_completion full request: %s", request.model_dump_json())
         response_gen = handle.generate.options(stream=True).remote(request, headers, watcher.event, req_id)
         return await self._handle_response(response_gen, watcher, model, "create_chat_completion")
+
+    @app.post("/v1/responses")
+    async def create_response(self, request: ResponsesRequest, raw_request: Request):
+        req_id = random_uuid()
+        self._set_request_id(req_id)
+        model = request.model or ""
+        if request.stream:
+            # Phase A is non-streaming only; the Responses streaming event
+            # protocol is a separate (A2) deliverable. Reject rather than
+            # silently downgrade to a single non-streamed body.
+            return _error_response(
+                create_error_response(
+                    "streaming is not yet supported on /v1/responses; set stream=false.",
+                    status_code=HTTPStatus.BAD_REQUEST,
+                )
+            )
+        try:
+            chat_request = responses_request_to_chat(request)
+        except UnsupportedResponsesFeatureError as e:
+            return _error_response(create_error_response(e))
+        except ValidationError as e:
+            # Translating into ChatCompletionRequest can surface invalid params
+            # (e.g. a bad reasoning.effort value) as a pydantic ValidationError,
+            # which is not a ValueError — return a 400 rather than a generic 500.
+            return _error_response(_validation_error_from_cause(e))
+
+        handle = self._get_handle(request.model)
+        watcher = RequestWatcher(raw_request, model=model, endpoint="create_response")
+        headers = dict(raw_request.headers)
+        logger.info(
+            "responses model=%s input_items=%s max_output_tokens=%s",
+            model,
+            1 if isinstance(request.input, str) else len(request.input),
+            request.max_output_tokens,
+        )
+        response_gen = handle.generate.options(stream=True).remote(chat_request, headers, watcher.event, req_id)
+        adapted = _responses_from_chat(response_gen, request)
+        return await self._handle_response(adapted, watcher, model, "create_response")
 
     @app.post("/v1/embeddings")
     async def create_embeddings(self, request: EmbeddingRequest, raw_request: Request):
