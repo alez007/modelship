@@ -57,11 +57,12 @@ def _sse(event_type: str, payload: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
-def _parse_chat_sse(raw: str) -> ChatCompletionStreamResponse | None:
-    """Parse a chat ``data: {...}`` SSE string into a stream chunk.
+def _parse_chat_sse(raw: str) -> Iterator[ChatCompletionStreamResponse]:
+    """Parse chat ``data: {...}`` SSE messages into stream chunks.
 
-    Returns ``None`` for the ``[DONE]`` sentinel or any non-data line so the
-    caller can simply skip it.
+    A single ``raw`` string may bundle several SSE messages (e.g. from
+    buffering or batching). Yields a chunk for every ``data:`` line, skipping
+    the ``[DONE]`` sentinel and any non-data lines.
     """
     for line in raw.splitlines():
         line = line.strip()
@@ -69,9 +70,8 @@ def _parse_chat_sse(raw: str) -> ChatCompletionStreamResponse | None:
             continue
         payload = line[len("data:") :].strip()
         if not payload or payload == "[DONE]":
-            return None
-        return ChatCompletionStreamResponse.model_validate_json(payload)
-    return None
+            continue
+        yield ChatCompletionStreamResponse.model_validate_json(payload)
 
 
 class ResponsesStreamTranslator:
@@ -349,11 +349,9 @@ async def responses_stream_from_chat(response_gen: AsyncIterator[Any], request: 
             started = True
             for event in translator.start():
                 yield event
-        chunk = _parse_chat_sse(item)
-        if chunk is None:
-            continue
-        for event in translator.process(chunk):
-            yield event
+        for chunk in _parse_chat_sse(item):
+            for event in translator.process(chunk):
+                yield event
     if started:
         for event in translator.finish():
             yield event
