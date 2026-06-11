@@ -151,7 +151,7 @@ class ResponsesStreamTranslator:
                 yield from self._on_reasoning(delta.reasoning)
             if delta.content:
                 yield from self._on_content(delta.content)
-            for tc in delta.tool_calls:
+            for tc in delta.tool_calls or []:
                 yield from self._on_tool_call(tc)
             if choice.finish_reason is not None:
                 self.finish_reason = choice.finish_reason
