@@ -40,6 +40,7 @@ Each deployment uses one of the following loaders:
 | `llama_cpp` | llama-cpp-python | Chat/generation, embeddings (GGUF models) | No — currently CPU-only |
 | `transformers` | PyTorch + HuggingFace | Chat/generation, embeddings, transcription, translation, TTS | No — runs on CPU or GPU |
 | `diffusers` | HuggingFace Diffusers | Image generation (any `AutoPipelineForText2Image` model) | Yes |
+| `stable_diffusion_cpp` | stable-diffusion.cpp | Image generation (GGUF models: SD1.5/SDXL/SD-Turbo, all-in-one Flux) | No — currently CPU-only |
 | `custom` | Plugin system | TTS backends (Kokoro ONNX, Bark, Orpheus), STT backends (whisper.cpp) | No |
 
 The `transformers` loader is ideal for CPU-only deployments, smaller models, or development/testing without a GPU. It uses HuggingFace `pipeline()` under the hood and handles audio resampling automatically for speech-to-text models. The `llama_cpp` loader provides high-efficiency inference for quantized GGUF models on CPU. The `vllm` loader provides higher throughput on GPU with continuous batching and PagedAttention.
@@ -100,5 +101,6 @@ See [Plugin Development](plugins.md) for details.
 | `modelship/infer/vllm/vllm_infer.py` | vLLM engine wrapper |
 | `modelship/infer/transformers/transformers_infer.py` | Transformers pipeline wrapper (CPU/GPU) |
 | `modelship/infer/diffusers/diffusers_infer.py` | Diffusers pipeline wrapper |
+| `modelship/infer/stable_diffusion_cpp/stable_diffusion_cpp_infer.py` | stable-diffusion.cpp wrapper (CPU image gen) |
 | `modelship/plugins/base_plugin.py` | Plugin base classes |
 | `config/models.yaml` | Model configuration |

@@ -40,6 +40,7 @@ class ModelLoader(StrEnum):
     transformers = "transformers"
     diffusers = "diffusers"
     llama_cpp = "llama_cpp"
+    stable_diffusion_cpp = "stable_diffusion_cpp"
     custom = "custom"
 
 
@@ -100,6 +101,36 @@ class LlamaCppConfig(BaseModel):
     tool_calls_enabled: bool | None = None
 
 
+class StableDiffusionCppConfig(BaseModel):
+    """Tunables for the CPU-only `stable_diffusion_cpp` image loader
+    (stable-diffusion.cpp via stable-diffusion-cpp-python). `sample_steps` and
+    `cfg_scale` are the sd.cpp analogues of DiffusersConfig's
+    `num_inference_steps` / `guidance_scale`."""
+
+    sample_steps: int = 20
+    cfg_scale: float = 7.0
+    # "default" lets sd.cpp pick the sampler/scheduler per architecture
+    # (euler_a for SD, euler for Flux/SD3).
+    sample_method: str = "default"
+    scheduler: str = "default"
+    # On-the-fly weight quantization type ("default" auto-detects from the file;
+    # e.g. "q4_0", "q8_0", "f16" when loading an unquantized checkpoint).
+    wtype: str = "default"
+    # -1 => half the CPU cores (stable-diffusion.cpp default).
+    n_threads: int = -1
+    # Tile the VAE decode to cut peak RAM on large images / low-memory hosts.
+    vae_tiling: bool = False
+    # Standalone component paths for split checkpoints (Flux / SD3.5). v1 resolves
+    # only single-file models; these accept pre-placed local paths for advanced use.
+    diffusion_model_path: str | None = None
+    clip_l_path: str | None = None
+    clip_g_path: str | None = None
+    t5xxl_path: str | None = None
+    vae_path: str | None = None
+    # Forwarded verbatim to the StableDiffusion constructor for knobs not surfaced above.
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
 class ModelshipModelConfig(BaseModel):
     name: str
     model: str | None = None
@@ -115,6 +146,7 @@ class ModelshipModelConfig(BaseModel):
     transformers_config: TransformersConfig | None = None
     diffusers_config: DiffusersConfig | None = None
     llama_cpp_config: LlamaCppConfig | None = None
+    stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
 
     _resolved_path: str | None = PrivateAttr(default=None)
@@ -134,9 +166,11 @@ class ModelshipModelConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def default_diffusers_usecase(cls, data):
-        # Diffusers is image-only, so `usecase` is implicit — let configs omit
-        # it. (An explicit non-image usecase is still rejected below.)
-        if isinstance(data, dict) and data.get("loader") == ModelLoader.diffusers and data.get("usecase") is None:
+        # The image-only loaders (diffusers, stable_diffusion_cpp) leave `usecase`
+        # implicit — let configs omit it. (An explicit non-image usecase is still
+        # rejected below.)
+        image_loaders = (ModelLoader.diffusers, ModelLoader.stable_diffusion_cpp)
+        if isinstance(data, dict) and data.get("loader") in image_loaders and data.get("usecase") is None:
             data = {**data, "usecase": ModelUsecase.image}
         return data
 
@@ -146,8 +180,10 @@ class ModelshipModelConfig(BaseModel):
             raise ValueError("loader='custom' requires plugin to be set")
         if self.loader != ModelLoader.custom and not self.model:
             raise ValueError(f"`model:` is required for loader={self.loader!r}")
-        if self.loader == ModelLoader.diffusers and self.usecase is not ModelUsecase.image:
-            raise ValueError(f"loader='diffusers' only supports usecase='image', got {self.usecase!r}")
+        if self.loader in (ModelLoader.diffusers, ModelLoader.stable_diffusion_cpp) and (
+            self.usecase is not ModelUsecase.image
+        ):
+            raise ValueError(f"loader={self.loader.value!r} only supports usecase='image', got {self.usecase!r}")
         return self
 
     @model_validator(mode="after")

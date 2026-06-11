@@ -1608,6 +1608,7 @@ cpu = [
     { name = "llama-cpp-python" },
     { name = "onnxruntime" },
     { name = "sentence-transformers" },
+    { name = "stable-diffusion-cpp-python" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
     { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
@@ -1630,6 +1631,7 @@ gpu = [
     { name = "nvidia-ml-py" },
     { name = "onnxruntime-gpu" },
     { name = "sentence-transformers" },
+    { name = "stable-diffusion-cpp-python" },
     { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
     { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
     { name = "transformers" },
@@ -1688,6 +1690,8 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'cpu'", specifier = ">=3.0.0" },
     { name = "sentence-transformers", marker = "extra == 'gpu'", specifier = ">=3.0.0" },
     { name = "soundfile", specifier = ">=0.13.0" },
+    { name = "stable-diffusion-cpp-python", marker = "extra == 'cpu'", specifier = ">=0.4.7" },
+    { name = "stable-diffusion-cpp-python", marker = "extra == 'gpu'", specifier = ">=0.4.7" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "modelship", extra = "cpu" } },
     { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "modelship", extra = "gpu" } },
     { name = "torchvision", marker = "extra == 'cpu'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "modelship", extra = "cpu" } },
@@ -3497,6 +3501,16 @@ sdist = { url = "https://files.pythonhosted.org/packages/26/8c/f9290339ef6d79bad
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/7f/3de5402f39890ac5660b86bcf5c03f9d855dad5c4ed764866d7b592b46fd/sse_starlette-3.3.4-py3-none-any.whl", hash = "sha256:84bb06e58939a8b38d8341f1bc9792f06c2b53f48c608dd207582b664fc8f3c1", size = 14330, upload-time = "2026-03-29T09:00:21.846Z" },
 ]
+
+[[package]]
+name = "stable-diffusion-cpp-python"
+version = "0.4.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b1/06/300aba9ac36e2166fbe45b4a29039a76f725ef08796f5472caf3e8c4e08d/stable_diffusion_cpp_python-0.4.7.tar.gz", hash = "sha256:998d1957260dd5ae4e18a8acc0c14b0a8757aaa9f96515197b6d5bbf46df9282", size = 20561087, upload-time = "2026-05-12T11:04:30.294Z" }
 
 [[package]]
 name = "starlette"
