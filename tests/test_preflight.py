@@ -14,25 +14,27 @@ from modelship.infer.infer_config import (
     ModelUsecase,
     VllmEngineConfig,
 )
-from modelship.infer.preflight import (
+from modelship.preflight import (
     GPUInfo,
     HardwareProfile,
     merge_with_user_overrides,
     run_preflight,
 )
-from modelship.infer.preflight.vllm import VllmPreflight
+from modelship.preflight.vllm import VllmPreflight
 
 
 def _make_config(
     *,
     resolved_path: str | None = None,
     vllm_kwargs: dict | None = None,
+    num_gpus: float = 0,
 ) -> ModelshipModelConfig:
     cfg = ModelshipModelConfig(
         name="test-model",
         model="org/test-model",
         usecase=ModelUsecase.generate,
         loader=ModelLoader.vllm,
+        num_gpus=num_gpus,
         vllm_engine_kwargs=VllmEngineConfig(**(vllm_kwargs or {})),
     )
     cfg._resolved_path = resolved_path
@@ -76,7 +78,7 @@ class TestMergeWithUserOverrides:
         assert result == {"max_model_len": 4096, "tensor_parallel_size": 2}
 
     def test_warning_emitted_on_divergence(self):
-        with patch("modelship.infer.preflight.base.logger") as mock_logger:
+        with patch("modelship.preflight.base.logger") as mock_logger:
             merge_with_user_overrides(
                 {"max_model_len": 4096},
                 {"max_model_len": 32000},
@@ -88,7 +90,7 @@ class TestMergeWithUserOverrides:
         assert "max_model_len" in call_args.args
 
     def test_matching_value_no_warning(self):
-        with patch("modelship.infer.preflight.base.logger") as mock_logger:
+        with patch("modelship.preflight.base.logger") as mock_logger:
             merge_with_user_overrides(
                 {"max_model_len": 4096},
                 {"max_model_len": 4096},
@@ -206,6 +208,74 @@ class TestVllmPreflight:
         hw = HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")])
         assert VllmPreflight().recommend(cfg, hw) == {}
 
+    def test_fractional_num_gpus_sizes_max_model_len_to_share(self, tmp_path):
+        # The studio failure: a dense 7B at num_gpus=0.5. Normalization sets
+        # gpu_memory_utilization=0.5, and the lighter dense overhead keeps the KV
+        # budget positive, so preflight sizes max_model_len DOWN to fit instead of
+        # bailing (which left the model at its 32768 default → vLLM KV OOM).
+        snapshot = _write_model_snapshot(
+            tmp_path,
+            config_json={
+                "num_hidden_layers": 28,
+                "num_attention_heads": 28,
+                "num_key_value_heads": 4,
+                "hidden_size": 3584,
+                "head_dim": 128,
+                "torch_dtype": "bfloat16",
+                "max_position_embeddings": 32768,
+            },
+            weight_bytes=5 * 1024**3,
+        )
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0.5)
+        assert cfg.vllm_engine_kwargs.gpu_memory_utilization == 0.5  # normalization fed the share through
+        hw = HardwareProfile(gpus=[GPUInfo(0, 16 * 1024**3, "test")])
+        rec = VllmPreflight().recommend(cfg, hw)
+        assert "max_model_len" in rec
+        assert 0 < rec["max_model_len"] < 32768
+        assert rec["max_model_len"] % 16 == 0
+
+    def test_fractional_share_recommends_less_than_whole_gpu(self, tmp_path):
+        # Same model, same card: a 0.5 share must yield a smaller max_model_len
+        # than the whole GPU — proving the effective util drives the estimate.
+        snapshot = _write_model_snapshot(
+            tmp_path,
+            config_json={
+                "num_hidden_layers": 28,
+                "num_attention_heads": 28,
+                "num_key_value_heads": 4,
+                "hidden_size": 3584,
+                "head_dim": 128,
+                "torch_dtype": "bfloat16",
+                "max_position_embeddings": 131072,
+            },
+            weight_bytes=5 * 1024**3,
+        )
+        hw = HardwareProfile(gpus=[GPUInfo(0, 16 * 1024**3, "test")])
+        shared = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=0.5), hw)
+        whole = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=1), hw)
+        assert shared["max_model_len"] < whole["max_model_len"]
+
+    def test_moe_pays_heavier_overhead_than_dense(self, tmp_path):
+        # An otherwise-identical MoE model carries the heavier fixed overhead, so
+        # it gets a smaller KV budget → smaller max_model_len than the dense one.
+        base = {
+            "num_hidden_layers": 28,
+            "num_attention_heads": 28,
+            "num_key_value_heads": 4,
+            "hidden_size": 3584,
+            "head_dim": 128,
+            "torch_dtype": "bfloat16",
+            "max_position_embeddings": 131072,
+        }
+        (tmp_path / "dense").mkdir()
+        (tmp_path / "moe").mkdir()
+        dense = _write_model_snapshot(tmp_path / "dense", config_json=base, weight_bytes=5 * 1024**3)
+        moe = _write_model_snapshot(tmp_path / "moe", config_json={**base, "num_experts": 8}, weight_bytes=5 * 1024**3)
+        hw = HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")])
+        rec_dense = VllmPreflight().recommend(_make_config(resolved_path=str(dense), num_gpus=0.5), hw)
+        rec_moe = VllmPreflight().recommend(_make_config(resolved_path=str(moe), num_gpus=0.5), hw)
+        assert rec_moe["max_model_len"] < rec_dense["max_model_len"]
+
     def test_fp8_kv_halves_per_token_bytes(self, tmp_path):
         snapshot = _write_model_snapshot(
             tmp_path,
@@ -245,12 +315,12 @@ class TestMultimodal:
         ],
     )
     def test_multimodal_detection(self, model_cfg, expected):
-        from modelship.infer.preflight.vllm import _is_multimodal
+        from modelship.preflight.vllm import _is_multimodal
 
         assert _is_multimodal(model_cfg) == expected
 
     def test_mm_tokens_per_item_estimate(self):
-        from modelship.infer.preflight.vllm import _estimate_mm_tokens_per_item
+        from modelship.preflight.vllm import _estimate_mm_tokens_per_item
 
         # 224 / 14 = 16 → 16² = 256 patches per image
         assert _estimate_mm_tokens_per_item({"vision_config": {"image_size": 224, "patch_size": 14}}) == 256
@@ -326,14 +396,14 @@ class TestMultimodal:
         ["text_config", "language_config", "llm_config", "language_model_config"],
     )
     def test_resolve_text_config_handles_known_nestings(self, nesting_key):
-        from modelship.infer.preflight.vllm import _resolve_text_config
+        from modelship.preflight.vllm import _resolve_text_config
 
         nested = {"num_hidden_layers": 32, "hidden_size": 4096}
         resolved = _resolve_text_config({nesting_key: nested, "architectures": ["X"]})
         assert resolved is nested
 
     def test_resolve_text_config_passes_through_top_level(self):
-        from modelship.infer.preflight.vllm import _resolve_text_config
+        from modelship.preflight.vllm import _resolve_text_config
 
         top = {"num_hidden_layers": 32, "hidden_size": 4096}
         assert _resolve_text_config(top) is top
@@ -373,7 +443,7 @@ class TestMultimodal:
 )
 def test_kv_shrinks_per_gpu_only_when_tp_divides_heads(tp_size, num_kv_heads, expect_kv_shrinkage):
     """Unit-level: per-GPU KV bytes shrink by tp_size only when num_kv_heads is divisible."""
-    from modelship.infer.preflight.vllm import _divide_kv_by_tp
+    from modelship.preflight.vllm import _divide_kv_by_tp
 
     kv_full = 100_000
     result = _divide_kv_by_tp(kv_full, {"num_key_value_heads": num_kv_heads}, tp_size)
@@ -390,7 +460,7 @@ class TestCudagraphEstimation:
         # Anchor against the Gemma-4 31B AWQ run: vLLM measured 2.23 GiB CUDA
         # graph memory; the formula predicts 2.46 GiB (within ~10%, slight
         # over-estimate is the safe direction).
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 5376, "num_hidden_layers": 60, "torch_dtype": "bfloat16"}
         cfg = _make_config()
@@ -400,7 +470,7 @@ class TestCudagraphEstimation:
         assert 0.9 * measured <= estimate <= 1.2 * measured
 
     def test_zero_when_enforce_eager(self):
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 4096, "num_hidden_layers": 32, "torch_dtype": "bfloat16"}
         cfg = _make_config(vllm_kwargs={"enforce_eager": True})
@@ -408,7 +478,7 @@ class TestCudagraphEstimation:
 
     def test_nonzero_when_enforce_eager_unset(self):
         # None and False both mean "CUDA graphs enabled"; estimator should run.
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 4096, "num_hidden_layers": 32, "torch_dtype": "bfloat16"}
         for eager in (None, False):
@@ -419,13 +489,13 @@ class TestCudagraphEstimation:
         # Without hidden_size / num_layers the formula can't run; return 0
         # rather than guessing — the caller already over-subtracts other
         # overheads, and a 0 here is the right "unknown" signal.
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         cfg = _make_config()
         assert _estimate_cudagraph_bytes_per_gpu({}, {}, cfg, 8192, 1, 1) == 0
 
     def test_scales_linearly_with_max_num_batched_tokens(self):
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 4096, "num_hidden_layers": 32, "torch_dtype": "bfloat16"}
         cfg = _make_config()
@@ -434,7 +504,7 @@ class TestCudagraphEstimation:
         assert b == 4 * a
 
     def test_divides_by_tp_size(self):
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 4096, "num_hidden_layers": 32, "torch_dtype": "bfloat16"}
         cfg = _make_config()
@@ -443,7 +513,7 @@ class TestCudagraphEstimation:
         assert tp2 == single // 2
 
     def test_divides_by_pp_size(self):
-        from modelship.infer.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
+        from modelship.preflight.vllm import _estimate_cudagraph_bytes_per_gpu
 
         text_cfg = {"hidden_size": 4096, "num_hidden_layers": 32, "torch_dtype": "bfloat16"}
         cfg = _make_config()

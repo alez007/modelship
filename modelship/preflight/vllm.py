@@ -5,20 +5,28 @@ import os
 from typing import Any
 
 from modelship.infer.infer_config import ModelshipModelConfig
-from modelship.infer.preflight.base import HardwareProfile
 from modelship.logging import get_logger
+from modelship.preflight.base import HardwareProfile
 
-logger = get_logger("infer.preflight.vllm")
+logger = get_logger("preflight.vllm")
 
 # vLLM default; KV cache is allocated in pages of `block_size` tokens.
 _DEFAULT_BLOCK_SIZE = 16
 
 # Conservative fixed overhead (NCCL buffers, Triton caches, encoder cache for
-# MM models, fused_moe routing buffers for MoE, profiler scratch that's
-# neither weights nor CUDA graphs). Calibrated against measured runs: ~0.9 GiB
-# on dense Gemma-4 31B, ~2.3 GiB on the Gemma-4 26B-A4B MoE. Sized for the
-# heavier case so MoE/MM deploys are safe.
-_OVERHEAD_FIXED_BYTES = int(2.5 * 1024**3)
+# MM models, fused_moe routing buffers for MoE, profiler scratch that's neither
+# weights nor CUDA graphs). Calibrated against measured runs: ~0.9 GiB on dense
+# Gemma-4 31B, ~2.3 GiB on the Gemma-4 26B-A4B MoE, ~1.0 GiB on a dense 7B AWQ
+# sharing a GPU.
+#
+# Dense text models carry far less of this than MoE/MM models, so they get the
+# lighter figure; MoE and multimodal models — which add expert-routing and
+# vision-encoder buffers — get the heavier one. Charging *every* model the heavy
+# figure wrongly zeroes the KV budget for a small dense model on a fractional-GPU
+# share (e.g. a 7B at num_gpus=0.5), making preflight bail instead of sizing
+# max_model_len down to fit.
+_OVERHEAD_FIXED_BYTES_DENSE = int(1.0 * 1024**3)
+_OVERHEAD_FIXED_BYTES_HEAVY = int(2.5 * 1024**3)
 
 # Fractional overhead added on top of weight bytes. Captures the runtime
 # inflation between safetensors `total_size` and the bytes a backend actually
@@ -120,11 +128,19 @@ class VllmPreflight:
         # (not device total), so the budget reflects what vLLM will actually
         # see when it measures KV cache headroom.
         gpu_available = min(g.available_bytes for g in hw.gpus)
+        # gpu_memory_utilization already reflects a fractional num_gpus: it's
+        # resolved at config normalization, so we read the effective value here.
         gpu_util = config.vllm_engine_kwargs.gpu_memory_utilization
+        # Dense text models carry far less non-KV overhead than MoE/MM models;
+        # charging the heavy figure to a small dense model on a fractional GPU
+        # wrongly zeroes the budget.
+        fixed_overhead = (
+            _OVERHEAD_FIXED_BYTES_HEAVY if (is_mm or _is_moe(text_cfg, model_cfg)) else _OVERHEAD_FIXED_BYTES_DENSE
+        )
         budget = (
             gpu_available * gpu_util
             - weight_bytes_per_gpu
-            - (_OVERHEAD_WEIGHT_FRACTION * weight_bytes_per_gpu + _OVERHEAD_FIXED_BYTES)
+            - (_OVERHEAD_WEIGHT_FRACTION * weight_bytes_per_gpu + fixed_overhead)
             - cudagraph_bytes_per_gpu
         )
         if budget <= 0:
@@ -305,6 +321,18 @@ def _divide_kv_by_tp(kv_per_token: int, model_cfg: dict, tp_size: int) -> float:
     # GQA edge case: when num_kv_heads doesn't divide tp_size cleanly, vLLM
     # replicates KV heads across ranks, so per-GPU bytes don't shrink.
     return float(kv_per_token)
+
+
+def _is_moe(text_cfg: dict, model_cfg: dict) -> bool:
+    """Mixture-of-Experts models park expert-routing buffers on the GPU that
+    inflate the fixed non-KV overhead. Detect via the expert-count keys HF
+    configs use (checked on both the text sub-config and the top level)."""
+    for cfg in (text_cfg, model_cfg):
+        for key in ("num_experts", "num_local_experts", "n_routed_experts", "num_experts_per_tok"):
+            value = cfg.get(key)
+            if isinstance(value, int) and value > 0:
+                return True
+    return False
 
 
 def _is_multimodal(model_cfg: dict) -> bool:

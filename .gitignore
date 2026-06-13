@@ -9,3 +9,4 @@ __pycache__
 local_models
 models-cache
 config/models.yaml
+config/models_stack_*.yaml

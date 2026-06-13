@@ -51,7 +51,6 @@ from vllm.v1.engine.async_llm import AsyncLLM
 
 from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
-from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.logging import get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
@@ -70,6 +69,7 @@ from modelship.openai.protocol import (
     TranslationResponseVerbose,
     create_error_response,
 )
+from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 
 logger = get_logger("infer.vllm")
 
@@ -116,10 +116,13 @@ class VllmInfer(BaseInfer):
         config_engine_kwargs = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
         config_engine_kwargs["model"] = model_config._resolved_path
 
-        mem_fraction = self._get_memory_fraction()
-        if mem_fraction is not None:
-            config_engine_kwargs["gpu_memory_utilization"] = mem_fraction
-
+        # gpu_memory_utilization for a fractional num_gpus is resolved once at
+        # config normalization (normalize_num_gpus_and_tp), so it's already in
+        # user_overrides here — no runtime override needed. Folding it in here
+        # instead would (a) be invisible to the preflight, which reads the config
+        # model, and (b) clobber an explicitly-declared value. (diffusers and
+        # transformers still derive a per-process torch fraction via
+        # _get_memory_fraction; they have no equivalent engine knob.)
         self.vllm_engine_kwargs: VllmEngineConfig = VllmEngineConfig(**config_engine_kwargs)
         logger.info("initialising vllm engine with args: %s", self.vllm_engine_kwargs.model_dump())
 

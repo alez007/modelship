@@ -5,7 +5,6 @@ from stable_diffusion_cpp import StableDiffusion
 
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy, StableDiffusionCppConfig
-from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.infer.stable_diffusion_cpp.openai.serving_image import OpenAIServingImage
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
@@ -15,6 +14,7 @@ from modelship.openai.protocol import (
     ImageGenerationResponse,
     ImageVariationRequest,
 )
+from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 
 logger = get_logger("infer.stable_diffusion_cpp")
 

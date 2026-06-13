@@ -11,8 +11,8 @@ from modelship.infer.infer_config import (
     ModelshipModelConfig,
     ModelUsecase,
 )
-from modelship.infer.preflight import HardwareProfile
-from modelship.infer.preflight.llama_cpp import (
+from modelship.preflight import HardwareProfile
+from modelship.preflight.llama_cpp import (
     LlamaCppPreflight,
     _ggml_type_bytes,
     _GGUFMeta,
@@ -79,8 +79,8 @@ class TestLlamaCppPreflightRecommends:
         hw = HardwareProfile(ram_bytes=64 * 1024**3)
 
         with (
-            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
-            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
         ):
             rec = LlamaCppPreflight().recommend(cfg, hw)
 
@@ -99,8 +99,8 @@ class TestLlamaCppPreflightRecommends:
             context_length=131072,
         )
         with (
-            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=big_meta),
-            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=int(1.75 * 1024**3)),
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=big_meta),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=int(1.75 * 1024**3)),
         ):
             rec = LlamaCppPreflight().recommend(cfg, hw)
 
@@ -122,8 +122,8 @@ class TestLlamaCppPreflightRecommends:
             context_length=None,
         )
         with (
-            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=no_ctx_meta),
-            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=no_ctx_meta),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
         ):
             rec = LlamaCppPreflight().recommend(cfg, hw)
 
@@ -136,8 +136,8 @@ class TestLlamaCppPreflightRecommends:
         hw = HardwareProfile(ram_bytes=8 * 1024**3)
 
         with (
-            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
-            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=32 * 1024**3),
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=32 * 1024**3),
         ):
             rec = LlamaCppPreflight().recommend(cfg, hw)
 
@@ -229,11 +229,11 @@ class TestRegistration:
         cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)))
         hw = HardwareProfile(ram_bytes=64 * 1024**3)
 
-        from modelship.infer.preflight import run_preflight
+        from modelship.preflight import run_preflight
 
         with (
-            patch("modelship.infer.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
-            patch("modelship.infer.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
         ):
             rec = run_preflight(cfg, hw)
         assert rec == {"n_ctx": 8192}
