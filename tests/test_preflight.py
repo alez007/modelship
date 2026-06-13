@@ -20,7 +20,7 @@ from modelship.preflight import (
     merge_with_user_overrides,
     run_preflight,
 )
-from modelship.preflight.vllm import VllmPreflight
+from modelship.preflight.vllm import VllmPreflight, _is_moe
 
 
 def _make_config(
@@ -254,6 +254,15 @@ class TestVllmPreflight:
         shared = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=0.5), hw)
         whole = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=1), hw)
         assert shared["max_model_len"] < whole["max_model_len"]
+
+    def test_is_moe_detection_and_non_dict_safety(self):
+        assert _is_moe({"num_experts": 8}, {}) is True
+        assert _is_moe({}, {"n_routed_experts": 64}) is True
+        assert _is_moe({"num_hidden_layers": 28}, {"num_hidden_layers": 28}) is False
+        # malformed config.json: a sub-config that isn't a dict must not raise
+        assert _is_moe(None, {}) is False  # type: ignore[arg-type]
+        assert _is_moe("not-a-dict", None) is False  # type: ignore[arg-type]
+        assert _is_moe({"num_experts": "bogus"}, {}) is False  # non-int value ignored
 
     def test_moe_pays_heavier_overhead_than_dense(self, tmp_path):
         # An otherwise-identical MoE model carries the heavier fixed overhead, so

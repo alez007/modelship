@@ -328,6 +328,8 @@ def _is_moe(text_cfg: dict, model_cfg: dict) -> bool:
     inflate the fixed non-KV overhead. Detect via the expert-count keys HF
     configs use (checked on both the text sub-config and the top level)."""
     for cfg in (text_cfg, model_cfg):
+        if not isinstance(cfg, dict):
+            continue
         for key in ("num_experts", "num_local_experts", "n_routed_experts", "num_experts_per_tok"):
             value = cfg.get(key)
             if isinstance(value, int) and value > 0:
