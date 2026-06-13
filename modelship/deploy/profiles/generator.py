@@ -88,23 +88,43 @@ def _to_entries(specs: list[ModelSpec], budget: DeployBudget) -> list[dict]:
 def _gpu_allocation(specs: list[ModelSpec], gpu_count: int) -> dict[int, float]:
     """Per-deployment `num_gpus` for the VRAM-drawing models, keyed by `id(spec)`.
 
-    A lone GPU model takes the whole allocation (`num_gpus == gpu_count`, no
-    fractional sharing). When generate + image co-locate on one GPU, the share is
-    split **by footprint** — the bigger model (the LLM) gets the larger slice, so
-    a small co-resident image model doesn't wall off VRAM the LLM could spend on
-    KV cache. (`num_gpus` is the single VRAM knob: it drives gpu_memory_utilization
-    for vLLM and the per-process cap for diffusers.) Shares sum to exactly
-    `gpu_count` — the last model absorbs the rounding — so Ray can pack them all.
+    A lone GPU model takes the whole allocation (`num_gpus == gpu_count`).
+
+    When generate + image co-locate, allocation depends on the GPU count:
+
+    - **Fewer GPUs than models** (in practice a single GPU): the GPU is shared
+      **fractionally, by footprint** — the bigger model (the LLM) gets the larger
+      slice, so a small co-resident image model doesn't wall off VRAM the LLM
+      could spend on KV cache. Shares are < 1 and sum to `gpu_count`, which the
+      config validator accepts only as a single-GPU share. (`num_gpus` is the
+      single VRAM knob: it drives gpu_memory_utilization for vLLM and the
+      per-process cap for diffusers.)
+    - **At least as many GPUs as models**: each model gets ≥ 1 **whole** GPU
+      (any surplus goes to the largest-footprint models first). Fractional
+      `num_gpus >= 1` is rejected by the validator, so we must never emit e.g.
+      1.4 — multi-GPU boxes get integer allocations.
     """
     gpu_models = [s for s in specs if s.draws_from_vram]
-    if not gpu_models:
+    if not gpu_models or gpu_count <= 0:
         return {}
-    if len(gpu_models) == 1:
+    n = len(gpu_models)
+    if n == 1:
         return {id(gpu_models[0]): float(gpu_count)}
-    total_fp = sum(s.footprint_bytes for s in gpu_models) or 1
-    shares = [round(gpu_count * s.footprint_bytes / total_fp, 3) for s in gpu_models[:-1]]
-    shares.append(round(gpu_count - sum(shares), 3))
-    return {id(s): share for s, share in zip(gpu_models, shares, strict=True)}
+
+    if gpu_count < n:
+        # Share a single GPU fractionally, weighted by footprint.
+        total_fp = sum(s.footprint_bytes for s in gpu_models) or 1
+        shares = [round(gpu_count * s.footprint_bytes / total_fp, 3) for s in gpu_models[:-1]]
+        shares.append(round(gpu_count - sum(shares), 3))
+        return {id(s): share for s, share in zip(gpu_models, shares, strict=True)}
+
+    # Enough GPUs to give each model its own: whole-integer allocations, surplus
+    # to the largest footprints first.
+    alloc = {id(s): 1 for s in gpu_models}
+    by_footprint = sorted(gpu_models, key=lambda s: s.footprint_bytes, reverse=True)
+    for i in range(gpu_count - n):
+        alloc[id(by_footprint[i % n])] += 1
+    return {k: float(v) for k, v in alloc.items()}
 
 
 def _cpu_allocation(specs: list[ModelSpec], cpu_units: float) -> list[float]:

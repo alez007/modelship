@@ -95,6 +95,33 @@ def test_gpu_studio_small_split_is_footprint_weighted(tmp_path):
     assert img["num_gpus"] == 0.4
 
 
+def test_multi_gpu_studio_allocates_whole_integer_gpus(tmp_path):
+    # On a 2-GPU box the co-located models must each get a whole-integer num_gpus
+    # (>= 1) — fractional num_gpus >= 1 is rejected by the config validator.
+    out = _generate("studio", _gpu(24, gpus=2), tmp_path)
+    gpu_models = [m for m in out["doc"]["models"] if m["num_gpus"] > 0]
+    assert {m["usecase"] for m in gpu_models} == {"generate", "image"}
+    for m in gpu_models:
+        assert m["num_gpus"] >= 1 and m["num_gpus"] == int(m["num_gpus"])
+    # 2 GPUs, 2 models -> one whole GPU each
+    assert sum(m["num_gpus"] for m in gpu_models) == 2
+    # the generated YAML must actually validate (this is where the old 1.4 crashed)
+    from pydantic_yaml import parse_yaml_raw_as
+
+    from modelship.infer.infer_config import ModelshipConfig
+
+    parse_yaml_raw_as(ModelshipConfig, out["text"])
+
+
+def test_multi_gpu_surplus_goes_to_largest_footprint(tmp_path):
+    # 3 GPUs, 2 models: each gets 1, the surplus GPU goes to the larger (the LLM).
+    models = _generate("studio", _gpu(24, gpus=3), tmp_path)["doc"]["models"]
+    gen = next(m for m in models if m["usecase"] == "generate")
+    img = next(m for m in models if m["usecase"] == "image")
+    assert gen["num_gpus"] == 2
+    assert img["num_gpus"] == 1
+
+
 def test_gpu_chat_takes_whole_gpu(tmp_path):
     models = _generate("chat", _gpu(16, gpus=1), tmp_path)["doc"]["models"]
     gen = next(m for m in models if m["usecase"] == "generate")
