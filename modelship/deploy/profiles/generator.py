@@ -150,7 +150,16 @@ def _cpu_allocation(specs: list[ModelSpec], cpu_units: float) -> list[float]:
             for s, b in zip(specs, bases, strict=True)
         ]
     scale = cpu_units / total
-    return [round(b * scale, 2) for b in bases]
+    allocs = [round(b * scale, 2) for b in bases]
+    # Rounding each term to the cent can nudge the sum just above the budget,
+    # which Ray rejects. Trim the excess in 0.01 steps off the largest allocation
+    # until the total fits (the guard stops a pathological all-zero loop).
+    overshoot = round(sum(allocs) - cpu_units, 2)
+    while overshoot > 0 and any(a > 0 for a in allocs):
+        i = max(range(len(allocs)), key=lambda j: allocs[j])
+        allocs[i] = round(allocs[i] - 0.01, 2)
+        overshoot = round(overshoot - 0.01, 2)
+    return allocs
 
 
 def _render(profile: str, budget: DeployBudget, entries: list[dict]) -> str:

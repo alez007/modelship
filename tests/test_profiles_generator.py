@@ -12,8 +12,10 @@ import pytest
 import yaml
 
 from modelship.deploy.profiles.budget import DeployBudget
-from modelship.deploy.profiles.generator import generate_models_yaml
+from modelship.deploy.profiles.catalog import ModelSpec
+from modelship.deploy.profiles.generator import _cpu_allocation, generate_models_yaml
 from modelship.deploy.profiles.selector import ProfileDoesNotFitError
+from modelship.infer.infer_config import ModelLoader, ModelUsecase
 
 _GiB = 1024**3
 
@@ -140,6 +142,25 @@ def test_refuse_path_writes_nothing(tmp_path):
     import os
 
     assert not os.path.exists(p)
+
+
+def test_cpu_allocation_never_exceeds_budget_when_scaling_down():
+    # Adversarial tiny budget: naive per-term rounding would sum to 0.05 > 0.04.
+    specs = [
+        ModelSpec("g", ModelLoader.llama_cpp, ModelUsecase.generate, 0),
+        ModelSpec("i", ModelLoader.stable_diffusion_cpp, ModelUsecase.image, 0),
+        ModelSpec("e", ModelLoader.llama_cpp, ModelUsecase.embed, 0),
+    ]
+    allocs = _cpu_allocation(specs, 0.04)
+    assert round(sum(allocs), 2) <= 0.04
+    assert all(a >= 0 for a in allocs)
+
+
+def test_everything_cpu_cores_fit_a_tight_box(tmp_path):
+    # everything's base reservations (7 cores) exceed a 4-core box -> scale-down
+    # path; the rounded sum must still fit the ledger.
+    total = sum(m["num_cpus"] for m in _generate("everything", _cpu(32, cores=4), tmp_path)["doc"]["models"])
+    assert total <= 4.0 + 1e-9
 
 
 def test_generate_creates_missing_parent_dir(tmp_path):
