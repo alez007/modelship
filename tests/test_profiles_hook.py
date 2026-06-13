@@ -119,3 +119,13 @@ def test_unknown_profile_exits_clean(tmp_path, monkeypatch):
     with a, b, c, pytest.raises(SystemExit) as exc:
         resolve_config_path(None, config_dir=tmp_path)
     assert "bogus" in str(exc.value)
+
+
+def test_path_traversal_profile_name_rejected_before_any_fs_op(tmp_path, monkeypatch):
+    # `stack` is operator-supplied and goes into a filename + unlink, so a crafted
+    # value must be rejected up front — no path built, no file touched.
+    monkeypatch.setenv("MSHIP_MODEL_STACK", "../../evil")
+    with pytest.raises(SystemExit) as exc:
+        resolve_config_path(None, config_dir=tmp_path)
+    assert "unknown profile" in str(exc.value)
+    assert list(tmp_path.iterdir()) == []  # nothing created or deleted

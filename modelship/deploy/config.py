@@ -63,8 +63,15 @@ def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) ->
         return arg_path
 
     if stack:
+        from modelship.deploy.profiles.catalog import PROFILES
         from modelship.deploy.profiles.generator import generate_models_yaml
         from modelship.deploy.profiles.selector import ProfileDoesNotFitError
+
+        # Validate against the known profiles BEFORE building a path or touching the
+        # filesystem — `stack` is operator-supplied (env var / CLI), and feeding it
+        # into the filename unchecked would allow path traversal on the unlink below.
+        if stack not in PROFILES:
+            raise SystemExit(f"MSHIP_MODEL_STACK={stack!r}: unknown profile; choose one of {sorted(PROFILES)}.")
 
         path = config_dir / f"models_stack_{stack}.yaml"
         # Remove any prior generation first so a refusal never leaves a stale file
