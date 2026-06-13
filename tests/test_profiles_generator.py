@@ -140,3 +140,12 @@ def test_refuse_path_writes_nothing(tmp_path):
     import os
 
     assert not os.path.exists(p)
+
+
+def test_generate_creates_missing_parent_dir(tmp_path):
+    import os
+
+    p = str(tmp_path / "does" / "not" / "exist" / "models.yaml")
+    with patch("modelship.deploy.profiles.generator.read_deploy_budget", return_value=_cpu(16)):
+        generate_models_yaml("chat", p)
+    assert os.path.exists(p)

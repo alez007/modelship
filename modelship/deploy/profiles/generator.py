@@ -18,6 +18,8 @@ Resource allocation (the request budgeting we locked):
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import yaml
 
 from modelship.deploy.profiles.budget import DeployBudget, read_deploy_budget
@@ -50,6 +52,7 @@ def generate_models_yaml(profile: str, path: str) -> None:
     specs = select_stack(profile, budget)  # raises before any file is written
     entries = _to_entries(specs, budget)
     text = _render(profile, budget, entries)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         f.write(text)
     logger.info("profiles: wrote %d-model '%s' stack to %s", len(entries), profile, path)
