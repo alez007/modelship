@@ -9,7 +9,6 @@ from modelship.infer.custom.openai.serving_transcription import (
     OpenAIServingTranslation,
 )
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy
-from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ErrorResponse,
@@ -23,6 +22,7 @@ from modelship.openai.protocol import (
     TranslationResponseVerbose,
 )
 from modelship.plugins.base_plugin import BasePlugin, PluginProto
+from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 
 logger = get_logger("infer.custom")
 

@@ -168,6 +168,41 @@ class TestModelshipModelConfig:
         )
         assert config.num_gpus == 0.70
 
+    def test_fractional_num_gpus_sets_gpu_memory_utilization(self):
+        # A fractional num_gpus is the single source of truth for the VRAM share:
+        # it must land on gpu_memory_utilization so the preflight + engine agree.
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0.5,
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.5
+        # and it's marked set, so it survives model_dump(exclude_unset=True)
+        assert "gpu_memory_utilization" in config.vllm_engine_kwargs.model_fields_set
+
+    def test_explicit_gpu_memory_utilization_wins_over_num_gpus(self):
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0.5,
+            vllm_engine_kwargs={"gpu_memory_utilization": 0.6},
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.6
+
+    def test_whole_gpu_leaves_gpu_memory_utilization_default(self):
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=1,
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.9
+
     def test_num_gpus_integer_required_above_one(self):
         with pytest.raises(ValidationError, match="must be integers"):
             ModelshipModelConfig(

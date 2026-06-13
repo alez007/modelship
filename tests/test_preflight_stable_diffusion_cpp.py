@@ -8,8 +8,8 @@ from modelship.infer.infer_config import (
     ModelUsecase,
     StableDiffusionCppConfig,
 )
-from modelship.infer.preflight import HardwareProfile
-from modelship.infer.preflight.stable_diffusion_cpp import (
+from modelship.preflight import HardwareProfile
+from modelship.preflight.stable_diffusion_cpp import (
     _VAE_TILING_RAM_THRESHOLD_BYTES,
     StableDiffusionCppPreflight,
 )

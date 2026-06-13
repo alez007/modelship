@@ -218,6 +218,14 @@ class ModelshipModelConfig(BaseModel):
                     f"(e.g. num_gpus={world_size}) or drop the parallelism "
                     f"settings to share a single GPU."
                 )
+            # A fractional GPU share caps the engine's VRAM to this fraction. Make
+            # that the single source of truth on the config so EVERY reader agrees
+            # — the engine, the preflight KV-cache sizer, logs — instead of leaving
+            # gpu_memory_utilization at its 0.9 default for everyone but the loader.
+            # An explicitly set utilization always wins.
+            if "gpu_memory_utilization" not in self.vllm_engine_kwargs.model_fields_set:
+                self.vllm_engine_kwargs.gpu_memory_utilization = ng
+                self.vllm_engine_kwargs.model_fields_set.add("gpu_memory_utilization")
             return self
 
         # ng >= 1: integer-only.

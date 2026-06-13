@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig
 from modelship.logging import get_logger
 
-logger = get_logger("infer.preflight")
+logger = get_logger("preflight")
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,18 @@ def discover_hardware() -> HardwareProfile:
     """
     import os
 
+    return HardwareProfile(gpus=detect_gpus(), ram_bytes=detect_ram_bytes(), cpu_count=os.cpu_count() or 0)
+
+
+def detect_gpus() -> list[GPUInfo]:
+    """GPUs visible to this process, with free VRAM.
+
+    `torch.cuda` first (honors `CUDA_VISIBLE_DEVICES`, i.e. the actor's assigned
+    GPUs); `pynvml` node-level fallback when the actor owns no GPU directly
+    (vLLM ray-backend spawns worker sub-actors that hold them). On the driver
+    there's no mask, so this sees all physical GPUs — which is what the profile
+    generator wants for VRAM tiering. Split out of `discover_hardware` so deploy
+    code can read just the GPUs."""
     gpus = _torch_cuda_discover()
     if not gpus:
         gpus = _pynvml_node_discover()
@@ -65,7 +77,19 @@ def discover_hardware() -> HardwareProfile:
             logger.debug(
                 "preflight: actor has no direct GPU ownership; using node-level pynvml view (%d GPU(s))", len(gpus)
             )
+    return gpus
 
+
+def detect_ram_bytes() -> int:
+    """Total RAM available to *this* process, honoring a container memory cap.
+
+    psutil reads /proc/meminfo, which the kernel does NOT namespace per
+    container — so inside a memory-capped container it reports the HOST's RAM,
+    not the cgroup limit. Sizing a model against host RAM would OOM-kill a capped
+    container. The real ceiling lives in the cgroup pseudo-files; we take the
+    tighter of psutil and the cgroup limit. Returns 0 if RAM can't be read.
+
+    """
     ram_bytes = 0
     try:
         import psutil
@@ -74,7 +98,52 @@ def discover_hardware() -> HardwareProfile:
     except Exception:
         logger.debug("preflight: psutil probe failed; ram_bytes=0", exc_info=True)
 
-    return HardwareProfile(gpus=gpus, ram_bytes=ram_bytes, cpu_count=os.cpu_count() or 0)
+    cgroup_limit = _cgroup_memory_limit_bytes()
+    if cgroup_limit is not None:
+        if ram_bytes > 0:
+            capped = min(ram_bytes, cgroup_limit)
+            if capped < ram_bytes:
+                logger.debug(
+                    "preflight: applying cgroup memory limit %.2f GiB (host reports %.2f GiB)",
+                    capped / 1024**3,
+                    ram_bytes / 1024**3,
+                )
+            ram_bytes = capped
+        else:
+            # psutil failed but the cgroup limit is readable — use it rather than
+            # returning 0 (which would fail sizing / refuse the deploy).
+            logger.debug("preflight: psutil unavailable; using cgroup memory limit %.2f GiB", cgroup_limit / 1024**3)
+            ram_bytes = cgroup_limit
+
+    return ram_bytes
+
+
+def _cgroup_memory_limit_bytes(
+    paths: tuple[str, ...] = (
+        "/sys/fs/cgroup/memory.max",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+    ),
+) -> int | None:
+    """Return the container's memory ceiling from cgroup, or None if unlimited
+    or not containerized. Checks cgroup v2 (`memory.max`) then v1
+    (`memory.limit_in_bytes`). Mirrors Ray's `get_system_memory()`: the caller
+    takes `min()` with the psutil host value, which naturally discards cgroup
+    v1's astronomically large "unlimited" sentinel — so no magic threshold is
+    needed. Returns None on any read/parse failure so the caller keeps the host
+    value. `paths` is a parameter only so tests can point it at temp files."""
+    for path in paths:
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+        except OSError:
+            continue
+        if raw == "max":  # cgroup v2 "unlimited"
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            continue
+    return None
 
 
 def _torch_cuda_discover() -> list[GPUInfo]:
@@ -204,14 +273,14 @@ def _ensure_registered() -> None:
         register(ModelLoader.custom, _CustomPluginPreflight())
     if ModelLoader.llama_cpp not in _REGISTRY:
         try:
-            from modelship.infer.preflight.llama_cpp import LlamaCppPreflight
+            from modelship.preflight.llama_cpp import LlamaCppPreflight
 
             register(ModelLoader.llama_cpp, LlamaCppPreflight())
         except Exception:
             logger.debug("preflight: LlamaCppPreflight registration skipped", exc_info=True)
     if ModelLoader.stable_diffusion_cpp not in _REGISTRY:
         try:
-            from modelship.infer.preflight.stable_diffusion_cpp import StableDiffusionCppPreflight
+            from modelship.preflight.stable_diffusion_cpp import StableDiffusionCppPreflight
 
             register(ModelLoader.stable_diffusion_cpp, StableDiffusionCppPreflight())
         except Exception:
@@ -219,7 +288,7 @@ def _ensure_registered() -> None:
     if ModelLoader.vllm in _REGISTRY:
         return
     try:
-        from modelship.infer.preflight.vllm import VllmPreflight
+        from modelship.preflight.vllm import VllmPreflight
 
         register(ModelLoader.vllm, VllmPreflight())
     except Exception:
