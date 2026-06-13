@@ -111,6 +111,16 @@ def test_studio_on_tiny_gpu_is_refused_on_vram():
     assert "VRAM" in str(exc.value)
 
 
+def test_multi_gpu_fit_checks_largest_model_not_sum():
+    # 2x 16 GiB: studio's medium pairing (14B + SDXL-Turbo) sums to 18 GiB but
+    # each model gets its own GPU, so the binding constraint is the largest single
+    # model (14B ≈ 11 ≤ 12.8). The selector must reach medium, not fall to small.
+    budget = DeployBudget(cpu_units=16.0, gpu_count=2, ram_bytes=64 * _GiB, vram_bytes_per_gpu=16 * _GiB)
+    specs = select_stack("studio", budget)
+    gen = next(s for s in specs if s.usecase == ModelUsecase.generate)
+    assert "14B" in gen.model  # would be 7B (small) if the check summed footprints
+
+
 def test_studio_fits_a_16gb_gpu():
     # The canonical "studio" box: a 16 GiB card reports ~15.3 GiB free. With the
     # -1 GiB tier thresholds it classifies medium, steps down to the small pairing

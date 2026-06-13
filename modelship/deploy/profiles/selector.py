@@ -65,7 +65,7 @@ def select_stack(profile: str, budget: DeployBudget) -> list[ModelSpec]:
     # lower-tier bundle for heavy profiles that don't fit there.
     for tier in (Tier(t) for t in range(max_tier, Tier.small - 1, -1)):
         specs = _build_stack(caps, accel, tier)
-        ram_need, vram_need = _footprints(specs)
+        ram_need, vram_need = _footprints(specs, budget.gpu_count)
         if ram_need <= ram_avail and vram_need <= vram_avail:
             logger.info(
                 "profiles: %r -> %s tier %s (%d models; ram %.1f/%.1f GiB, vram %.1f/%.1f GiB)",
@@ -81,7 +81,7 @@ def select_stack(profile: str, budget: DeployBudget) -> list[ModelSpec]:
             return specs
 
     # Even the smallest tier didn't fit — refuse with the requirement spelled out.
-    ram_need, vram_need = _footprints(_build_stack(caps, accel, Tier.small))
+    ram_need, vram_need = _footprints(_build_stack(caps, accel, Tier.small), budget.gpu_count)
     raise ProfileDoesNotFitError(_too_small_message(profile, accel, budget, ram_need, vram_need))
 
 
@@ -97,12 +97,21 @@ def _build_stack(caps: tuple[ModelUsecase, ...], accel: Accelerator, tier: Tier)
     return specs
 
 
-def _footprints(specs: list[ModelSpec]) -> tuple[int, int]:
-    """`(ram_bytes, vram_bytes)` the stack needs. Satellites and CPU loaders draw
-    RAM; vllm/diffusers draw VRAM."""
+def _footprints(specs: list[ModelSpec], gpu_count: int) -> tuple[int, int]:
+    """`(ram_bytes, vram_bytes)` the stack needs against a *single* GPU's budget.
+
+    Satellites and CPU loaders draw RAM; vllm/diffusers draw VRAM. The VRAM figure
+    mirrors how `_gpu_allocation` will place the GPU models: when there are at
+    least as many GPUs as GPU models, each gets its own GPU, so the binding
+    constraint is the **largest single** model — not the sum. Only when models
+    share a GPU (fewer GPUs than models) do their footprints add up."""
     ram = sum(s.footprint_bytes for s in specs if not s.draws_from_vram)
-    vram = sum(s.footprint_bytes for s in specs if s.draws_from_vram)
-    return ram, vram
+    gpu_specs = [s for s in specs if s.draws_from_vram]
+    if not gpu_specs:
+        return ram, 0
+    if gpu_count >= len(gpu_specs):
+        return ram, max(s.footprint_bytes for s in gpu_specs)  # one model per GPU
+    return ram, sum(s.footprint_bytes for s in gpu_specs)  # shared on one GPU
 
 
 def _too_small_message(profile: str, accel: Accelerator, budget: DeployBudget, ram_need: int, vram_need: int) -> str:
