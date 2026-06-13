@@ -99,15 +99,21 @@ def detect_ram_bytes() -> int:
         logger.debug("preflight: psutil probe failed; ram_bytes=0", exc_info=True)
 
     cgroup_limit = _cgroup_memory_limit_bytes()
-    if cgroup_limit is not None and ram_bytes > 0:
-        capped = min(ram_bytes, cgroup_limit)
-        if capped < ram_bytes:
-            logger.debug(
-                "preflight: applying cgroup memory limit %.2f GiB (host reports %.2f GiB)",
-                capped / 1024**3,
-                ram_bytes / 1024**3,
-            )
-        ram_bytes = capped
+    if cgroup_limit is not None:
+        if ram_bytes > 0:
+            capped = min(ram_bytes, cgroup_limit)
+            if capped < ram_bytes:
+                logger.debug(
+                    "preflight: applying cgroup memory limit %.2f GiB (host reports %.2f GiB)",
+                    capped / 1024**3,
+                    ram_bytes / 1024**3,
+                )
+            ram_bytes = capped
+        else:
+            # psutil failed but the cgroup limit is readable — use it rather than
+            # returning 0 (which would fail sizing / refuse the deploy).
+            logger.debug("preflight: psutil unavailable; using cgroup memory limit %.2f GiB", cgroup_limit / 1024**3)
+            ram_bytes = cgroup_limit
 
     return ram_bytes
 

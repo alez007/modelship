@@ -6,7 +6,10 @@ min(psutil, cgroup). See modelship/preflight/base.py."""
 
 from __future__ import annotations
 
-from modelship.preflight.base import _cgroup_memory_limit_bytes
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from modelship.preflight.base import _cgroup_memory_limit_bytes, detect_ram_bytes
 
 _GiB = 1024**3
 # cgroup v1's "unlimited" sentinel (PAGE_COUNTER_MAX rounded to the page size).
@@ -64,3 +67,31 @@ def test_falls_through_to_second_path_when_first_missing(tmp_path):
     missing = str(tmp_path / "memory.max")
     v1 = _write(tmp_path, "memory.limit_in_bytes", f"{8 * _GiB}")
     assert _cgroup_memory_limit_bytes(paths=(missing, v1)) == 8 * _GiB
+
+
+# --- detect_ram_bytes: psutil + cgroup interplay ------------------------------
+
+
+def test_detect_ram_takes_min_of_psutil_and_cgroup():
+    with (
+        patch("psutil.virtual_memory", return_value=SimpleNamespace(total=16 * _GiB)),
+        patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=4 * _GiB),
+    ):
+        assert detect_ram_bytes() == 4 * _GiB
+
+
+def test_detect_ram_falls_back_to_cgroup_when_psutil_fails():
+    # psutil raising must NOT discard a readable cgroup limit (would return 0).
+    with (
+        patch("psutil.virtual_memory", side_effect=RuntimeError("boom")),
+        patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=4 * _GiB),
+    ):
+        assert detect_ram_bytes() == 4 * _GiB
+
+
+def test_detect_ram_zero_only_when_both_unavailable():
+    with (
+        patch("psutil.virtual_memory", side_effect=RuntimeError("boom")),
+        patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=None),
+    ):
+        assert detect_ram_bytes() == 0
