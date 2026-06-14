@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-06-14
+
+### Added
+- one-click model stacks via MSHIP_MODEL_STACK
+- add stable_diffusion_cpp CPU image-generation loader
+- streaming event protocol for /v1/responses (Phase A2)
+- stateless /v1/responses endpoint (Phase A)
+
+### Fixed
+- treat cgroup v1 unlimited sentinel as no-limit at the source
+- give CPU leftover to a single anchor, not every generate
+- exit cleanly when the stack file can't be written
+- keep scaled-down CPU allocation within the budget
+- check per-model VRAM, not the sum, on multi-GPU boxes
+- create parent dir before writing generated stack yaml
+- guard _is_moe against non-dict config sections
+- fall back to cgroup limit when psutil RAM probe fails
+- validate MSHIP_MODEL_STACK before any filesystem op
+- allocate whole-integer num_gpus on multi-GPU boxes
+- parse all bundled SSE messages per chat chunk
+- guard None tool_calls in streaming delta loop
+- validate tool-call association ids on input items
+- robust error mapping and full usage-detail propagation
+- robust status_code handling and list default_factory
+- drop logprobs/top_logprobs defaults from completion kwargs
+- reject logprobs explicitly instead of silently dropping
+
+### Changed
+- use asyncio.get_running_loop() in async paths
+- rebind handle to None instead of del on shutdown
+- warm up + repeat sweeps for stable A/B numbers
+- update _parse_chat_sse tests for multi-message parsing
+- document /v1/responses endpoint and streaming
+- split protocol.py into a protocol package
+
 ## [0.2.0] - 2026-06-06
 
 ### Added
