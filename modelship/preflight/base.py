@@ -118,6 +118,13 @@ def detect_ram_bytes() -> int:
     return ram_bytes
 
 
+# cgroup v1 reports "unlimited" as a near-INT64_MAX sentinel: PAGE_COUNTER_MAX
+# (LONG_MAX rounded down to the page size) = 0x7FFFFFFFFFFFF000, and some kernels
+# report LONG_MAX itself. Both are >= this value. No real machine has ~9.2 EiB of
+# RAM, so treating anything this large as "no limit" has zero false positives.
+_CGROUP_V1_UNLIMITED = 0x7FFFFFFFFFFFF000
+
+
 def _cgroup_memory_limit_bytes(
     paths: tuple[str, ...] = (
         "/sys/fs/cgroup/memory.max",  # cgroup v2
@@ -125,11 +132,11 @@ def _cgroup_memory_limit_bytes(
     ),
 ) -> int | None:
     """Return the container's memory ceiling from cgroup, or None if unlimited
-    or not containerized. Checks cgroup v2 (`memory.max`) then v1
-    (`memory.limit_in_bytes`). Mirrors Ray's `get_system_memory()`: the caller
-    takes `min()` with the psutil host value, which naturally discards cgroup
-    v1's astronomically large "unlimited" sentinel — so no magic threshold is
-    needed. Returns None on any read/parse failure so the caller keeps the host
+    or not containerized. Checks cgroup v2 (`memory.max` == "max") then v1
+    (`memory.limit_in_bytes` == the near-INT64_MAX sentinel). Detecting the v1
+    sentinel here — rather than relying on the caller's `min()` with psutil — keeps
+    the value safe even when psutil is unavailable (e.g. `detect_ram_bytes`'s
+    fallback). Returns None on any read/parse failure so the caller keeps the host
     value. `paths` is a parameter only so tests can point it at temp files."""
     for path in paths:
         try:
@@ -140,9 +147,12 @@ def _cgroup_memory_limit_bytes(
         if raw == "max":  # cgroup v2 "unlimited"
             return None
         try:
-            return int(raw)
+            value = int(raw)
         except ValueError:
             continue
+        if value <= 0 or value >= _CGROUP_V1_UNLIMITED:  # cgroup v1 "unlimited" / nonsensical
+            return None
+        return value
     return None
 
 

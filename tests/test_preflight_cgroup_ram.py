@@ -37,14 +37,21 @@ def test_reads_cgroup_v1_numeric_limit(tmp_path):
     assert _cgroup_memory_limit_bytes(paths=(v1,)) == 8 * _GiB
 
 
-def test_cgroup_v1_unlimited_sentinel_is_returned_but_discarded_by_min(tmp_path):
-    # We deliberately do NOT special-case the sentinel here; the caller's min()
-    # with the (much smaller) psutil value discards it. Assert the raw read so
-    # the contract with discover_hardware stays explicit.
+def test_cgroup_v1_unlimited_sentinel_is_recognized_as_none(tmp_path):
+    # The near-INT64_MAX "unlimited" sentinel must be treated as no-limit (None)
+    # at the source — not leaked for the caller to discard — so it's safe even
+    # without a psutil value to min() against.
     v1 = _write(tmp_path, "memory.limit_in_bytes", str(_V1_UNLIMITED))
-    limit = _cgroup_memory_limit_bytes(paths=(v1,))
-    assert limit == _V1_UNLIMITED
-    assert min(16 * _GiB, limit) == 16 * _GiB  # min keeps the real host value
+    assert _cgroup_memory_limit_bytes(paths=(v1,)) is None
+
+
+def test_cgroup_long_max_sentinel_is_recognized_as_none(tmp_path):
+    v1 = _write(tmp_path, "memory.limit_in_bytes", str(0x7FFFFFFFFFFFFFFF))
+    assert _cgroup_memory_limit_bytes(paths=(v1,)) is None
+
+
+def test_cgroup_zero_or_negative_is_none(tmp_path):
+    assert _cgroup_memory_limit_bytes(paths=(_write(tmp_path, "memory.max", "0"),)) is None
 
 
 def test_missing_files_return_none(tmp_path):
