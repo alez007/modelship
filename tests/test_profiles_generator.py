@@ -156,6 +156,21 @@ def test_cpu_allocation_never_exceeds_budget_when_scaling_down():
     assert all(a >= 0 for a in allocs)
 
 
+def test_cpu_allocation_leftover_goes_to_a_single_anchor():
+    # Two generate models: the leftover must land on only one, not both, or the
+    # sum would exceed the budget.
+    specs = [
+        ModelSpec("g1", ModelLoader.vllm, ModelUsecase.generate, 0),
+        ModelSpec("g2", ModelLoader.vllm, ModelUsecase.generate, 0),
+        ModelSpec("e", ModelLoader.llama_cpp, ModelUsecase.embed, 0),
+    ]
+    allocs = _cpu_allocation(specs, 16.0)
+    assert sum(allocs) <= 16.0 + 1e-9
+    gen = sorted(allocs[:2])
+    assert gen[0] == 2.0  # the non-anchor generate stays at its base reservation
+    assert gen[1] > 2.0  # the anchor absorbed the leftover
+
+
 def test_everything_cpu_cores_fit_a_tight_box(tmp_path):
     # everything's base reservations (7 cores) exceed a 4-core box -> scale-down
     # path; the rounded sum must still fit the ledger.

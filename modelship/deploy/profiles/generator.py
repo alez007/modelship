@@ -145,10 +145,10 @@ def _cpu_allocation(specs: list[ModelSpec], cpu_units: float) -> list[float]:
     total = sum(bases)
     if total <= cpu_units:
         leftover = cpu_units - total
-        return [
-            round(b + leftover, 2) if s.usecase == ModelUsecase.generate else b
-            for s, b in zip(specs, bases, strict=True)
-        ]
+        # Give the whole leftover to a single anchor (the first generate model),
+        # not every generate — otherwise a multi-LLM profile would over-subscribe.
+        anchor = next((i for i, s in enumerate(specs) if s.usecase == ModelUsecase.generate), None)
+        return [round(b + leftover, 2) if i == anchor else b for i, b in enumerate(bases)]
     scale = cpu_units / total
     allocs = [round(b * scale, 2) for b in bases]
     # Rounding each term to the cent can nudge the sum just above the budget,
