@@ -74,14 +74,18 @@ def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) ->
             raise SystemExit(f"MSHIP_MODEL_STACK={stack!r}: unknown profile; choose one of {sorted(PROFILES)}.")
 
         path = config_dir / f"models_stack_{stack}.yaml"
-        # Remove any prior generation first so a refusal never leaves a stale file
-        # behind that a later run could mistake for hand-authored config.
-        path.unlink(missing_ok=True)
         logger.info("MSHIP_MODEL_STACK=%s: generating %s for the detected hardware...", stack, path)
         try:
+            # Remove any prior generation first so a refusal never leaves a stale
+            # file behind that a later run could mistake for hand-authored config.
+            path.unlink(missing_ok=True)
             generate_models_yaml(stack, str(path))
         except (ProfileDoesNotFitError, ValueError) as e:
             raise SystemExit(f"MSHIP_MODEL_STACK={stack}: {e}") from e
+        except OSError as e:
+            # Read-only / permission-denied config dir, etc. — fail cleanly instead
+            # of dumping a traceback.
+            raise SystemExit(f"MSHIP_MODEL_STACK={stack}: cannot write {path}: {e}") from e
         return str(path)
 
     default = config_dir / "models.yaml"

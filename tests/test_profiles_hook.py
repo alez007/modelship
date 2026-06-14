@@ -121,6 +121,21 @@ def test_unknown_profile_exits_clean(tmp_path, monkeypatch):
     assert "bogus" in str(exc.value)
 
 
+def test_oserror_during_generation_exits_clean(tmp_path, monkeypatch):
+    # A read-only / permission-denied config dir must fail cleanly, not traceback.
+    monkeypatch.setenv("MSHIP_MODEL_STACK", "chat")
+    with (
+        patch(
+            "modelship.deploy.profiles.generator.generate_models_yaml",
+            side_effect=PermissionError("read-only file system"),
+        ),
+        pytest.raises(SystemExit) as exc,
+    ):
+        resolve_config_path(None, config_dir=tmp_path)
+    assert "cannot write" in str(exc.value)
+    assert "chat" in str(exc.value)
+
+
 def test_path_traversal_profile_name_rejected_before_any_fs_op(tmp_path, monkeypatch):
     # `stack` is operator-supplied and goes into a filename + unlink, so a crafted
     # value must be rejected up front — no path built, no file touched.
