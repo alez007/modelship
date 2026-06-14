@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 RAY_FLAGS=(--head --disable-usage-stats)
-if [ "${MSHIP_RAY_DASHBOARD}" = "true" ]; then
+if [ "${MSHIP_RAY_DASHBOARD,,}" = "true" ]; then
     RAY_FLAGS+=(--include-dashboard=true --dashboard-host=0.0.0.0)
 else
     RAY_FLAGS+=(--include-dashboard=false)
