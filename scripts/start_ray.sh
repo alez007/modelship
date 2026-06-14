@@ -19,7 +19,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-RAY_FLAGS=(--head --dashboard-host=0.0.0.0 --disable-usage-stats)
+RAY_FLAGS=(--head --disable-usage-stats)
+if [ "${MSHIP_RAY_DASHBOARD}" = "true" ]; then
+    RAY_FLAGS+=(--include-dashboard=true --dashboard-host=0.0.0.0)
+else
+    RAY_FLAGS+=(--include-dashboard=false)
+fi
 
 if [ -n "${NUM_CPUS}" ]; then
     RAY_FLAGS+=(--num-cpus="${NUM_CPUS}")

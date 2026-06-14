@@ -60,4 +60,4 @@ The API binds to `0.0.0.0:8000` by default, but if you're on a remote machine, m
 
 - Set `MSHIP_LOG_LEVEL=DEBUG` for verbose logs.
 - Set `MSHIP_LOG_LEVEL=TRACE` to log full request/response payloads (and enable llama.cpp `verbose` mode).
-- The Ray dashboard on port `8265` shows per-actor logs and resource usage.
+- The Ray dashboard is **disabled by default** to save host RAM. Start the container with `MSHIP_RAY_DASHBOARD=true` (and publish port `8265`) to get per-actor logs and resource usage in the UI. Prometheus metrics on `8079` are exported regardless.
