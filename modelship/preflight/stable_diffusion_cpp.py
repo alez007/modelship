@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from modelship.infer.infer_config import ModelshipModelConfig
-from modelship.infer.preflight.base import HardwareProfile
 from modelship.logging import get_logger
+from modelship.preflight.base import HardwareProfile
 
-logger = get_logger("infer.preflight.stable_diffusion_cpp")
+logger = get_logger("preflight.stable_diffusion_cpp")
 
 # Below this total system RAM, default to tiled VAE decode. The VAE decode is the
 # memory high-water mark for SD/SDXL generation, so tiling it trades a little

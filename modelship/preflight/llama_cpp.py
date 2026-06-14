@@ -4,10 +4,10 @@ import os
 from typing import Any
 
 from modelship.infer.infer_config import ModelshipModelConfig
-from modelship.infer.preflight.base import HardwareProfile
 from modelship.logging import get_logger
+from modelship.preflight.base import HardwareProfile
 
-logger = get_logger("infer.preflight.llama_cpp")
+logger = get_logger("preflight.llama_cpp")
 
 # Fraction of total system RAM the preflight will allocate. No equivalent of
 # vLLM's `gpu_memory_utilization` exists in LlamaCppConfig; 0.8 leaves room

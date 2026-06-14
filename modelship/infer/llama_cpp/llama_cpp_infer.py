@@ -10,7 +10,6 @@ from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.openai.serving_chat import OpenAIServingChat
 from modelship.infer.llama_cpp.openai.serving_embedding import OpenAIServingEmbedding
 from modelship.infer.llama_cpp.utils import build_tool_call_renderer
-from modelship.infer.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -19,6 +18,7 @@ from modelship.openai.protocol import (
     EmbeddingResponse,
     ErrorResponse,
 )
+from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 
 logger = get_logger("infer.llama_cpp")
 

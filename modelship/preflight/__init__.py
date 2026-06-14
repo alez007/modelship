@@ -13,10 +13,12 @@ naming both values, and the user value is used. The runtime catch in
 can't model (multimodal, LoRA, speculative decoding, etc.).
 """
 
-from modelship.infer.preflight.base import (
+from modelship.preflight.base import (
     BasePreflight,
     GPUInfo,
     HardwareProfile,
+    detect_gpus,
+    detect_ram_bytes,
     discover_hardware,
     merge_with_user_overrides,
     run_preflight,
@@ -26,6 +28,8 @@ __all__ = [
     "BasePreflight",
     "GPUInfo",
     "HardwareProfile",
+    "detect_gpus",
+    "detect_ram_bytes",
     "discover_hardware",
     "merge_with_user_overrides",
     "run_preflight",

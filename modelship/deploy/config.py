@@ -42,13 +42,60 @@ def _is_explicit_tool_opt_out(cfg) -> bool:
     return False
 
 
-def resolve_config_path(arg_path: str | None) -> str:
-    path = arg_path or str(Path(__file__).resolve().parent.parent.parent / "config" / "models.yaml")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"{path} not found. Copy one of the example configs from config/ to config/models.yaml."
-        )
-    return path
+def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) -> str:
+    """Resolve the models.yaml to deploy.
+
+    Precedence:
+    1. An explicit ``--config`` path always wins (most specific signal); it must exist.
+    2. ``MSHIP_MODEL_STACK=<profile>`` (or ``--model-stack``) → regenerate
+       ``models_stack_<profile>.yaml`` from scratch on every start, sized to the
+       detected hardware, and deploy that. Regenerating fresh each time lets the
+       user switch profiles by just changing the value — no stale file to delete by
+       hand. Refuses with a clean exit (no partial deploy) if the profile can't fit.
+    3. Otherwise the default ``config/models.yaml`` must exist.
+    """
+    config_dir = config_dir or Path(__file__).resolve().parent.parent.parent / "config"
+    stack = os.environ.get("MSHIP_MODEL_STACK")
+
+    if arg_path:
+        if not os.path.exists(arg_path):
+            raise FileNotFoundError(f"--config {arg_path} not found.")
+        return arg_path
+
+    if stack:
+        from modelship.deploy.profiles.catalog import PROFILES
+        from modelship.deploy.profiles.generator import generate_models_yaml
+        from modelship.deploy.profiles.selector import ProfileDoesNotFitError
+
+        # Validate against the known profiles BEFORE building a path or touching the
+        # filesystem — `stack` is operator-supplied (env var / CLI), and feeding it
+        # into the filename unchecked would allow path traversal on the unlink below.
+        if stack not in PROFILES:
+            raise SystemExit(f"MSHIP_MODEL_STACK={stack!r}: unknown profile; choose one of {sorted(PROFILES)}.")
+
+        path = config_dir / f"models_stack_{stack}.yaml"
+        logger.info("MSHIP_MODEL_STACK=%s: generating %s for the detected hardware...", stack, path)
+        try:
+            # Remove any prior generation first so a refusal never leaves a stale
+            # file behind that a later run could mistake for hand-authored config.
+            path.unlink(missing_ok=True)
+            generate_models_yaml(stack, str(path))
+        except (ProfileDoesNotFitError, ValueError) as e:
+            raise SystemExit(f"MSHIP_MODEL_STACK={stack}: {e}") from e
+        except OSError as e:
+            # Read-only / permission-denied config dir, etc. — fail cleanly instead
+            # of dumping a traceback.
+            raise SystemExit(f"MSHIP_MODEL_STACK={stack}: cannot write {path}: {e}") from e
+        return str(path)
+
+    default = config_dir / "models.yaml"
+    if default.exists():
+        return str(default)
+
+    raise FileNotFoundError(
+        f"{default} not found. Set MSHIP_MODEL_STACK=<profile> (or pass --model-stack) to "
+        f"auto-generate one, or copy an example config from config/examples/ to config/models.yaml."
+    )
 
 
 def load_yaml_config(arg_path: str | None) -> ModelshipConfig:

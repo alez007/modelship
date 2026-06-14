@@ -24,7 +24,7 @@ from modelship.openai.protocol import (
 )
 
 if TYPE_CHECKING:
-    from modelship.infer.preflight import HardwareProfile
+    from modelship.preflight import HardwareProfile
 
 _NOT_SUPPORTED = ErrorResponse(
     error=ErrorInfo(message="plugin does not support this action", type="invalid_request_error")
