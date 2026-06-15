@@ -24,8 +24,6 @@ class TestParseArgs:
         assert args.config is None
         assert args.redeploy is False
         assert args.gateway_name is None
-        assert args.ray_cluster_address is None
-        assert args.ray_redis_port is None
         assert args.use_existing_ray_cluster is None
 
     def test_redeploy_flag(self):
@@ -62,18 +60,12 @@ class TestParseArgs:
                 "--gateway-name",
                 "llm-api",
                 "--redeploy",
-                "--ray-cluster-address",
-                "10.0.0.1",
-                "--ray-redis-port",
-                "6379",
                 "--use-existing-ray-cluster",
             ]
         )
         assert args.config == "llm.yaml"
         assert args.gateway_name == "llm-api"
         assert args.redeploy is True
-        assert args.ray_cluster_address == "10.0.0.1"
-        assert args.ray_redis_port == "6379"
         assert args.use_existing_ray_cluster is True
 
 
@@ -346,3 +338,43 @@ class TestResolvePluginWheel:
             pytest.raises(RuntimeError, match="No wheel found for plugin 'myplugin'"),
         ):
             resolve_plugin_wheel("myplugin")
+
+
+class TestConnectRay:
+    def _init_call(self, env):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.object(serve_utils.ray, "init") as mock_init,
+        ):
+            serve_utils.connect_ray(20)
+        _, kwargs = mock_init.call_args
+        return kwargs
+
+    def test_existing_cluster_connects_via_auto(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})
+        assert kwargs["address"] == "auto"
+        # No head is started: resource/metrics kwargs must be absent.
+        assert "_metrics_export_port" not in kwargs
+        assert "num_cpus" not in kwargs
+
+    def test_own_cluster_starts_head_with_metrics_port(self):
+        kwargs = self._init_call(
+            {
+                "MSHIP_USE_EXISTING_RAY_CLUSTER": "false",
+                "MSHIP_METRICS": "true",
+                "RAY_METRICS_EXPORT_PORT": "8079",
+                "RAY_HEAD_CPU_NUM": "4",
+            }
+        )
+        assert "address" not in kwargs
+        assert kwargs["dashboard_host"] == "0.0.0.0"
+        assert kwargs["num_cpus"] == 4
+        # Guards the private ray.init kwarg that pins Ray's metrics agent port.
+        assert kwargs["_metrics_export_port"] == 8079
+
+    def test_own_cluster_omits_metrics_port_when_disabled(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_METRICS": "false"})
+        assert "address" not in kwargs
+        assert "_metrics_export_port" not in kwargs

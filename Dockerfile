@@ -73,8 +73,6 @@ ENV VIRTUAL_ENV=/.venv
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
 ENV MSHIP_CACHE_DIR=/.cache
 ENV UV_CACHE_DIR=${MSHIP_CACHE_DIR}/uv
-ENV RAY_REDIS_PORT=6379
-ENV RAY_CLUSTER_ADDRESS=0.0.0.0
 ENV MSHIP_USE_EXISTING_RAY_CLUSTER=false
 ENV MSHIP_METRICS=true
 ENV RAY_METRICS_EXPORT_PORT=8079
@@ -178,8 +176,6 @@ USER modelship
 RUN --mount=type=cache,target=/.cache/uv,uid=$UID,gid=$GID \
     uv sync --locked --no-install-project --extra dev --extra $MSHIP_VARIANT
 
-ADD --chown=$UID:$GID ./scripts/start_ray.sh /modelship/scripts/start_ray.sh
-
 USER root
 
 ENTRYPOINT ["/modelship/scripts/entrypoint.sh"]
@@ -208,4 +204,4 @@ ADD --chown=$UID:$GID ./scripts scripts
 USER root
 
 ENTRYPOINT ["/modelship/scripts/entrypoint.sh"]
-CMD ["uv", "run", "--active", "bash", "/modelship/scripts/start.sh"]
+CMD ["uv", "run", "--no-sync", "mship_deploy.py"]
