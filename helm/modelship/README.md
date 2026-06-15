@@ -69,8 +69,12 @@ secrets:
 
 - **Head** — CPU-only (`num-gpus: 0`); runs GCS, the Serve HTTP proxy, and the
   gateway. No models are scheduled here.
-- **Worker groups** — default is one GPU group (`nvidia.com/gpu: 1`) and one CPU
-  group. Add entries under `workerGroups` to fan out across nodes.
+- **Worker groups** — where models actually run. **Empty by default**, so a
+  no-values install brings up only the head and schedules nothing; declare the
+  groups that match your hardware under `workerGroups` (a commented gpu+cpu
+  example ships in `values.yaml`). This is a **list — Helm replaces it wholesale**
+  (no per-item merge), so always declare the full set you want; omitting the key
+  keeps the empty default.
 - **Cache** — a shared PVC for model weights at `/.cache`. Single-node clusters
   can use `ReadWriteOnce`; **multi-node requires `ReadWriteMany`** so every worker
   shares one copy.
@@ -97,7 +101,7 @@ curl http://localhost:8000/v1/models
 | `models.config` / `models.existingConfigMap` | `models: []` | Your model set |
 | `secrets.huggingfaceToken` / `secrets.apiKeys` | `""` | HF token / gateway API keys |
 | `cache.size` / `cache.accessModes` | `100Gi` / `[ReadWriteOnce]` | Shared weight cache |
-| `workerGroups` | gpu + cpu | Worker pool layout |
+| `workerGroups` | `[]` | Worker pool layout (a list — set the full set; copy the example in `values.yaml`) |
 | `deploy.reconcile` | `false` | Remove dropped models on upgrade |
 | `deploy.replaceStrategy` | `blue_green` | How changed models are replaced |
 | `service.type` | `ClusterIP` | Set `LoadBalancer` to expose externally |

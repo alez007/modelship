@@ -94,49 +94,59 @@ head:
   affinity: {}
   annotations: {}
 
-# -- Worker groups. Default: one GPU group + one CPU group (matches a single
-# g2-style node: 1 GPU carved off, the rest CPU). Add entries to fan out across
-# nodes. Ray autodetects GPUs from the container's visible devices, so the GPU
-# group leaves num-gpus unset; the CPU group pins num-gpus=0.
-workerGroups:
-  - name: gpu
-    replicas: 1
-    minReplicas: 1
-    maxReplicas: 1
-    rayStartParams: {}
-    resources:
-      requests:
-        cpu: "4"
-        memory: 16Gi
-        nvidia.com/gpu: "1"
-      limits:
-        cpu: "4"
-        memory: 32Gi
-        nvidia.com/gpu: "1"
-    nodeSelector: {}
-    tolerations:
-      - key: nvidia.com/gpu
-        operator: Exists
-        effect: NoSchedule
-    affinity: {}
-    annotations: {}
-  - name: cpu
-    replicas: 1
-    minReplicas: 1
-    maxReplicas: 1
-    rayStartParams:
-      num-gpus: "0"
-    resources:
-      requests:
-        cpu: "4"
-        memory: 8Gi
-      limits:
-        cpu: "6"
-        memory: 16Gi
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-    annotations: {}
+
+workerGroups: []
+  # - name: gpu
+  #   # Optional per-group image override. Maps to KubeRay's standard per-group pod
+  #   # template (workerGroupSpecs[].template.containers[0].image) — leave the
+  #   # top-level `image` on the lean CPU image and override only the GPU group with
+  #   # the full GPU image, so CPU nodes don't pull CUDA they never use. Any field
+  #   # omitted here falls back to the top-level `image`. Both images must be the
+  #   # same modelship release (same Ray version) or KubeRay rejects the cluster.
+  #   image:
+  #     repository: ghcr.io/alez007/modelship
+  #     tag: "0.3.0"            # GPU image; top-level image.tag might be "0.3.0-cpu"
+  #   # On k3s/containerd the GPU group usually needs the NVIDIA RuntimeClass so the
+  #   # GPU is injected. Omit where the GPU runtime is already the cluster default
+  #   # (e.g. the NVIDIA GPU Operator). CPU groups never set this.
+  #   runtimeClassName: nvidia
+  #   replicas: 1
+  #   minReplicas: 1
+  #   maxReplicas: 1
+  #   rayStartParams: {}
+  #   resources:
+  #     requests:
+  #       cpu: "4"
+  #       memory: 16Gi
+  #       nvidia.com/gpu: "1"
+  #     limits:
+  #       cpu: "4"
+  #       memory: 32Gi
+  #       nvidia.com/gpu: "1"
+  #   nodeSelector: {}
+  #   tolerations:
+  #     - key: nvidia.com/gpu
+  #       operator: Exists
+  #       effect: NoSchedule
+  #   affinity: {}
+  #   annotations: {}
+  # - name: cpu
+  #   replicas: 1
+  #   minReplicas: 1
+  #   maxReplicas: 1
+  #   rayStartParams:
+  #     num-gpus: "0"
+  #   resources:
+  #     requests:
+  #       cpu: "4"
+  #       memory: 8Gi
+  #     limits:
+  #       cpu: "6"
+  #       memory: 16Gi
+  #   nodeSelector: {}
+  #   tolerations: []
+  #   affinity: {}
+  #   annotations: {}
 
 # -- The deploy RayJob: submits mship_deploy.py to run on the head
 # (--use-existing-ray-cluster), which deploys then exits. Re-run (helm upgrade)

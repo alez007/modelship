@@ -87,16 +87,27 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         spec:
+          {{- with .runtimeClassName }}
+          # Optional per-group RuntimeClass (e.g. "nvidia" on k3s/containerd, so the
+          # NVIDIA container runtime injects the GPU). Omit on CPU groups / clusters
+          # where the GPU runtime is already the default.
+          runtimeClassName: {{ . }}
+          {{- end }}
           securityContext:
             {{- toYaml $.Values.podSecurityContext | nindent 12 }}
           {{- with $.Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          # Per-group image override: a worker group may set its own `image`
+          # (repository/tag/pullPolicy); any field left unset falls back to the
+          # cluster-wide `image`. Lets a CPU image run cluster-wide while the GPU
+          # group pulls the full GPU image (both built at the same Ray version).
+          {{- $img := .image | default dict }}
           containers:
             - name: ray-worker
-              image: {{ include "modelship.image" $ }}
-              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              image: {{ printf "%s:%s" ($img.repository | default $.Values.image.repository) ($img.tag | default $.Values.image.tag) }}
+              imagePullPolicy: {{ $img.pullPolicy | default $.Values.image.pullPolicy }}
               ports:
                 - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
               envFrom:
