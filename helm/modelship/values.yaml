@@ -1,9 +1,9 @@
 # Default values for the modelship chart.
-# Topology: a KubeRay RayCluster (head + worker groups) plus a one-shot Job that
-# runs mship_deploy.py against it to deploy the models in models.yaml.
+# Topology: a KubeRay RayCluster (head + worker groups) plus a RayJob that submits
+# mship_deploy.py to run on the head and deploy the models in models.yaml.
 
-# -- Container image. Used by every Ray pod AND the deploy Job (they must share
-# the exact image so the Ray/Python versions match across the cluster).
+# -- Container image. Used by every Ray pod AND the RayJob submitter (they must
+# share the exact image so the Ray/Python versions match across the cluster).
 image:
   repository: ghcr.io/alez007/modelship
   # GPU image. For a CPU-only cluster use the "-cpu" suffixed tag, e.g. "0.3.0-cpu".
@@ -17,10 +17,6 @@ imagePullSecrets: []
 # cluster and refuses mismatches — keep it in lockstep with the image.
 rayVersion: "2.54.1"
 
-# Ray GCS/Redis port. The deploy Job connects to the head here, and the head
-# exposes it as a container port. Matches the image's RAY_REDIS_PORT default.
-redisPort: 6379
-
 # -- Optional bootstrap of the KubeRay operator + CRDs as a subchart.
 # OFF by default: cluster-scoped, install-once, needs cluster-admin. Turn on for
 # greenfield/single-tenant clusters; leave off where an admin manages KubeRay.
@@ -32,7 +28,7 @@ gateway:
   name: "modelship api"
   port: 8000
   # Readiness gating via the Serve /readyz endpoint on the head. /readyz only
-  # exists after the deploy Job runs, so this gates *readiness* (not liveness):
+  # exists after the deploy RayJob runs, so this gates *readiness* (not liveness):
   # the head joins the gateway Service only once models are loaded, and KubeRay
   # never restarts it during bootstrap. The startupProbe budget must cover model
   # download + load (default 120 * 10s = 20 min).
@@ -153,9 +149,9 @@ workerGroups:
     affinity: {}
     annotations: {}
 
-# -- The deploy Job: runs mship_deploy.py against the RayCluster
-# (--use-existing-ray-cluster), then exits. Re-run (helm upgrade) to apply
-# models.yaml changes.
+# -- The deploy RayJob: submits mship_deploy.py to run on the head
+# (--use-existing-ray-cluster), which deploys then exits. Re-run (helm upgrade)
+# to apply models.yaml changes.
 deploy:
   # Diff models.yaml against what this gateway already owns and remove the
   # difference (vs. additive default). Maps to mship_deploy.py --reconcile.

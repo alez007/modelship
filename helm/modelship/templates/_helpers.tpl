@@ -42,7 +42,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The container image reference shared by Ray pods and the deploy Job.
+The container image reference shared by Ray pods and the RayJob submitter.
 */}}
 {{- define "modelship.image" -}}
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
@@ -100,7 +100,7 @@ when no Secret was created (e.g. all-ungated models, no auth).
 {{- end -}}
 
 {{/*
-Volumes shared by every Ray pod and the deploy Job: an in-memory /dev/shm for
+Volumes shared by every Ray pod (head + workers): an in-memory /dev/shm for
 vLLM/NCCL, and the model-weight cache PVC.
 */}}
 {{- define "modelship.volumes" -}}

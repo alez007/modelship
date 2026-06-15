@@ -9,8 +9,6 @@ spec:
   # ---- Head: CPU-only coordination (GCS, dashboard, Serve proxy). ----
   headGroupSpec:
     rayStartParams:
-      # Bind the GCS listener to the same port the deploy Job connects to.
-      port: {{ .Values.redisPort | quote }}
       {{- toYaml .Values.head.rayStartParams | nindent 6 }}
     template:
       metadata:
@@ -32,8 +30,11 @@ spec:
           - name: ray-head
             image: {{ include "modelship.image" . }}
             imagePullPolicy: {{ .Values.image.pullPolicy }}
+            # KubeRay assigns/exposes the Ray-owned ports (gcs, dashboard/job
+            # server, client) from rayStartParams or its defaults, and wires the
+            # RayJob submitter to the head dashboard itself — so we don't declare
+            # them here. Only the modelship-owned ports are declared.
             ports:
-              - { name: gcs, containerPort: {{ .Values.redisPort }} }
               - { name: serve, containerPort: {{ .Values.gateway.port }} }
               - { name: metrics, containerPort: {{ .Values.metrics.port }} }
             envFrom:
@@ -54,12 +55,19 @@ spec:
                 port: serve
               {{- toYaml .Values.gateway.readinessProbe | nindent 14 }}
             volumeMounts:
+              # models.yaml for the RayJob deploy entrypoint, which runs on the head.
+              - name: models-config
+                mountPath: /etc/modelship
+                readOnly: true
               {{- include "modelship.volumeMounts" . | nindent 14 }}
             lifecycle:
               preStop:
                 exec:
                   command: ["/bin/sh", "-c", "ray stop"]
         volumes:
+          - name: models-config
+            configMap:
+              name: {{ include "modelship.configMapName" . }}
           {{- include "modelship.volumes" . | nindent 10 }}
         {{- with .Values.head.nodeSelector }}
         nodeSelector:
