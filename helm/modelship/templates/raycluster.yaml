@@ -30,11 +30,12 @@ spec:
           - name: ray-head
             image: {{ include "modelship.image" . }}
             imagePullPolicy: {{ .Values.image.pullPolicy }}
-            # KubeRay assigns/exposes the Ray-owned ports (gcs, dashboard/job
-            # server, client) from rayStartParams or its defaults, and wires the
-            # RayJob submitter to the head dashboard itself — so we don't declare
-            # them here. Only the modelship-owned ports are declared.
+            # KubeRay manages gcs/client internally, but the RayJob controller
+            # reads the dashboard port from this named `dashboard` containerPort to
+            # build the job-submission URL — so it MUST be declared (8265 = Ray's
+            # default; change it together with rayStartParams.dashboard-port).
             ports:
+              - { name: dashboard, containerPort: 8265 }
               - { name: serve, containerPort: {{ .Values.gateway.port }} }
               - { name: metrics, containerPort: {{ .Values.metrics.port }} }
             envFrom:
