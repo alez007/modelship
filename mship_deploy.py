@@ -66,6 +66,12 @@ def main(argv: list[str] | None = None) -> None:
 
     configure_logging()
     gateway_name = os.environ.get("MSHIP_GATEWAY_NAME", _DEFAULT_GATEWAY_NAME)
+    # apply_args_to_env (above) has folded --use-existing-ray-cluster into this env
+    # var, the same source connect_ray uses. With an external cluster (KubeRay)
+    # this process is a one-shot deployer: exit after deploying, never tear down a
+    # cluster it doesn't own. The gateway + deployments persist and the gateway
+    # self-heals its routing table from the coordinator registry.
+    owns_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() != "true"
     # Library log level (one step above app level). Used to silence Ray Serve's
     # system actors (controller/proxy/replica access logs) and Ray's driver
     # logger, which both ignore Python-level setLevel from the parent process.
@@ -113,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
     def _cleanup(sig, _frame) -> None:
         logger.info("Shutting down (signal %s), cleaning up deployments from this run...", sig)
         delete_apps_quietly(reversed(deployed_this_run))
-        if fresh_install:
+        if fresh_install and owns_cluster:
             shutdown_ray()
         sys.exit(0)
 
@@ -184,10 +190,12 @@ def main(argv: list[str] | None = None) -> None:
             for name, reason in fatally_failed:
                 logger.error("  - %s: %s", name, reason)
 
-        if fresh_install:
-            # Stay alive as the operator process. _cleanup gracefully deletes
-            # each deployment (letting actors run __del__ and clean up child
-            # processes like vllm EngineCore) before tearing down Ray.
+        if fresh_install and owns_cluster:
+            # Standalone (we own Ray): stay alive as the operator process.
+            # _cleanup gracefully deletes each deployment (letting actors run
+            # __del__ and clean up child processes like vllm EngineCore) before
+            # tearing down Ray. With an external cluster we instead exit here,
+            # leaving the gateway + deployments running under KubeRay.
             signal.pause()
 
     except BaseException as e:
@@ -195,7 +203,7 @@ def main(argv: list[str] | None = None) -> None:
             raise
         logger.exception("Startup failed, cleaning up deployments from this run...")
         delete_apps_quietly(reversed(deployed_this_run))
-        if fresh_install:
+        if fresh_install and owns_cluster:
             shutdown_ray()
         raise
 
