@@ -1,0 +1,20 @@
+{{- if .Values.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "modelship.fullname" . }}
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # Every Ray pod (head + workers) carries this label and exports on the metrics
+  # port, so a single PodMonitor scrapes the whole cluster.
+  selector:
+    matchLabels:
+      ray.io/cluster: {{ include "modelship.fullname" . }}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ .Values.podMonitor.interval }}
+{{- end }}

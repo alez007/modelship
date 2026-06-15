@@ -1,0 +1,37 @@
+modelship has been installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+A RayCluster ({{ include "modelship.fullname" . }}) is starting and a one-shot Job
+({{ include "modelship.fullname" . }}-deploy) is deploying the models from your
+models.yaml. The Job waits for the Ray head, then runs mship_deploy.py.
+
+1. Watch the cluster come up:
+
+   kubectl get rayclusters -n {{ .Release.Namespace }} -w
+   kubectl get pods -n {{ .Release.Namespace }} -l ray.io/cluster={{ include "modelship.fullname" . }}
+
+2. Follow the deploy Job (model download + load can take a while):
+
+   kubectl logs -n {{ .Release.Namespace }} -l job-name={{ include "modelship.fullname" . }}-deploy -f
+
+3. Reach the OpenAI-compatible gateway. It becomes Ready only once models load
+   (the head /readyz probe gates the Service):
+
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "modelship.fullname" . }}-gateway {{ .Values.gateway.port }}:{{ .Values.gateway.port }}
+   curl http://localhost:{{ .Values.gateway.port }}/v1/models
+
+{{- if eq .Values.service.type "ClusterIP" }}
+
+   (Service type is ClusterIP — use port-forward above, or set service.type to
+   LoadBalancer/NodePort to expose it outside the cluster.)
+{{- end }}
+
+4. Apply models.yaml changes later by re-running with your updated values:
+
+   helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} -f your-values.yaml
+
+{{- if not (index .Values "kuberay-operator" "enabled") }}
+
+NOTE: this chart assumes the KubeRay operator + CRDs are already installed in the
+cluster. If `kubectl get rayclusters` errors with "no matches for kind", install
+the operator (once, cluster-wide) or set `kuberay-operator.enabled=true`.
+{{- end }}

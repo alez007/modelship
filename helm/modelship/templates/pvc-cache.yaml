@@ -1,0 +1,17 @@
+{{- if and .Values.cache.enabled (not .Values.cache.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "modelship.cacheClaimName" . }}
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.cache.accessModes | nindent 4 }}
+  {{- if .Values.cache.storageClass }}
+  storageClassName: {{ .Values.cache.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cache.size | quote }}
+{{- end }}

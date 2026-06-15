@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "modelship.fullname" . }}-gateway
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  # Target the Ray head, where the Serve HTTP proxy listens. KubeRay stamps these
+  # labels on the head pod; readiness gating (head /readyz probe) keeps this
+  # Service from routing until models are loaded.
+  selector:
+    ray.io/cluster: {{ include "modelship.fullname" . }}
+    ray.io/node-type: head
+  ports:
+    - name: http
+      port: {{ .Values.gateway.port }}
+      targetPort: serve
+      protocol: TCP

@@ -1,0 +1,130 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ include "modelship.fullname" . }}
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+spec:
+  rayVersion: {{ .Values.rayVersion | quote }}
+  # ---- Head: CPU-only coordination (GCS, dashboard, Serve proxy). ----
+  headGroupSpec:
+    rayStartParams:
+      # Bind the GCS listener to the same port the deploy Job connects to.
+      port: {{ .Values.redisPort | quote }}
+      {{- toYaml .Values.head.rayStartParams | nindent 6 }}
+    template:
+      metadata:
+        labels:
+          {{- include "modelship.selectorLabels" . | nindent 10 }}
+        {{- with .Values.head.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        securityContext:
+          {{- toYaml .Values.podSecurityContext | nindent 10 }}
+        {{- with .Values.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        # KubeRay treats containers[0] as the Ray container (injects `ray start`).
+        containers:
+          - name: ray-head
+            image: {{ include "modelship.image" . }}
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            ports:
+              - { name: gcs, containerPort: {{ .Values.redisPort }} }
+              - { name: serve, containerPort: {{ .Values.gateway.port }} }
+              - { name: metrics, containerPort: {{ .Values.metrics.port }} }
+            envFrom:
+              {{- include "modelship.envFrom" . | nindent 14 }}
+            resources:
+              {{- toYaml .Values.head.resources | nindent 14 }}
+            # Gate head readiness on the gateway /readyz so the Service only
+            # routes once models are loaded. Liveness is left to KubeRay's
+            # default Ray health probe — do not turn this into a livenessProbe.
+            startupProbe:
+              httpGet:
+                path: /readyz
+                port: serve
+              {{- toYaml .Values.gateway.startupProbe | nindent 14 }}
+            readinessProbe:
+              httpGet:
+                path: /readyz
+                port: serve
+              {{- toYaml .Values.gateway.readinessProbe | nindent 14 }}
+            volumeMounts:
+              {{- include "modelship.volumeMounts" . | nindent 14 }}
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "ray stop"]
+        volumes:
+          {{- include "modelship.volumes" . | nindent 10 }}
+        {{- with .Values.head.nodeSelector }}
+        nodeSelector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.head.tolerations }}
+        tolerations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.head.affinity }}
+        affinity:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+  # ---- Workers: one group per entry in .Values.workerGroups. ----
+  workerGroupSpecs:
+    {{- range .Values.workerGroups }}
+    - groupName: {{ .name }}
+      replicas: {{ .replicas }}
+      minReplicas: {{ .minReplicas }}
+      maxReplicas: {{ .maxReplicas }}
+      rayStartParams:
+        {{- toYaml .rayStartParams | nindent 8 }}
+      template:
+        metadata:
+          labels:
+            {{- include "modelship.selectorLabels" $ | nindent 12 }}
+          {{- with .annotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: ray-worker
+              image: {{ include "modelship.image" $ }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              ports:
+                - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
+              envFrom:
+                {{- include "modelship.envFrom" $ | nindent 16 }}
+              resources:
+                {{- toYaml .resources | nindent 16 }}
+              volumeMounts:
+                {{- include "modelship.volumeMounts" $ | nindent 16 }}
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          volumes:
+            {{- include "modelship.volumes" $ | nindent 12 }}
+          {{- with .nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+    {{- end }}

@@ -1,0 +1,33 @@
+apiVersion: v2
+name: modelship
+description: |
+  OpenAI-compatible multi-model inference on Kubernetes. Brings up a Ray cluster
+  via KubeRay and deploys models from models.yaml with a one-shot deploy Job.
+type: application
+# Chart version — bump on chart changes, independent of the app version.
+version: 0.1.0
+# Tracks the modelship image this chart is validated against.
+appVersion: "0.3.0"
+home: https://github.com/alez007/modelship
+sources:
+  - https://github.com/alez007/modelship
+keywords:
+  - llm
+  - inference
+  - ray
+  - kuberay
+  - openai
+  - vllm
+maintainers:
+  - name: alez007
+    url: https://github.com/alez007
+
+# KubeRay operator (CRDs + controller) is a cluster-scoped prerequisite. It is
+# OFF by default: on shared clusters an admin installs it once. Greenfield /
+# single-tenant clusters can bootstrap it in one shot with
+# `--set kuberay-operator.enabled=true`.
+dependencies:
+  - name: kuberay-operator
+    version: "1.4.2"
+    repository: https://ray-project.github.io/kuberay-helm/
+    condition: kuberay-operator.enabled
