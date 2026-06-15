@@ -27,17 +27,6 @@ kuberay-operator:
 gateway:
   name: "modelship api"
   port: 8000
-  # Readiness gating via the Serve /readyz endpoint on the head. /readyz only
-  # exists after the deploy RayJob runs, so this gates *readiness* (not liveness):
-  # the head joins the gateway Service only once models are loaded, and KubeRay
-  # never restarts it during bootstrap. The startupProbe budget must cover model
-  # download + load (default 120 * 10s = 20 min).
-  startupProbe:
-    failureThreshold: 120
-    periodSeconds: 10
-  readinessProbe:
-    periodSeconds: 10
-    failureThreshold: 3
 
 # -- Metrics exporter (Ray + modelship Prometheus metrics).
 metrics:
@@ -162,8 +151,7 @@ deploy:
   replaceStrategy: blue_green
   # Extra raw args appended to mship_deploy.py (e.g. ["--gateway-name", "edge"]).
   extraArgs: []
-  backoffLimit: 3
-  # Clean up the finished Job automatically after N seconds (null = keep).
+  # Clean up the finished RayJob automatically after N seconds (null = keep).
   ttlSecondsAfterFinished: null
   resources:
     requests:

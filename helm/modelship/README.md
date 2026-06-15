@@ -78,9 +78,10 @@ secrets:
 
 ## Reaching the gateway
 
-The gateway Service targets the head and only routes once models are loaded (the
-head `/readyz` probe gates it). Port-forward for local access, or set
-`service.type=LoadBalancer`:
+The gateway Service targets the head (where the Serve proxy runs). Check
+`/readyz` for app-level readiness — it returns 503 until all models are loaded
+(use it for an external LB/Ingress health check). Port-forward for local access,
+or set `service.type=LoadBalancer`:
 
 ```bash
 kubectl port-forward svc/<release>-modelship-gateway 8000:8000

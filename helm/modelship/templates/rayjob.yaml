@@ -24,7 +24,7 @@ spec:
   clusterSelector:
     ray.io/cluster: {{ include "modelship.fullname" . }}
   shutdownAfterJobFinishes: false
-  backoffLimit: {{ .Values.deploy.backoffLimit }}
+  # NB: backoffLimit is rejected by KubeRay in clusterSelector mode, so it is not set.
   {{- if .Values.deploy.ttlSecondsAfterFinished }}
   ttlSecondsAfterFinished: {{ .Values.deploy.ttlSecondsAfterFinished }}
   {{- end }}

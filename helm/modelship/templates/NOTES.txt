@@ -15,8 +15,7 @@ models.yaml — KubeRay waits for the head, then runs mship_deploy.py on it.
    kubectl get rayjob -n {{ .Release.Namespace }} {{ include "modelship.fullname" . }}-deploy
    kubectl logs -n {{ .Release.Namespace }} -l job-name={{ include "modelship.fullname" . }}-deploy -f
 
-3. Reach the OpenAI-compatible gateway. It becomes Ready only once models load
-   (the head /readyz probe gates the Service):
+3. Reach the OpenAI-compatible gateway (/readyz returns 503 until models load):
 
    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "modelship.fullname" . }}-gateway {{ .Values.gateway.port }}:{{ .Values.gateway.port }}
    curl http://localhost:{{ .Values.gateway.port }}/v1/models

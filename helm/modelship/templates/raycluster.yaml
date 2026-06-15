@@ -41,19 +41,6 @@ spec:
               {{- include "modelship.envFrom" . | nindent 14 }}
             resources:
               {{- toYaml .Values.head.resources | nindent 14 }}
-            # Gate head readiness on the gateway /readyz so the Service only
-            # routes once models are loaded. Liveness is left to KubeRay's
-            # default Ray health probe — do not turn this into a livenessProbe.
-            startupProbe:
-              httpGet:
-                path: /readyz
-                port: serve
-              {{- toYaml .Values.gateway.startupProbe | nindent 14 }}
-            readinessProbe:
-              httpGet:
-                path: /readyz
-                port: serve
-              {{- toYaml .Values.gateway.readinessProbe | nindent 14 }}
             volumeMounts:
               # models.yaml for the RayJob deploy entrypoint, which runs on the head.
               - name: models-config
