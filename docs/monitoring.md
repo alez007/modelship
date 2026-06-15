@@ -249,10 +249,10 @@ curl http://localhost:8000/health
 # {"status": "ok", "uptime_s": 12.3}
 ```
 
-**`/status`** — readiness + timing. Returns 200 when every expected model has a registered deployment; 503 with the same JSON body while any model is still pending. Bodies carry full state so a single poll tells you what's loaded, what's outstanding, and how long each model took to come up:
+**`/readyz`** — readiness + timing. Returns 200 when every expected model has a registered deployment; 503 with the same JSON body while any model is still pending. Bodies carry full state so a single poll tells you what's loaded, what's outstanding, and how long each model took to come up:
 
 ```bash
-curl http://localhost:8000/status
+curl http://localhost:8000/readyz
 # 200 when ready:
 # {
 #   "status": "ok",
@@ -268,7 +268,7 @@ curl http://localhost:8000/status
 
 Per-model timings are gateway-measured: the gap between one model registering and the next (models deploy sequentially in `mship_deploy.py`), so the first model's entry includes any framework-level setup time preceding it.
 
-Use `/health` for Kubernetes liveness probes and `/status` for readiness probes — `/status` returning 503 prevents a service from flipping traffic onto the pod before models are loaded.
+Use `/health` for Kubernetes liveness probes and `/readyz` for readiness probes — `/readyz` returning 503 prevents a service from flipping traffic onto the pod before models are loaded.
 
 ## Modelship Metrics Reference
 

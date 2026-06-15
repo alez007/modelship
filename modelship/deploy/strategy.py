@@ -29,16 +29,18 @@ class DeployPlan:
 def compute_deploy_plan(
     yml_conf: ModelshipConfig,
     existing_apps: set[str],
+    owned_deployments: set[str],
     gateway_name: str,
     *,
     fresh_install: bool,
     reconcile: bool,
 ) -> DeployPlan:
-    """Diff desired (models.yaml) against deployed (serve.status). Deployment
-    names are `{model_name}-{fingerprint}`, so a pure set comparison detects
-    both renames and config drift: a model whose num_gpus changed gets a new
-    fingerprint -> new deployment_name -> shows up as both an add and a
-    remove (handled as a replace by callers)."""
+    """Diff desired (models.yaml) against this gateway's deployed set. Deployment
+    names are `{model_name}-{fingerprint}`, so a pure set comparison detects both
+    renames and config drift. `owned_deployments` is the coordinator registry's
+    record for this gateway; intersecting it with `existing_apps` scopes the diff
+    to apps that are both ours and actually live, so reconcile never touches
+    another gateway's deployments."""
 
     # Schedule larger world-size models first so they claim whole GPU units before
     # fractional models consume the pool. World size = tp * pp.
@@ -52,10 +54,8 @@ def compute_deploy_plan(
         reverse=True,
     )
 
-    desired_names = {c.deployment_name() for c in sorted_models}
-    # `existing_apps` includes the gateway app itself; exclude it so reconcile
-    # never targets the gateway for removal.
-    deployed_names = existing_apps - {gateway_name}
+    desired_names = {c.deployment_name(gateway_name) for c in sorted_models}
+    deployed_names = existing_apps & owned_deployments
 
     if reconcile:
         if fresh_install:
@@ -68,12 +68,12 @@ def compute_deploy_plan(
 
     # In all modes, skip configs already deployed under their fingerprint —
     # makes plain re-runs idempotent instead of double-deploying.
-    models_to_add = [c for c in sorted_models if c.deployment_name() not in deployed_names]
+    models_to_add = [c for c in sorted_models if c.deployment_name(gateway_name) not in deployed_names]
     if models_to_add:
         logger.info(
             "%d deployment(s) to add: %s",
             len(models_to_add),
-            [c.deployment_name() for c in models_to_add],
+            [c.deployment_name(gateway_name) for c in models_to_add],
         )
     return DeployPlan(models_to_add=models_to_add, apps_to_remove=apps_to_remove)
 
@@ -84,6 +84,7 @@ class DeployContext:
     coordinator: Any
     probe: Any
     operator_id: str
+    gateway_name: str
     gateway_handle: Any
     serve_logging_config: LoggingConfig
     deployed_this_run: dict[str, str]
@@ -95,7 +96,7 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
     "fatal" (deployment reported a permanent error; skip permanently)."""
     wheel = ctx.plugin_wheels.get(config.plugin) if config.plugin else None
     deploy_opts = build_deployment_options(config, plugin_wheel=wheel)
-    deployment_name = config.deployment_name()
+    deployment_name = config.deployment_name(ctx.gateway_name)
 
     reserved, _reason = ray.get(
         ctx.coordinator.try_reserve.remote(
@@ -128,6 +129,12 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
             ctx.gateway_handle.add_models.remote({deployment_name: config.name}).result()
         except Exception:
             logger.exception("Failed to register %s with gateway", deployment_name)
+        # Durable ownership record so the gateway can rebuild its routing table
+        # from the registry after a restart.
+        try:
+            ray.get(ctx.coordinator.register_deployment.remote(ctx.gateway_name, deployment_name, config.name))
+        except Exception:
+            logger.exception("Failed to record %s in deploy registry", deployment_name)
         return "deployed", None
     except Exception:
         # Did the deployment actively report a fatal init error before dying?

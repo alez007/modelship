@@ -29,6 +29,7 @@ from modelship.logging import propagate_lib_log_env  # noqa: E402
 
 propagate_lib_log_env()
 
+import ray  # noqa: E402
 from ray import serve  # noqa: E402
 from ray.serve.schema import LoggingConfig  # noqa: E402
 
@@ -89,8 +90,19 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Init modelship app with config: %s", yml_conf)
 
     plugin_wheels = resolve_all_plugin_wheels(yml_conf)
+
+    # The detached coordinator holds the cross-operator deploy lock and the durable
+    # ownership registry. Read this gateway's recorded deployments so the reconcile
+    # diff is scoped to apps we own (never another gateway's).
+    coordinator = get_or_create_coordinator()
+    owned_deployments = set(ray.get(coordinator.get_deployments.remote(gateway_name)))
     plan = compute_deploy_plan(
-        yml_conf, existing_apps, gateway_name, fresh_install=fresh_install, reconcile=args.reconcile
+        yml_conf,
+        existing_apps,
+        owned_deployments,
+        gateway_name,
+        fresh_install=fresh_install,
+        reconcile=args.reconcile,
     )
     apps_to_remove = list(plan.apps_to_remove)
 
@@ -130,14 +142,12 @@ def main(argv: list[str] | None = None) -> None:
         # freed resources are available for the deploy loop. Used when the
         # cluster can't fit old + new at the same time.
         if args.replace_strategy == "stop_start":
-            remove_apps(gateway_handle, apps_to_remove)
+            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
             apps_to_remove = []
 
-        # Coordinator actor serialises deploys across operators on the same
-        # cluster; the probe is driver-owned so Ray force-releases the lock
-        # if this process dies ungracefully.
+        # The probe is driver-owned so Ray force-releases the coordinator lock if
+        # this process dies ungracefully.
         operator_id = make_operator_id()
-        coordinator = get_or_create_coordinator()
         probe = OperatorProbe.options(num_cpus=0).remote()
         logger.info("Operator id=%s; coordinator acquired.", operator_id)
 
@@ -146,6 +156,7 @@ def main(argv: list[str] | None = None) -> None:
             coordinator=coordinator,
             probe=probe,
             operator_id=operator_id,
+            gateway_name=gateway_name,
             gateway_handle=gateway_handle,
             serve_logging_config=serve_logging_config,
             deployed_this_run=deployed_this_run,
@@ -163,7 +174,7 @@ def main(argv: list[str] | None = None) -> None:
         # round-robins across both old and new handles for the same model,
         # so no requests are lost.
         if apps_to_remove:
-            remove_apps(gateway_handle, apps_to_remove)
+            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
 
         if fatally_failed:
             logger.error(

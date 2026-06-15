@@ -47,18 +47,21 @@ def delete_apps_quietly(app_names) -> None:
             logger.exception("Failed to delete deployment: %s", name)
 
 
-def remove_apps(gateway_handle, app_names: list[str]) -> None:
-    """Unregister the given deployment apps from the gateway (so new requests
-    stop routing) and then delete them from Ray Serve. `serve.delete` drains
-    in-flight requests before tearing the deployment down. The deploy
-    coordinator is intentionally not involved — it gates admission, not
-    teardown; freed resources show up on the next try_reserve."""
+def remove_apps(gateway_handle, app_names: list[str], coordinator=None, gateway_name: str | None = None) -> None:
+    """Unregister the given deployment apps from the gateway (so new requests stop
+    routing), drop them from the coordinator's ownership registry, then delete
+    them from Ray Serve (`serve.delete` drains in-flight requests first)."""
     if not app_names:
         return
     try:
         gateway_handle.remove_deployments.remote(app_names).result()
     except Exception:
         logger.exception("Failed to unregister deployments from gateway: %s", app_names)
+    if coordinator is not None and gateway_name is not None:
+        try:
+            ray.get([coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
+        except Exception:
+            logger.exception("Failed to drop deployments from registry: %s", app_names)
     delete_apps_quietly(app_names)
 
 
@@ -116,7 +119,7 @@ def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> Non
             max_ongoing_requests=gateway_max_ongoing,
             ray_actor_options={"num_cpus": 0},
             logging_config=serve_logging_config,
-        ).bind(),
+        ).bind(gateway_name),
         name=gateway_name,
         route_prefix="/",
     )

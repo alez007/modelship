@@ -260,15 +260,20 @@ class ModelshipModelConfig(BaseModel):
         self.num_gpus = 1.0
         return self
 
-    def fingerprint(self) -> str:
-        """Stable hash of the config fields that determine actor placement and
-        runtime behavior. Used as the deployment-name suffix so reconcile can
-        detect drift via a pure name comparison against `serve.status()`."""
+    def fingerprint(self, gateway_name: str = "") -> str:
+        """Stable hash of the config fields that drive placement/runtime, used as
+        the deployment-name suffix so reconcile detects drift by name comparison.
+        `gateway_name` is mixed in (when given) so identical configs on different
+        gateways get distinct app names in Serve's flat global namespace."""
         payload = self.model_dump_json(exclude=_FINGERPRINT_EXCLUDED_FIELDS)
+        if gateway_name:
+            payload = f"{gateway_name}\x00{payload}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:FINGERPRINT_LEN]
 
-    def deployment_name(self) -> str:
-        return f"{self.name}-{self.fingerprint()}"
+    def deployment_name(self, gateway_name: str) -> str:
+        # Gateway folded into the fingerprint, not a visible prefix; ownership is
+        # tracked in the coordinator registry, not parsed out of the name.
+        return f"{self.name}-{self.fingerprint(gateway_name)}"
 
 
 class ModelshipConfig(BaseModel):
@@ -278,7 +283,7 @@ class ModelshipConfig(BaseModel):
     def check_unique_deployment_names(self):
         seen: dict[str, int] = {}
         for cfg in self.models:
-            key = cfg.deployment_name()
+            key = f"{cfg.name}-{cfg.fingerprint()}"
             seen[key] = seen.get(key, 0) + 1
         dupes = [name for name, count in seen.items() if count > 1]
         if dupes:

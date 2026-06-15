@@ -3,6 +3,7 @@ import time
 from http import HTTPStatus
 from typing import Annotated, Any, cast
 
+import ray
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +16,7 @@ from ray.serve.handle import DeploymentHandle, DeploymentResponseGenerator
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from modelship.infer import deploy_coordinator
 from modelship.infer.infer_config import RequestWatcher
 from modelship.logging import get_logger
 from modelship.metrics import (
@@ -148,15 +150,19 @@ def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
 @serve.deployment
 @serve.ingress(app)
 class ModelshipAPI:
-    def __init__(self):
-        # model_name -> (app_name -> handle). Keyed by app_name so
-        # remove_deployments can drop a specific deployment by its
-        # fingerprint-suffixed app name without scanning handles.
+    def __init__(self, gateway_name: str):
+        # model_name -> (app_name -> handle). The inner dict is keyed by app_name
+        # so a specific deployment can be dropped by name in remove_deployments.
         self.models: dict[str, dict[str, DeploymentHandle]] = {}
         self._round_robin: dict[str, int] = {}
         self.model_list: list[OpenAiModelCard] = []
         self.expected_models: list[str] = []
         self._started_at = time.time()
+        self._gateway_name = gateway_name
+        # Routing state is in-memory, normally seeded by the deploy driver. After a
+        # replica restart the driver isn't around, so rebuild from the coordinator
+        # registry on first use rather than serving 503 forever. One-shot.
+        self._reconstructed = False
         # Timing state — set_expected_models stamps a start, each add_models
         # arrival records the gap since the previous arrival as that model's
         # load duration (mship_deploy.py deploys sequentially so the gap ≈ load time).
@@ -171,6 +177,57 @@ class ModelshipAPI:
         self._expected_set_at = now
         self._last_model_at = now
 
+    def _register_deployment(self, app_name: str, model_name: str) -> bool:
+        """Wire one deployment handle into the routing table. Returns True iff the
+        model was newly added. Sync so both add_models and reconstruction reuse it."""
+        try:
+            handle = serve.get_app_handle(app_name)
+        except Exception:
+            logger.exception("Failed to get handle for app: %s", app_name)
+            return False
+
+        newly_added = model_name not in self.models
+        if newly_added:
+            self.models[model_name] = {}
+            self._round_robin[model_name] = 0
+            self.model_list.append(OpenAiModelCard(id=model_name))
+        self.models[model_name][app_name] = handle
+        logger.info("Registered deployment: %s (model: %s)", app_name, model_name)
+        return newly_added
+
+    def _ensure_reconstructed(self) -> None:
+        """Rebuild routing state from the registry once, on first use after a
+        restart. Sync and await-free so it runs atomically on the event loop;
+        retried later if the registry can't be read this time."""
+        if self._reconstructed:
+            return
+        if self._reconstruct_from_registry():
+            self._reconstructed = True
+
+    def _reconstruct_from_registry(self) -> bool:
+        """Re-own this gateway's deployments from the coordinator registry after a
+        restart wiped our in-memory state. Returns False (retry) only if the
+        registry couldn't be read."""
+        if self.models:
+            return True  # driver already seeded us this run
+        try:
+            coordinator = deploy_coordinator.get_or_create_coordinator()
+            records: dict[str, str] = ray.get(coordinator.get_deployments.remote(self._gateway_name))
+        except Exception:
+            logger.debug("gateway: reconstruct deferred; registry unavailable", exc_info=True)
+            return False
+        if not records:
+            return True  # nothing recorded for us; driver seeds as models come up
+        for app_name, model_name in records.items():
+            self._register_deployment(app_name, model_name)
+        # Adopt the recovered set as the readiness baseline so a restart with no
+        # driver re-run still reports ready; a later driver call overrides it.
+        if not self.expected_models:
+            self.expected_models = sorted(self.models)
+        MODELS_LOADED.set(len(self.models))
+        logger.info("gateway: reconstructed %d model(s) from registry after restart", len(self.models))
+        return True
+
     async def add_models(self, deployments: dict[str, str]):
         """Register new model deployments with the gateway.
 
@@ -178,25 +235,12 @@ class ModelshipAPI:
             deployments: mapping of deployment_app_name -> model_name.
         """
         for app_name, model_name in deployments.items():
-            try:
-                handle = serve.get_app_handle(app_name)
-            except Exception:
-                logger.exception("Failed to get handle for app: %s", app_name)
-                continue
-
-            newly_added = model_name not in self.models
-            if newly_added:
-                self.models[model_name] = {}
-                self._round_robin[model_name] = 0
-                self.model_list.append(OpenAiModelCard(id=model_name))
-            self.models[model_name][app_name] = handle
-            logger.info("Registered deployment: %s (model: %s)", app_name, model_name)
-
-            if newly_added:
-                now = time.time()
-                base = self._last_model_at or self._started_at
-                self._model_load_times[model_name] = round(now - base, 2)
-                self._last_model_at = now
+            if not self._register_deployment(app_name, model_name):
+                continue  # handle lookup failed, or an extra replica of a known model
+            now = time.time()
+            base = self._last_model_at or self._started_at
+            self._model_load_times[model_name] = round(now - base, 2)
+            self._last_model_at = now
 
         if self.expected_models and self._all_ready_at is None and all(m in self.models for m in self.expected_models):
             self._all_ready_at = time.time()
@@ -204,22 +248,20 @@ class ModelshipAPI:
         MODELS_LOADED.set(len(self.models))
 
     async def remove_deployments(self, app_names: list[str]) -> list[str]:
-        """Drop the given deployment app names from the routing tables.
-
-        Deployment names follow `{model_name}-{fingerprint}`, so the owning
-        model name is derived by stripping the fingerprint suffix. If a model
-        has no remaining deployments after removal, the model entry, model
-        card, round-robin counter, expected-models entry, and load-time entry
-        are also dropped. Returns the names of fully-removed models.
+        """Drop the given deployment app names from the routing tables. The owning
+        model is found by reverse lookup over the routing table (not parsed out of
+        the app name). If a model has no remaining deployments after removal, its
+        model entry, card, round-robin counter, expected-models entry, and
+        load-time entry are also dropped. Returns the names of fully-removed models.
         """
         removed_models: list[str] = []
         for app_name in app_names:
-            model_name = app_name.rsplit("-", 1)[0]
-            handles = self.models.get(model_name)
-            if handles is None or app_name not in handles:
+            model_name = next((m for m, handles in self.models.items() if app_name in handles), None)
+            if model_name is None:
                 logger.warning("remove_deployments: no deployment named %s", app_name)
                 continue
 
+            handles = self.models[model_name]
             del handles[app_name]
             logger.info("Unregistered deployment: %s (model: %s)", app_name, model_name)
 
@@ -245,6 +287,7 @@ class ModelshipAPI:
         request_id_var.set(request_id)
 
     def _get_handle(self, model_name: str | None) -> DeploymentHandle:
+        self._ensure_reconstructed()
         if model_name is None or model_name not in self.models:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND.value, detail="model not found")
         handles = list(self.models[model_name].values())
@@ -354,7 +397,8 @@ class ModelshipAPI:
             "uptime_s": round(time.time() - self._started_at, 1),
         }
 
-    def _status_body(self) -> dict:
+    def _readyz_body(self) -> dict:
+        self._ensure_reconstructed()
         expected = list(self.expected_models)
         pending = [m for m in expected if m not in self.models] if expected else []
         ready = bool(expected) and len(pending) == 0
@@ -372,9 +416,9 @@ class ModelshipAPI:
             "model_load_times_s": dict(self._model_load_times),
         }
 
-    @app.get("/status")
-    async def status(self):
-        body = self._status_body()
+    @app.get("/readyz")
+    async def readyz(self):
+        body = self._readyz_body()
         if body["ready"]:
             return body
         return JSONResponse(status_code=503, content=body)
