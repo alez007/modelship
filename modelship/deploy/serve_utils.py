@@ -68,7 +68,12 @@ def remove_apps(gateway_handle, app_names: list[str], coordinator=None, gateway_
 def _own_cluster_init_kwargs() -> dict[str, object]:
     """ray.init kwargs to start our own head, mirroring the flags start_ray.sh
     used to pass. Resources auto-detect when RAY_HEAD_* are unset."""
-    kwargs: dict[str, object] = {"dashboard_host": "0.0.0.0"}
+    kwargs: dict[str, object] = {}
+    if os.environ.get("MSHIP_RAY_DASHBOARD", "false").lower() == "true":
+        kwargs["include_dashboard"] = True
+        kwargs["dashboard_host"] = "0.0.0.0"
+    else:
+        kwargs["include_dashboard"] = False
     if cpus := os.environ.get("RAY_HEAD_CPU_NUM"):
         kwargs["num_cpus"] = int(cpus)
     if gpus := os.environ.get("RAY_HEAD_GPU_NUM"):

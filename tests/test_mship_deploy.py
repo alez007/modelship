@@ -366,13 +366,22 @@ class TestConnectRay:
                 "MSHIP_METRICS": "true",
                 "RAY_METRICS_EXPORT_PORT": "8079",
                 "RAY_HEAD_CPU_NUM": "4",
+                "MSHIP_RAY_DASHBOARD": "false",
             }
         )
         assert "address" not in kwargs
-        assert kwargs["dashboard_host"] == "0.0.0.0"
+        # Dashboard off by default to save RAM; metrics still exported.
+        assert kwargs["include_dashboard"] is False
+        assert "dashboard_host" not in kwargs
         assert kwargs["num_cpus"] == 4
         # Guards the private ray.init kwarg that pins Ray's metrics agent port.
         assert kwargs["_metrics_export_port"] == 8079
+
+    def test_own_cluster_enables_dashboard_when_opted_in(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_DASHBOARD": "TRUE"})
+        # Opt-in is case-insensitive and binds the dashboard on all interfaces.
+        assert kwargs["include_dashboard"] is True
+        assert kwargs["dashboard_host"] == "0.0.0.0"
 
     def test_own_cluster_omits_metrics_port_when_disabled(self):
         kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_METRICS": "false"})
