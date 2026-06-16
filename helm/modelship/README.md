@@ -9,6 +9,12 @@ supported way to run a driver against a RayCluster) and deploy the models
 declared in your `models.yaml`. Re-running (`helm upgrade`) re-applies the config
 additively, or reconciles it when `deploy.reconcile=true`.
 
+Each deploy persists this gateway's **effective config** (its desired model set)
+to the cache PVC. A self-heal **CronJob** (`deploy.reassert`, on by default)
+periodically reconciles the live cluster back to that effective config, so the
+full model set is restored if the cluster is ever recreated empty (the one-shot
+deploy RayJob has finished by then). It's a no-op when the cluster is healthy.
+
 ## Prerequisites
 
 - A Kubernetes cluster (a local [kind](https://kind.sigs.k8s.io/) cluster works
@@ -104,6 +110,9 @@ curl http://localhost:8000/v1/models
 | `workerGroups` | `[]` | Worker pool layout (a list — set the full set; copy the example in `values.yaml`) |
 | `deploy.reconcile` | `false` | Remove dropped models on upgrade |
 | `deploy.replaceStrategy` | `blue_green` | How changed models are replaced |
+| `deploy.reassert.enabled` | `true` | Self-heal CronJob: re-reconcile the effective config after cluster loss |
+| `deploy.reassert.schedule` | `*/15 * * * *` | How often to re-assert (bounds recovery latency) |
+| `deploy.reassert.image` | `""` | Submit-client image (empty = slim `rayproject/ray:<rayVersion>`) |
 | `service.type` | `ClusterIP` | Set `LoadBalancer` to expose externally |
 | `podMonitor.enabled` | `false` | Prometheus Operator scraping |
 | `kuberay-operator.enabled` | `false` | Bootstrap the operator as a subchart |

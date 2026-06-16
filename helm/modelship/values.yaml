@@ -171,6 +171,34 @@ deploy:
       cpu: "1"
       memory: 2Gi
 
+  # -- Self-heal CronJob. Periodically submits `mship_deploy --reconcile` (no
+  # --config) to the head's Ray Job API; the driver reads this gateway's durable
+  # effective config (on the cache PVC) and reconciles the live cluster back to it.
+  # Restores the full model set after the cluster is recreated empty (the one-shot
+  # deploy RayJob has long finished by then); a no-op when already healthy.
+  reassert:
+    enabled: true
+    # How often to re-assert. This guards a rare event (whole cluster back up
+    # empty), so the interval mainly bounds recovery latency — it needn't be tight.
+    # Every tick spawns a small client pod and a head-side no-op reconcile.
+    schedule: "*/15 * * * *"
+    # Submit-client image. Empty = rayproject/ray:<rayVersion> — a slim upstream
+    # Ray image (no GPU/ML libs); this pod only runs `ray job submit`, the heavy
+    # deploy code runs on the head. Override only to pin a mirror/digest; it MUST
+    # match the cluster's Ray version.
+    image: ""
+    # Tolerance for a missed start (e.g. controller downtime) before skipping a tick.
+    startingDeadlineSeconds: 120
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+    resources:
+      requests:
+        cpu: "250m"
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
 # -- Gateway Service. ClusterIP by default; switch to LoadBalancer/NodePort to
 # expose the OpenAI API outside the cluster. Targets the Ray head, where the
 # Serve HTTP proxy listens.

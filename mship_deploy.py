@@ -108,9 +108,19 @@ def main(argv: list[str] | None = None) -> None:
     # (it reads the persisted effective set and reconciles onto an empty cluster).
     mode = resolve_mode(reconcile=args.reconcile, redeploy=args.redeploy)
     store = get_state_store()
-    input_raw = load_raw_models(args.config)
     effective_raw = read_effective(store, gateway_name)
-    desired_raw = merge(effective_raw, input_raw, gateway_name, mode)
+
+    # --reconcile with no --config is the self-heal path: there's no user input, so
+    # reconcile the live cluster to the persisted effective config as-is (restores
+    # the true model set after the cluster is recreated empty). Any other mode, or
+    # an explicit --config, loads the user input and folds it into effective per the
+    # merge verb (additive=union, reconcile/redeploy=replace).
+    if mode == "reconcile" and args.config is None:
+        desired_raw = effective_raw
+        logger.info("Self-heal: reconciling to persisted effective config (no --config given).")
+    else:
+        input_raw = load_raw_models(args.config)
+        desired_raw = merge(effective_raw, input_raw, gateway_name, mode)
     yml_conf = to_config(desired_raw)
     logger.info("Deploying effective config (%s mode, %d model(s)): %s", mode, len(desired_raw), yml_conf)
 

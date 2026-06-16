@@ -73,6 +73,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Diff models.yaml against the cluster: add new models, remove dropped ones, "
             "replace those whose config changed (matched by name + fingerprint). "
+            "With no --config, reconciles the live cluster to this gateway's persisted "
+            "effective config only (self-heal after cluster loss). "
             "Mutually exclusive with --redeploy."
         ),
     )
