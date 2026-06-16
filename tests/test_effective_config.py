@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+
+from modelship.deploy.config import load_raw_models
 from modelship.deploy.effective_config import (
     evict_failed,
     merge,
@@ -206,3 +209,35 @@ class TestCase2AdditiveAccumulation:
         # a reconcile declaring only D collapses the effective set to D
         eff = merge(eff, [d], "g", "reconcile")
         assert [m["name"] for m in eff] == ["d"]
+
+
+class TestLoadRawModels:
+    def _write(self, tmp_path, text: str) -> str:
+        p = tmp_path / "models.yaml"
+        p.write_text(text)
+        return str(p)
+
+    def test_reads_models_list(self, tmp_path):
+        path = self._write(tmp_path, "models:\n  - name: a\n  - name: b\n")
+        assert load_raw_models(path) == [{"name": "a"}, {"name": "b"}]
+
+    def test_empty_file_is_empty_list(self, tmp_path):
+        # yaml.safe_load("") -> None; `or {}` then `.get` yields no models.
+        assert load_raw_models(self._write(tmp_path, "")) == []
+
+    def test_missing_models_key_is_empty_list(self, tmp_path):
+        assert load_raw_models(self._write(tmp_path, "other: 1\n")) == []
+
+    def test_top_level_list_rejected(self, tmp_path):
+        # A bare list at the top level has no .get(); must raise cleanly, not AttributeError.
+        path = self._write(tmp_path, "- name: a\n- name: b\n")
+        with pytest.raises(ValueError, match="must be a mapping"):
+            load_raw_models(path)
+
+    def test_top_level_scalar_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="must be a mapping"):
+            load_raw_models(self._write(tmp_path, "just a string\n"))
+
+    def test_models_not_a_list_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="'models' must be a list"):
+            load_raw_models(self._write(tmp_path, "models:\n  a: 1\n"))

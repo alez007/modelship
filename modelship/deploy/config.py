@@ -114,6 +114,8 @@ def load_raw_models(arg_path: str | None) -> list[dict]:
     deploy (callers should use one or the other, not both)."""
     with open(resolve_config_path(arg_path)) as f:
         data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError("models.yaml: top-level document must be a mapping with a 'models' key.")
     models = data.get("models", [])
     if not isinstance(models, list):
         raise ValueError("models.yaml: 'models' must be a list.")
