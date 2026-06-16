@@ -29,16 +29,24 @@ from modelship.logging import propagate_lib_log_env  # noqa: E402
 
 propagate_lib_log_env()
 
-import ray  # noqa: E402
 from ray import serve  # noqa: E402
 from ray.serve.schema import LoggingConfig  # noqa: E402
 
 from modelship.deploy.config import (  # noqa: E402
-    load_yaml_config,
+    load_raw_models,
     resolve_all_model_sources,
     resolve_all_plugin_wheels,
     resolve_all_reasoning_parsers,
     resolve_all_tool_parsers,
+)
+from modelship.deploy.effective_config import (  # noqa: E402
+    deployment_names,
+    evict_failed,
+    merge,
+    read_effective,
+    resolve_mode,
+    to_config,
+    write_effective,
 )
 from modelship.deploy.serve_utils import (  # noqa: E402
     connect_ray,
@@ -54,6 +62,7 @@ from modelship.deploy.serve_utils import (  # noqa: E402
 from modelship.deploy.strategy import DeployContext, compute_deploy_plan, run_deploy_loop  # noqa: E402
 from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator  # noqa: E402
 from modelship.logging import configure_logging, get_lib_log_config, get_logger  # noqa: E402
+from modelship.state import get_state_store  # noqa: E402
 from modelship.utils.cli import apply_args_to_env, parse_args  # noqa: E402
 
 logger = get_logger("startup")
@@ -92,23 +101,32 @@ def main(argv: list[str] | None = None) -> None:
     if fresh_install and not args.redeploy:
         logger.info("No existing gateway found — treating as fresh install.")
 
-    yml_conf = load_yaml_config(args.config)
-    logger.info("Init modelship app with config: %s", yml_conf)
+    # Fold the user's input into this gateway's durable effective config, then
+    # deploy by ALWAYS reconciling live -> effective. The mode only decides how the
+    # input merges (additive=union, reconcile/redeploy=replace); the deploy itself
+    # is always a reconcile — that's what makes self-heal just "re-run the deploy"
+    # (it reads the persisted effective set and reconciles onto an empty cluster).
+    mode = resolve_mode(reconcile=args.reconcile, redeploy=args.redeploy)
+    store = get_state_store()
+    input_raw = load_raw_models(args.config)
+    effective_raw = read_effective(store, gateway_name)
+    desired_raw = merge(effective_raw, input_raw, gateway_name, mode)
+    yml_conf = to_config(desired_raw)
+    logger.info("Deploying effective config (%s mode, %d model(s)): %s", mode, len(desired_raw), yml_conf)
 
     plugin_wheels = resolve_all_plugin_wheels(yml_conf)
 
     # The detached coordinator holds the cross-operator deploy lock and the durable
-    # ownership registry. Read this gateway's recorded deployments so the reconcile
-    # diff is scoped to apps we own (never another gateway's).
+    # ownership registry (used for the deploy lock + gateway-restart self-heal).
     coordinator = get_or_create_coordinator()
-    owned_deployments = set(ray.get(coordinator.get_deployments.remote(gateway_name)))
+    # Scope reconcile-removal to deployments this gateway's effective set managed
+    # BEFORE this run, so a fresh/empty effective config (e.g. migration over
+    # pre-existing live models) removes nothing.
     plan = compute_deploy_plan(
         yml_conf,
         existing_apps,
-        owned_deployments,
+        deployment_names(effective_raw, gateway_name),
         gateway_name,
-        fresh_install=fresh_install,
-        reconcile=args.reconcile,
     )
     apps_to_remove = list(plan.apps_to_remove)
 
@@ -182,13 +200,20 @@ def main(argv: list[str] | None = None) -> None:
         if apps_to_remove:
             remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
 
+        # Persist the achieved effective config (desired minus permanently-failed
+        # models) so a re-assert after cluster loss restores exactly this set and
+        # never retries a broken config. Written after the deploy settles so a
+        # crash mid-deploy keeps the last known-good effective config.
+        failed_deployment_names = {cfg.deployment_name(gateway_name) for cfg, _ in fatally_failed}
+        write_effective(store, gateway_name, evict_failed(desired_raw, gateway_name, failed_deployment_names))
+
         if fatally_failed:
             logger.error(
-                "%d model(s) failed to deploy and were skipped — fix config and restart:",
+                "%d model(s) failed to deploy and were evicted from the effective config — fix config and redeploy:",
                 len(fatally_failed),
             )
-            for name, reason in fatally_failed:
-                logger.error("  - %s: %s", name, reason)
+            for cfg, reason in fatally_failed:
+                logger.error("  - %s: %s", cfg.name, reason)
 
         if fresh_install and owns_cluster:
             # Standalone (we own Ray): stay alive as the operator process.
