@@ -14,6 +14,7 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--use-existing-ray-cluster` | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Connect to a Ray cluster you manage (must run on a cluster node) instead of starting one. Implies deploy-and-exit (no teardown) |
 | `--redeploy` | — | `false` | Tear down all existing deployments before deploying |
 | `--cache-dir` | `MSHIP_CACHE_DIR` | `/.cache` | Base cache directory |
+| `--state-store` | `MSHIP_STATE_STORE` | `memory://` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) |
 | — | `MSHIP_LOG_LEVEL` | `INFO` | Log level (env-var-only: must be set before `import ray` so library loggers latch the right level) |
 | `--log-format` | `MSHIP_LOG_FORMAT` | `text` | Log format (`text` or `json`) |
 | `--log-target` | `MSHIP_LOG_TARGET` | `console` | Log target: `console` or syslog URI (e.g. `syslog://host:514`, `syslog+tcp://host:514`) |
@@ -534,7 +535,8 @@ deployment.
 | `HF_TOKEN` | HuggingFace access token | — |
 | `MSHIP_MODEL_STACK` | [Profile](#profiles-mship_model_stack) to auto-generate a hardware-sized config from (`chat`/`assistant`/`studio`/`everything`) | — |
 | `MSHIP_CACHE_DIR` | Model cache directory (HuggingFace + plugins) | `/.cache` |
-| `MSHIP_STATE_DIR` | Durable effective-config store (this gateway's desired model set, replayed by `--reconcile` with no `--config` to self-heal after cluster loss) | `<cache-dir>/state` |
+| `MSHIP_STATE_STORE` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) | `memory://` |
+| `MSHIP_STATE_DIR` | Default directory for a `file://` state store with no path | `<cache-dir>/state` |
 | `MSHIP_GATEWAY_NAME` | Name for the API gateway app | `modelship api` |
 | `MSHIP_GATEWAY_REPLICAS` | Number of API gateway replicas (routing/ingress HA; replicas sync routing via the deploy coordinator) | `1` |
 | `MSHIP_MAX_REQUEST_BODY_BYTES` | Maximum allowed request body size in bytes | `52428800` (50 MB) |
@@ -548,3 +550,23 @@ deployment.
 | `VLLM_USE_V1` | Use vLLM v1 API | `1` |
 | `ONNX_PROVIDER` | ONNX Runtime execution provider | `CUDAExecutionProvider` |
 | `NVIDIA_CUDA_VERSION` | CUDA toolkit version | `12.8.1` |
+
+### State store (`MSHIP_STATE_STORE`)
+
+Two pieces of durable state share one pluggable store: this gateway's **effective
+config** (its desired model set, replayed by `--reconcile` with no `--config` to
+self-heal after a cluster loss) and the **deploy coordinator's** routing registry
+(which gateway owns which model + the expected set). The store is chosen by a single
+connection URI — the scheme picks the backend, the rest carries its connection:
+
+| URI | Backend | Durability |
+|---|---|---|
+| `memory://` (default) | in-process dict | none — lost on restart (fine self-hosted: a restart replaces the config anyway) |
+| `file:///.cache/state` | one JSON file per key under the path (empty path → `MSHIP_STATE_DIR`) | survives cluster death on a mounted volume / PVC |
+| `redis://[:pw@]host:6379/0` (`rediss://` = TLS) | one JSON value per key in Redis | survives head/coordinator death; the password is parsed from the URL by `redis.from_url` |
+
+In Kubernetes the Helm chart sets this for you: `file://` on the cache PVC by
+default, or `redis://…` when `redis.enabled=true` (the same Redis then also backs
+Ray GCS fault tolerance — see the chart's **Head-node HA** section). A `redis://`
+store is what lets the gateway self-heal its routing after a head restart instead of
+needing a redeploy.
