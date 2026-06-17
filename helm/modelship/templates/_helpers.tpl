@@ -100,6 +100,47 @@ when no Secret was created (e.g. all-ungated models, no auth).
 {{- end -}}
 
 {{/*
+Name of the Secret holding the Redis password (existing or the chart's own).
+*/}}
+{{- define "modelship.redisSecretName" -}}
+{{- .Values.redis.existingSecret | default (include "modelship.secretName" .) -}}
+{{- end -}}
+
+{{/*
+Explicit env for every Ray pod (head + workers): the state-store URI the
+coordinator and effective-config read via get_state_store(). It MUST be on every
+pod so the coordinator — scheduled on any node — agrees with the driver.
+  redis.enabled  -> redis://[:$(REDIS_PASSWORD)@]<addr>/<db> (password kept in the
+                    Secret; k8s expands $(REDIS_PASSWORD) so it never lands in the
+                    manifest/argv). The same Redis also backs GCS fault tolerance.
+  cache.enabled  -> file://<mountPath>/state on the shared cache PVC (durable).
+  otherwise      -> memory:// (ephemeral).
+*/}}
+{{- define "modelship.env" -}}
+{{- if .Values.redis.enabled }}
+{{- $hasPw := or .Values.redis.password .Values.redis.existingSecret }}
+{{- if $hasPw }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "modelship.redisSecretName" . }}
+      key: {{ .Values.redis.passwordKey }}
+- name: MSHIP_STATE_STORE
+  value: "redis://:$(REDIS_PASSWORD)@{{ .Values.redis.address }}/{{ .Values.redis.db }}"
+{{- else }}
+- name: MSHIP_STATE_STORE
+  value: "redis://{{ .Values.redis.address }}/{{ .Values.redis.db }}"
+{{- end }}
+{{- else if .Values.cache.enabled }}
+- name: MSHIP_STATE_STORE
+  value: "file://{{ .Values.cache.mountPath }}/state"
+{{- else }}
+- name: MSHIP_STATE_STORE
+  value: "memory://"
+{{- end }}
+{{- end -}}
+
+{{/*
 Volumes shared by every Ray pod (head + workers): an in-memory /dev/shm for
 vLLM/NCCL, and the model-weight cache PVC.
 */}}
