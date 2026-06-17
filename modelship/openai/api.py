@@ -260,6 +260,15 @@ class ModelshipAPI:
             self._coordinator = deploy_coordinator.get_or_create_coordinator()
         return self._coordinator
 
+    async def _coord_async(self):
+        """Resolve (and cache) the coordinator handle without blocking the event loop.
+        Cached fast path is a no-op; only after a reset (coordinator restart) does this
+        do work, and get_or_create's synchronous ray.get_actor can stall on a
+        recovering GCS — so hop it to a thread to keep concurrent requests flowing."""
+        if self._coordinator is None:
+            self._coordinator = await asyncio.to_thread(deploy_coordinator.get_or_create_coordinator)
+        return self._coordinator
+
     def _ensure_watching(self) -> None:
         """First-request hook: do one synchronous sync so this request isn't blocked
         on the loop's first tick, then start the background watch loop (once)."""
@@ -290,9 +299,10 @@ class ModelshipAPI:
         stays atomic w.r.t. in-flight requests."""
         while True:
             try:
-                gen = await self._coord().wait_for_change.remote(self._gateway_name, self._gen)
+                coord = await self._coord_async()
+                gen = await coord.wait_for_change.remote(self._gateway_name, self._gen)
                 if gen != self._gen:
-                    snapshot = await self._coord().get_routing.remote(self._gateway_name)
+                    snapshot = await coord.get_routing.remote(self._gateway_name)
                     self._apply_snapshot(snapshot)
             except asyncio.CancelledError:
                 return
