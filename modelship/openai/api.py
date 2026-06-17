@@ -278,6 +278,7 @@ class ModelshipAPI:
         try:
             snapshot = cast(dict, ray.get(self._coord().get_routing.remote(self._gateway_name)))
         except Exception:
+            self._coordinator = None  # re-resolve next time in case the handle went stale
             logger.debug("gateway: initial routing sync deferred; coordinator unavailable", exc_info=True)
             return False
         self._apply_snapshot(snapshot)
@@ -296,6 +297,7 @@ class ModelshipAPI:
             except asyncio.CancelledError:
                 return
             except Exception:
+                self._coordinator = None
                 logger.debug("gateway: watch iteration failed; retrying", exc_info=True)
                 await asyncio.sleep(_WATCH_RETRY_S)
 

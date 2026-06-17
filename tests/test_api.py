@@ -184,6 +184,16 @@ class TestWatchReconcile:
             assert api._sync_routing_blocking() is False
         assert api.models == {}
 
+    def test_failed_sync_drops_stale_coordinator_handle(self, api):
+        # A cached handle whose actor died (recreated with a new ActorID) must be
+        # cleared so the next _coord() re-resolves instead of retrying a corpse.
+        stale = MagicMock()
+        stale.get_routing.remote.side_effect = RuntimeError("actor dead")
+        api._coordinator = stale
+        with patch("modelship.openai.api.ray.get", side_effect=RuntimeError("actor dead")):
+            assert api._sync_routing_blocking() is False
+        assert api._coordinator is None
+
     def test_sync_keeps_live_models_on_regressed_generation(self, api):
         # Coordinator restarted: empty snapshot at a lower generation than ours. The
         # model is still deployed, so routing is preserved, not blanked.
