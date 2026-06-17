@@ -10,12 +10,14 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.service.type }}
-  # Target the Ray head, where the Serve HTTP proxy listens. KubeRay stamps these
-  # labels on the head pod; readiness gating (head /readyz probe) keeps this
-  # Service from routing until models are loaded.
+  # Load-balance across every Ray pod (head + workers), each running a Serve HTTP
+  # proxy (proxy_location=EveryNode) — so ingress survives losing any single pod,
+  # the head included. KubeRay stamps `ray.io/cluster` on every node pod; because
+  # each Ray container declares a port named `serve`, KubeRay gates the pod's
+  # readiness on a proxy /-/healthz check, so the Service only routes to a pod once
+  # its proxy is up (and, via the gateway /readyz, once models are loaded).
   selector:
     ray.io/cluster: {{ include "modelship.fullname" . }}
-    ray.io/node-type: head
   ports:
     - name: http
       port: {{ .Values.gateway.port }}

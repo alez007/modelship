@@ -108,7 +108,13 @@ spec:
             - name: ray-worker
               image: {{ printf "%s:%s" ($img.repository | default $.Values.image.repository) ($img.tag | default $.Values.image.tag) }}
               imagePullPolicy: {{ $img.pullPolicy | default $.Values.image.pullPolicy }}
+              # `serve` exposes the per-node Ray Serve HTTP proxy (proxy_location=
+              # EveryNode runs one on every worker). It backs the gateway Service so
+              # ingress load-balances across all nodes, not just the head. Naming the
+              # port `serve` also makes KubeRay add a proxy /-/healthz check to this
+              # pod's readiness probe, so it only joins the Service once the proxy is up.
               ports:
+                - { name: serve, containerPort: {{ $.Values.gateway.port }} }
                 - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
               envFrom:
                 {{- include "modelship.envFrom" $ | nindent 16 }}

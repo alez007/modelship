@@ -27,6 +27,9 @@ kuberay-operator:
 gateway:
   name: "modelship api"
   port: 8000
+  # Number of gateway replicas (maps to mship_deploy.py --gateway-replicas /
+  # MSHIP_GATEWAY_REPLICAS).
+  replicas: 1
 
 # -- Metrics exporter (Ray + modelship Prometheus metrics).
 metrics:
@@ -200,8 +203,8 @@ deploy:
         memory: 512Mi
 
 # -- Gateway Service. ClusterIP by default; switch to LoadBalancer/NodePort to
-# expose the OpenAI API outside the cluster. Targets the Ray head, where the
-# Serve HTTP proxy listens.
+# expose the OpenAI API outside the cluster. Load-balances across the Serve HTTP
+# proxy on every Ray node (head + workers), gated per-pod by proxy health.
 service:
   type: ClusterIP
   annotations: {}

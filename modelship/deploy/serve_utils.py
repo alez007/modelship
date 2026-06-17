@@ -4,7 +4,7 @@ import socket
 
 import ray
 from ray import serve
-from ray.serve.config import HTTPOptions
+from ray.serve.config import HTTPOptions, ProxyLocation
 from ray.serve.schema import LoggingConfig
 
 from modelship.infer.infer_config import ModelshipConfig
@@ -106,6 +106,7 @@ def connect_ray(lib_level: int) -> None:
 def start_serve(serve_logging_config: LoggingConfig) -> None:
     port = int(os.environ.get("MSHIP_OPENAI_API_PORT", str(_DEFAULT_OPENAI_API_PORT)))
     serve.start(
+        proxy_location=ProxyLocation.EveryNode,
         http_options=HTTPOptions(host="0.0.0.0", port=port),
         logging_config=serve_logging_config,
     )
