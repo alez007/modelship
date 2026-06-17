@@ -73,8 +73,14 @@ secrets:
 
 ## Topology
 
-- **Head** — CPU-only (`num-gpus: 0`); runs GCS, the Serve HTTP proxy, and the
-  gateway. No models are scheduled here.
+- **Head** — CPU-only (`num-gpus: 0`); runs GCS and the gateway. No models are
+  scheduled here.
+- **Serve HTTP proxies** — one runs on **every** Ray node (`proxy_location=EveryNode`),
+  not just the head, and the gateway Service load-balances across all of them so
+  ingress survives losing any single pod. Each proxy can route to any gateway
+  replica wherever it's scheduled. Set `gateway.replicas > 1` (with ≥1 worker) for
+  routing/ingress HA; replicas keep their routing tables in sync via the deploy
+  coordinator.
 - **Worker groups** — where models actually run. **Empty by default**, so a
   no-values install brings up only the head and schedules nothing; declare the
   groups that match your hardware under `workerGroups` (a commented gpu+cpu
@@ -88,10 +94,11 @@ secrets:
 
 ## Reaching the gateway
 
-The gateway Service targets the head (where the Serve proxy runs). Check
-`/readyz` for app-level readiness — it returns 503 until all models are loaded
-(use it for an external LB/Ingress health check). Port-forward for local access,
-or set `service.type=LoadBalancer`:
+The gateway Service load-balances across the Serve proxy on every Ray node, gated
+per-pod by proxy health (a pod only joins once its proxy is up). Check `/readyz`
+for app-level readiness — it returns 503 until all models are loaded (use it for
+an external LB/Ingress health check). Port-forward for local access, or set
+`service.type=LoadBalancer`:
 
 ```bash
 kubectl port-forward svc/<release>-modelship-gateway 8000:8000
@@ -105,6 +112,7 @@ curl http://localhost:8000/v1/models
 | `image.repository` / `image.tag` | `ghcr.io/alez007/modelship` / `0.3.0` | Use a `-cpu` tag on CPU-only clusters |
 | `rayVersion` | `2.54.1` | Must match the Ray in the image |
 | `models.config` / `models.existingConfigMap` | `models: []` | Your model set |
+| `gateway.replicas` | `1` | API gateway replicas; raise (with ≥1 worker) for routing/ingress HA |
 | `secrets.huggingfaceToken` / `secrets.apiKeys` | `""` | HF token / gateway API keys |
 | `cache.size` / `cache.accessModes` | `100Gi` / `[ReadWriteOnce]` | Shared weight cache |
 | `workerGroups` | `[]` | Worker pool layout (a list — set the full set; copy the example in `values.yaml`) |

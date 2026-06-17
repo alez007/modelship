@@ -17,11 +17,11 @@ _logger = get_logger("config")
 FINGERPRINT_LEN = 10
 
 # Fields excluded from the fingerprint hash. `name` is the deployment prefix,
-# not part of the fingerprint payload. `num_replicas` is excluded so scaling
-# replicas in/out doesn't force a full deployment replacement — Ray Serve
-# updates replica count in place when serve.run() is re-bound with the same
-# app name.
-_FINGERPRINT_EXCLUDED_FIELDS = {"name", "num_replicas"}
+# not part of the fingerprint payload. `num_replicas` and `autoscaling_config`
+# are excluded so changing replica count / scaling bounds doesn't force a full
+# deployment replacement — Ray Serve updates these in place when serve.run() is
+# re-bound with the same app name.
+_FINGERPRINT_EXCLUDED_FIELDS = {"name", "num_replicas", "autoscaling_config"}
 
 ChatTemplateContentFormatOption = Literal["auto", "string", "openai"]
 
@@ -131,6 +131,54 @@ class StableDiffusionCppConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
+class AutoscalingConfig(BaseModel):
+    """Per-model Ray Serve autoscaling bounds.
+
+    Maps to the subset of Ray Serve's ``autoscaling_config`` that's useful for
+    inference replicas. When set on a model, replica count is governed by load
+    between ``min_replicas`` and ``max_replicas`` instead of the fixed
+    ``num_replicas`` (the two are mutually exclusive). ``min_replicas: 0`` enables
+    scale-to-zero — the deployment idles with no replicas and cold-starts on the
+    first request.
+    """
+
+    min_replicas: int = Field(default=1, ge=0)
+    max_replicas: int = Field(default=1, ge=1)
+    # Seed count on first deploy before the autoscaler has load signal. None ->
+    # Serve starts at min_replicas.
+    initial_replicas: int | None = Field(default=None, ge=0)
+    # The autoscaler's setpoint: desired in-flight requests per replica. None ->
+    # Serve's own default. Lower = scales out sooner.
+    target_ongoing_requests: float | None = Field(default=None, gt=0)
+    # Debounce windows (seconds) before acting on a sustained over/under-load
+    # signal. None -> Serve defaults.
+    upscale_delay_s: float | None = Field(default=None, ge=0)
+    downscale_delay_s: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def check_bounds(self):
+        if self.max_replicas < self.min_replicas:
+            raise ValueError(
+                f"autoscaling_config: max_replicas ({self.max_replicas}) must be >= min_replicas ({self.min_replicas})."
+            )
+        if self.initial_replicas is not None and not (self.min_replicas <= self.initial_replicas <= self.max_replicas):
+            raise ValueError(
+                f"autoscaling_config: initial_replicas ({self.initial_replicas}) must be "
+                f"within [min_replicas={self.min_replicas}, max_replicas={self.max_replicas}]."
+            )
+        return self
+
+    def to_serve_dict(self) -> dict[str, Any]:
+        """The kwargs Ray Serve's ``.options(autoscaling_config=...)`` expects.
+        Unset (None) tunables are omitted so Serve applies its own defaults."""
+        out: dict[str, Any] = {"min_replicas": self.min_replicas, "max_replicas": self.max_replicas}
+        for key in ("initial_replicas", "target_ongoing_requests", "upscale_delay_s", "downscale_delay_s"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        return out
+
+
 class ModelshipModelConfig(BaseModel):
     name: str
     model: str | None = None
@@ -140,6 +188,8 @@ class ModelshipModelConfig(BaseModel):
     num_gpus: float = 0
     num_cpus: float = 0.1
     num_replicas: int = 1
+    # Load-driven replica scaling; mutually exclusive with the fixed num_replicas.
+    autoscaling_config: AutoscalingConfig | None = None
     # Ray Serve's per-replica concurrency cap.
     max_ongoing_requests: int | None = None
     vllm_engine_kwargs: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
@@ -173,6 +223,21 @@ class ModelshipModelConfig(BaseModel):
         if isinstance(data, dict) and data.get("loader") in image_loaders and data.get("usecase") is None:
             data = {**data, "usecase": ModelUsecase.image}
         return data
+
+    @model_validator(mode="after")
+    def check_autoscaling_excludes_num_replicas(self):
+        # num_replicas (fixed count) and autoscaling_config (load-driven range) are
+        # two ways to set the same thing — Ray Serve rejects both at once. Catch an
+        # explicit num_replicas alongside autoscaling_config here, with a clear
+        # message, rather than letting it surface deep in serve.run(). An untouched
+        # default num_replicas is fine (autoscaling simply takes over).
+        if self.autoscaling_config is not None and "num_replicas" in self.model_fields_set:
+            raise ValueError(
+                f"model '{self.name}': set either num_replicas or autoscaling_config, not both. "
+                f"num_replicas pins a fixed replica count; autoscaling_config scales between "
+                f"min_replicas and max_replicas on load."
+            )
+        return self
 
     @model_validator(mode="after")
     def check_custom_requires_plugin(self):

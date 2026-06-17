@@ -111,7 +111,8 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
-| `num_replicas` | int | Number of identical Ray Serve replicas for this deployment (default `1`) |
+| `num_replicas` | int | Fixed number of identical Ray Serve replicas for this deployment (default `1`). Mutually exclusive with `autoscaling_config`. |
+| `autoscaling_config` | object | Autoscale replicas with load instead of a fixed `num_replicas` (see [Autoscaling](#autoscaling)). Mutually exclusive with `num_replicas`. |
 | `max_ongoing_requests` | int | Per-replica Ray Serve concurrency cap (default: Ray Serve's own default of `100`). Streaming requests hold a slot for the whole generation, so a low cap throttles upstream of the engine; raise it for high-concurrency models. Omit to inherit the default. |
 | `vllm_engine_kwargs` | object | Passed directly to the vLLM engine (see below) |
 | `transformers_config` | object | Transformers loader options (see below) |
@@ -491,6 +492,41 @@ models:
 
 In this example, requests to model `kokoro` are distributed across three backends: two GPU replicas and one CPU instance.
 
+## Autoscaling
+
+Instead of a fixed `num_replicas`, set `autoscaling_config` to let Ray Serve grow
+and shrink a deployment's replica count with load. The two are mutually exclusive
+— setting both is a config error.
+
+```yaml
+models:
+  - name: "bursty-llm"
+    model: "Qwen/Qwen3-0.6B"
+    usecase: "generate"
+    loader: "vllm"
+    num_gpus: 0.3
+    autoscaling_config:
+      min_replicas: 1            # floor; 0 enables scale-to-zero (cold-start on first request)
+      max_replicas: 4            # ceiling
+      target_ongoing_requests: 8 # autoscaler setpoint: in-flight requests per replica (lower = scales out sooner)
+      initial_replicas: 1        # seed count on first deploy, before load signal (default: min_replicas)
+      upscale_delay_s: 10        # debounce before scaling out
+      downscale_delay_s: 300     # debounce before scaling in (longer avoids thrashing GPU warm-up)
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `min_replicas` | int | Lower bound (default `1`). `0` enables scale-to-zero: the deployment idles with no replicas and cold-starts on the first request. |
+| `max_replicas` | int | Upper bound (default `1`). Must be `≥ min_replicas`. |
+| `initial_replicas` | int | Seed count on first deploy before the autoscaler has a load signal (default: `min_replicas`). |
+| `target_ongoing_requests` | float | Desired in-flight requests per replica — the autoscaler's setpoint. Lower scales out sooner (default: Ray Serve's own default). |
+| `upscale_delay_s` | float | Seconds of sustained over-load before adding replicas (default: Ray Serve default). |
+| `downscale_delay_s` | float | Seconds of sustained under-load before removing replicas (default: Ray Serve default). Raise it to avoid thrashing on models with slow GPU warm-up. |
+
+Autoscaling is changed in place on `mship_deploy --reconcile` (it's excluded from
+the config fingerprint), so tuning these bounds doesn't tear down and rebuild the
+deployment.
+
 ## Environment Variables
 
 | Variable | Description | Default |
@@ -498,7 +534,9 @@ In this example, requests to model `kokoro` are distributed across three backend
 | `HF_TOKEN` | HuggingFace access token | — |
 | `MSHIP_MODEL_STACK` | [Profile](#profiles-mship_model_stack) to auto-generate a hardware-sized config from (`chat`/`assistant`/`studio`/`everything`) | — |
 | `MSHIP_CACHE_DIR` | Model cache directory (HuggingFace + plugins) | `/.cache` |
+| `MSHIP_STATE_DIR` | Durable effective-config store (this gateway's desired model set, replayed by `--reconcile` with no `--config` to self-heal after cluster loss) | `<cache-dir>/state` |
 | `MSHIP_GATEWAY_NAME` | Name for the API gateway app | `modelship api` |
+| `MSHIP_GATEWAY_REPLICAS` | Number of API gateway replicas (routing/ingress HA; replicas sync routing via the deploy coordinator) | `1` |
 | `MSHIP_MAX_REQUEST_BODY_BYTES` | Maximum allowed request body size in bytes | `52428800` (50 MB) |
 | `MSHIP_LOG_TARGET` | Log target: `console` or syslog URI (e.g. `syslog://host:514`, `syslog+tcp://host:514`) | `console` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint for log export (e.g. `http://collector:4317`). Requires `uv sync --extra otel`. | — |

@@ -31,3 +31,20 @@ models:
     num_gpus: 0.25
     vllm_engine_kwargs:
       trust_remote_code: true
+
+  # Load-driven autoscaling. Ray Serve scales replicas between min_replicas and
+  # max_replicas based on in-flight requests. Mutually exclusive with
+  # num_replicas (set one or the other, never both). min_replicas: 0 enables
+  # scale-to-zero — the model releases its GPU when idle and cold-starts on the
+  # next request.
+  - name: "bursty-llm"
+    model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    usecase: "generate"
+    loader: "vllm"
+    num_gpus: 0.5
+    autoscaling_config:
+      min_replicas: 1
+      max_replicas: 4
+      target_ongoing_requests: 8   # scale out past ~8 in-flight reqs/replica
+      upscale_delay_s: 10
+      downscale_delay_s: 600       # hold capacity 10 min before scaling in

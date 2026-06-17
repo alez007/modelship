@@ -10,6 +10,7 @@ import os
 # reads exclusively from os.environ so a single source of truth is preserved.
 _STRING_ARG_TO_ENV: dict[str, str] = {
     "cache_dir": "MSHIP_CACHE_DIR",
+    "state_dir": "MSHIP_STATE_DIR",
     "log_format": "MSHIP_LOG_FORMAT",
     "log_target": "MSHIP_LOG_TARGET",
     "otel_endpoint": "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -32,8 +33,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--cache-dir", help="Model cache directory (env: MSHIP_CACHE_DIR)")
     parser.add_argument(
+        "--state-dir",
+        help=(
+            "Directory for the durable effective-config state store (env: MSHIP_STATE_DIR, default: <cache-dir>/state)"
+        ),
+    )
+    parser.add_argument(
         "--gateway-name",
         help="Name for the API gateway app (env: MSHIP_GATEWAY_NAME, default: modelship api)",
+    )
+    parser.add_argument(
+        "--gateway-replicas",
+        type=int,
+        help="Number of API gateway replicas (env: MSHIP_GATEWAY_REPLICAS, default: 1)",
     )
     parser.add_argument(
         "--use-existing-ray-cluster",
@@ -107,5 +119,7 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_METRICS"] = "false"
     if args.max_request_body_bytes is not None:
         os.environ["MSHIP_MAX_REQUEST_BODY_BYTES"] = str(args.max_request_body_bytes)
+    if args.gateway_replicas is not None:
+        os.environ["MSHIP_GATEWAY_REPLICAS"] = str(args.gateway_replicas)
     if args.openai_api_port is not None:
         os.environ["MSHIP_OPENAI_API_PORT"] = str(args.openai_api_port)

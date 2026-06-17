@@ -82,7 +82,6 @@ class DeployContext:
     probe: Any
     operator_id: str
     gateway_name: str
-    gateway_handle: Any
     serve_logging_config: LoggingConfig
     deployed_this_run: dict[str, str]
 
@@ -107,27 +106,31 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
     if not reserved:
         return "skipped", None
 
+    # Replica sizing: autoscaling_config and a fixed num_replicas are mutually
+    # exclusive (enforced at config validation) — pass exactly one to Serve.
+    if config.autoscaling_config is not None:
+        scaling_opts: dict = {"autoscaling_config": config.autoscaling_config.to_serve_dict()}
+    else:
+        scaling_opts = {"num_replicas": config.num_replicas}
+
     try:
         logger.info("Deploying model: %s (deployment: %s)", config.name, deployment_name)
         ctx.deployed_this_run[deployment_name] = config.name
         serve.run(
             ModelDeployment.options(
                 name=deployment_name,
-                num_replicas=config.num_replicas,
                 max_constructor_retry_count=1,
                 logging_config=ctx.serve_logging_config,
+                **scaling_opts,
                 **deploy_opts,
             ).bind(config),
             name=deployment_name,
             route_prefix=None,
         )
         logger.info("Model ready: %s (deployment: %s)", config.name, deployment_name)
-        try:
-            ctx.gateway_handle.add_models.remote({deployment_name: config.name}).result()
-        except Exception:
-            logger.exception("Failed to register %s with gateway", deployment_name)
-        # Durable ownership record so the gateway can rebuild its routing table
-        # from the registry after a restart.
+        # Record ownership in the coordinator — the single source of truth. This
+        # bumps the gateway's generation, so every gateway replica's watch loop
+        # picks the new deployment up (the driver never pushes to replicas directly).
         try:
             ray.get(ctx.coordinator.register_deployment.remote(ctx.gateway_name, deployment_name, config.name))
         except Exception:

@@ -1,5 +1,6 @@
 {{- $args := list "python" "/modelship/mship_deploy.py" "--use-existing-ray-cluster"
   "--gateway-name" (.Values.gateway.name | quote)
+  "--gateway-replicas" (.Values.gateway.replicas | toString)
   "--config" "/etc/modelship/models.yaml"
   "--replace-strategy" .Values.deploy.replaceStrategy -}}
 {{- if .Values.deploy.reconcile }}{{- $args = append $args "--reconcile" }}{{- end }}

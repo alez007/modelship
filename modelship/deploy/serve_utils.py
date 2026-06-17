@@ -4,7 +4,7 @@ import socket
 
 import ray
 from ray import serve
-from ray.serve.config import HTTPOptions
+from ray.serve.config import HTTPOptions, ProxyLocation
 from ray.serve.schema import LoggingConfig
 
 from modelship.infer.infer_config import ModelshipConfig
@@ -47,21 +47,17 @@ def delete_apps_quietly(app_names) -> None:
             logger.exception("Failed to delete deployment: %s", name)
 
 
-def remove_apps(gateway_handle, app_names: list[str], coordinator=None, gateway_name: str | None = None) -> None:
-    """Unregister the given deployment apps from the gateway (so new requests stop
-    routing), drop them from the coordinator's ownership registry, then delete
-    them from Ray Serve (`serve.delete` drains in-flight requests first)."""
+def remove_apps(app_names: list[str], coordinator, gateway_name: str) -> None:
+    """Drop the given deployment apps from the coordinator's ownership registry
+    (which bumps the gateway generation so every replica's watch loop stops routing
+    to them), then delete them from Ray Serve (`serve.delete` drains in-flight
+    requests first)."""
     if not app_names:
         return
     try:
-        gateway_handle.remove_deployments.remote(app_names).result()
+        ray.get([coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
     except Exception:
-        logger.exception("Failed to unregister deployments from gateway: %s", app_names)
-    if coordinator is not None and gateway_name is not None:
-        try:
-            ray.get([coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
-        except Exception:
-            logger.exception("Failed to drop deployments from registry: %s", app_names)
+        logger.exception("Failed to drop deployments from registry: %s", app_names)
     delete_apps_quietly(app_names)
 
 
@@ -110,6 +106,7 @@ def connect_ray(lib_level: int) -> None:
 def start_serve(serve_logging_config: LoggingConfig) -> None:
     port = int(os.environ.get("MSHIP_OPENAI_API_PORT", str(_DEFAULT_OPENAI_API_PORT)))
     serve.start(
+        proxy_location=ProxyLocation.EveryNode,
         http_options=HTTPOptions(host="0.0.0.0", port=port),
         logging_config=serve_logging_config,
     )
@@ -155,10 +152,11 @@ def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> Non
     )
 
 
-def seed_expected_models(gateway_handle, yml_conf: ModelshipConfig) -> None:
-    # Pass the full desired set, not just models_to_add — already-deployed
-    # models also count toward "ready".
+def seed_expected_models(coordinator, gateway_name: str, yml_conf: ModelshipConfig) -> None:
+    # Record the full desired set on the coordinator (the gateway's readiness
+    # baseline) — already-deployed models also count toward "ready". Bumping the
+    # generation makes every replica adopt it via its watch loop.
     try:
-        gateway_handle.set_expected_models.remote([c.name for c in yml_conf.models]).result()
+        ray.get(coordinator.set_expected.remote(gateway_name, [c.name for c in yml_conf.models]))
     except Exception:
-        logger.exception("Failed to seed expected model list on gateway (non-fatal).")
+        logger.exception("Failed to seed expected model list on coordinator (non-fatal).")

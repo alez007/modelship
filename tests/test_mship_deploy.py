@@ -15,7 +15,7 @@ from modelship.deploy.actor_options import (
 )
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, ModelUsecase, VllmEngineConfig
 from modelship.utils import rand_suffix
-from modelship.utils.cli import parse_args
+from modelship.utils.cli import apply_args_to_env, parse_args
 
 
 class TestParseArgs:
@@ -48,6 +48,19 @@ class TestParseArgs:
         args = parse_args(["--config", "/some/path/models.yaml"])
         assert args.config == "/some/path/models.yaml"
 
+    def test_state_dir(self):
+        args = parse_args(["--state-dir", "/srv/mship/state"])
+        assert args.state_dir == "/srv/mship/state"
+
+    def test_state_dir_defaults_to_none(self):
+        assert parse_args([]).state_dir is None
+
+    def test_gateway_replicas(self):
+        assert parse_args(["--gateway-replicas", "3"]).gateway_replicas == 3
+
+    def test_gateway_replicas_defaults_to_none(self):
+        assert parse_args([]).gateway_replicas is None
+
     def test_gateway_name(self):
         args = parse_args(["--gateway-name", "my-gateway"])
         assert args.gateway_name == "my-gateway"
@@ -67,6 +80,28 @@ class TestParseArgs:
         assert args.gateway_name == "llm-api"
         assert args.redeploy is True
         assert args.use_existing_ray_cluster is True
+
+
+class TestApplyArgsToEnv:
+    def test_state_dir_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_DIR", raising=False)
+        apply_args_to_env(parse_args(["--state-dir", "/srv/mship/state"]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/srv/mship/state"
+
+    def test_state_dir_flag_overrides_preset_env(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_DIR", "/from/env")
+        apply_args_to_env(parse_args(["--state-dir", "/from/flag"]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/from/flag"
+
+    def test_no_state_dir_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_DIR", "/preexisting")
+        apply_args_to_env(parse_args([]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/preexisting"
+
+    def test_gateway_replicas_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_GATEWAY_REPLICAS", raising=False)
+        apply_args_to_env(parse_args(["--gateway-replicas", "4"]))
+        assert os.environ["MSHIP_GATEWAY_REPLICAS"] == "4"
 
 
 class TestRandSuffix:
@@ -244,29 +279,35 @@ class TestReservationTotals:
 
 class TestRemoveApps:
     def test_noop_on_empty_list(self):
-        gateway = MagicMock()
-        with patch("mship_deploy.serve.delete") as mock_delete:
-            mship_deploy.remove_apps(gateway, [])
-        gateway.remove_deployments.remote.assert_not_called()
+        coordinator = MagicMock()
+        with patch("modelship.deploy.serve_utils.serve.delete") as mock_delete:
+            mship_deploy.remove_apps([], coordinator, "gw")
+        coordinator.unregister_deployment.remote.assert_not_called()
         mock_delete.assert_not_called()
 
     def test_unregisters_then_deletes(self):
-        gateway = MagicMock()
-        gateway.remove_deployments.remote.return_value.result.return_value = ["qwen"]
+        coordinator = MagicMock()
         apps = ["qwen-aaaaaaaaaa", "kokoro-bbbbbbbbbb"]
-        with patch("mship_deploy.serve.delete") as mock_delete:
-            mship_deploy.remove_apps(gateway, apps)
+        with (
+            patch("modelship.deploy.serve_utils.ray.get") as mock_get,
+            patch("modelship.deploy.serve_utils.serve.delete") as mock_delete,
+        ):
+            mship_deploy.remove_apps(apps, coordinator, "gw")
 
-        # Unregister from gateway happens before serve.delete so new requests
-        # stop routing before the deployment is torn down.
-        gateway.remove_deployments.remote.assert_called_once_with(apps)
+        # Each app is dropped from the coordinator registry (which bumps the gateway
+        # generation so replicas stop routing) before serve.delete tears it down.
+        coordinator.unregister_deployment.remote.assert_any_call("gw", "qwen-aaaaaaaaaa")
+        coordinator.unregister_deployment.remote.assert_any_call("gw", "kokoro-bbbbbbbbbb")
+        mock_get.assert_called_once()  # batched ray.get over the unregister calls
         assert mock_delete.call_args_list == [(("qwen-aaaaaaaaaa",),), (("kokoro-bbbbbbbbbb",),)]
 
     def test_continues_on_serve_delete_error(self):
-        gateway = MagicMock()
-        gateway.remove_deployments.remote.return_value.result.return_value = []
-        with patch("mship_deploy.serve.delete", side_effect=[Exception("gone"), None]) as mock_delete:
-            mship_deploy.remove_apps(gateway, ["a-1234567890", "b-1234567890"])
+        coordinator = MagicMock()
+        with (
+            patch("modelship.deploy.serve_utils.ray.get"),
+            patch("modelship.deploy.serve_utils.serve.delete", side_effect=[Exception("gone"), None]) as mock_delete,
+        ):
+            mship_deploy.remove_apps(["a-1234567890", "b-1234567890"], coordinator, "gw")
         # Both deletes attempted even though the first raised.
         assert mock_delete.call_count == 2
 

@@ -29,7 +29,6 @@ from modelship.logging import propagate_lib_log_env  # noqa: E402
 
 propagate_lib_log_env()
 
-from ray import serve  # noqa: E402
 from ray.serve.schema import LoggingConfig  # noqa: E402
 
 from modelship.deploy.config import (  # noqa: E402
@@ -169,14 +168,13 @@ def main(argv: list[str] | None = None) -> None:
         resolve_all_tool_parsers(yml_conf)
         resolve_all_reasoning_parsers(yml_conf)
 
-        gateway_handle = serve.get_app_handle(gateway_name)
-        seed_expected_models(gateway_handle, yml_conf)
+        seed_expected_models(coordinator, gateway_name, yml_conf)
 
         # stop_start: drop old deployments BEFORE deploying new ones, so the
         # freed resources are available for the deploy loop. Used when the
         # cluster can't fit old + new at the same time.
         if args.replace_strategy == "stop_start":
-            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
+            remove_apps(apps_to_remove, coordinator, gateway_name)
             apps_to_remove = []
 
         # The probe is driver-owned so Ray force-releases the coordinator lock if
@@ -191,7 +189,6 @@ def main(argv: list[str] | None = None) -> None:
             probe=probe,
             operator_id=operator_id,
             gateway_name=gateway_name,
-            gateway_handle=gateway_handle,
             serve_logging_config=serve_logging_config,
             deployed_this_run=deployed_this_run,
         )
@@ -208,7 +205,7 @@ def main(argv: list[str] | None = None) -> None:
         # round-robins across both old and new handles for the same model,
         # so no requests are lost.
         if apps_to_remove:
-            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
+            remove_apps(apps_to_remove, coordinator, gateway_name)
 
         # Persist the achieved effective config (desired minus permanently-failed
         # models) so a re-assert after cluster loss restores exactly this set and

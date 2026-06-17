@@ -1,5 +1,6 @@
 """Tests for ModelshipAPI model discovery and routing."""
 
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,95 +13,94 @@ _ModelshipAPI = ModelshipAPI.func_or_class
 
 @pytest.fixture
 def api():
-    """Create a ModelshipAPI instance with mocked Ray Serve context."""
+    """Create a ModelshipAPI instance with mocked Ray Serve context. The watch
+    loop is marked started so `_ensure_watching` is a no-op — tests drive routing
+    directly via `_apply` / `_apply_snapshot`; watch-specific tests reset it."""
     with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
         mock_ctx.return_value.app_name = "test-gateway"
-        return _ModelshipAPI("test-gateway")
+        inst = _ModelshipAPI("test-gateway")
+        inst._watch_task = MagicMock()
+        return inst
 
 
-class TestAddModels:
-    @pytest.mark.asyncio
-    async def test_add_single_model(self, api):
-        mock_handle = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=mock_handle):
-            await api.add_models({"qwen-a3f9k": "qwen"})
+def _apply(api, models, *, expected=None, gen=1, handles=None):
+    """Apply a coordinator routing snapshot with Serve mocked — the new entry point
+    that replaced the driver's add_models/remove pushes.
 
+    - `models`: {app_name: model_name} desired routing.
+    - `gen`: snapshot generation. Removals are honored only when it advances; pass
+      a lower value than the replica's current `_gen` to simulate a coordinator
+      restart (removals suppressed).
+    - `handles`: side_effect for serve.get_app_handle (default: a fresh handle per
+      call); pass a list to control which handle each app gets.
+    """
+    with ExitStack() as stack:
+        if handles is not None:
+            stack.enter_context(patch("modelship.openai.api.serve.get_app_handle", side_effect=handles))
+        else:
+            stack.enter_context(
+                patch("modelship.openai.api.serve.get_app_handle", side_effect=lambda *a, **k: MagicMock())
+            )
+        api._apply_snapshot({"models": models, "expected": expected or [], "generation": gen})
+
+
+class TestApplyRouting:
+    """The reconcile core the watch loop runs: build/extend the routing table from
+    a coordinator snapshot."""
+
+    def test_add_single_model(self, api):
+        _apply(api, {"qwen-a3f9k": "qwen"})
         assert "qwen" in api.models
         assert len(api.models["qwen"]) == 1
         assert api.model_list[0].id == "qwen"
 
-    @pytest.mark.asyncio
-    async def test_add_multiple_deployments_same_model(self, api):
-        mock_handle_1 = MagicMock()
-        mock_handle_2 = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", side_effect=[mock_handle_1, mock_handle_2]):
-            await api.add_models({"qwen-a3f9k": "qwen", "qwen-b7x2p": "qwen"})
-
+    def test_add_multiple_deployments_same_model(self, api):
+        h1, h2 = MagicMock(), MagicMock()
+        _apply(api, {"qwen-a3f9k": "qwen", "qwen-b7x2p": "qwen"}, handles=[h1, h2])
         assert len(api.models["qwen"]) == 2
         assert len(api.model_list) == 1
 
-    @pytest.mark.asyncio
-    async def test_add_different_models(self, api):
-        mock_handle = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=mock_handle):
-            await api.add_models({"qwen-a3f9k": "qwen", "kokoro-c1m4n": "kokoro"})
-
+    def test_add_different_models(self, api):
+        _apply(api, {"qwen-a3f9k": "qwen", "kokoro-c1m4n": "kokoro"})
         assert "qwen" in api.models
         assert "kokoro" in api.models
         assert len(api.model_list) == 2
 
-    @pytest.mark.asyncio
-    async def test_incremental_adds_new_handle_to_existing_model(self, api):
-        handle_1 = MagicMock()
-        handle_2 = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=handle_1):
-            await api.add_models({"qwen-a3f9k": "qwen"})
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=handle_2):
-            await api.add_models({"qwen-b7x2p": "qwen"})
-
+    def test_incremental_snapshot_adds_new_handle_to_existing_model(self, api):
+        h1, h2 = MagicMock(), MagicMock()
+        _apply(api, {"qwen-a3f9k": "qwen"}, handles=[h1])
+        # A later snapshot adds a 2nd deployment of qwen; the already-routed one is
+        # left untouched (no new handle fetched for it).
+        _apply(api, {"qwen-a3f9k": "qwen", "qwen-b7x2p": "qwen"}, gen=2, handles=[h2])
         assert len(api.models["qwen"]) == 2
-        assert api.models["qwen"]["qwen-a3f9k"] is handle_1
-        assert api.models["qwen"]["qwen-b7x2p"] is handle_2
-        # Only one model card despite two deployments
+        assert api.models["qwen"]["qwen-a3f9k"] is h1
+        assert api.models["qwen"]["qwen-b7x2p"] is h2
         assert len(api.model_list) == 1
 
-    @pytest.mark.asyncio
-    async def test_handle_failure_skips(self, api):
-        with patch("modelship.openai.api.serve.get_app_handle", side_effect=Exception("not found")):
-            await api.add_models({"qwen-a3f9k": "qwen"})
-
+    def test_handle_failure_skips(self, api):
+        _apply(api, {"qwen-a3f9k": "qwen"}, handles=Exception("not found"))
         assert "qwen" not in api.models
         assert len(api.model_list) == 0
 
-    @pytest.mark.asyncio
-    async def test_records_per_model_load_times_and_ready_timestamp(self, api):
-        await api.set_expected_models(["qwen", "kokoro"])
+    def test_records_per_model_load_times_and_ready_timestamp(self, api):
+        _apply(api, {"qwen-a3f9k": "qwen"}, expected=["qwen", "kokoro"])
         assert api._expected_set_at is not None
-        assert api._all_ready_at is None
+        assert "qwen" in api._model_load_times
+        assert api._model_load_times["qwen"] >= 0
+        assert api._all_ready_at is None  # kokoro still pending
 
-        mock_handle = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=mock_handle):
-            await api.add_models({"qwen-a3f9k": "qwen"})
-            assert "qwen" in api._model_load_times
-            assert api._model_load_times["qwen"] >= 0
-            assert api._all_ready_at is None
+        _apply(api, {"qwen-a3f9k": "qwen", "kokoro-c1m4n": "kokoro"}, expected=["qwen", "kokoro"], gen=2)
+        assert "kokoro" in api._model_load_times
+        assert api._all_ready_at is not None
 
-            await api.add_models({"kokoro-c1m4n": "kokoro"})
-            assert "kokoro" in api._model_load_times
-            assert api._all_ready_at is not None
-
-    @pytest.mark.asyncio
-    async def test_readyz_body_ready_flag(self, api):
-        await api.set_expected_models(["qwen"])
+    def test_readyz_body_ready_flag(self, api):
+        _apply(api, {}, expected=["qwen"])
         body = api._readyz_body()
         assert body["ready"] is False
         assert body["models_pending"] == ["qwen"]
         assert body["time_to_ready_s"] is None
 
-        mock_handle = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=mock_handle):
-            await api.add_models({"qwen-a3f9k": "qwen"})
-
+        _apply(api, {"qwen-a3f9k": "qwen"}, expected=["qwen"], gen=2)
         body = api._readyz_body()
         assert body["ready"] is True
         assert body["models_pending"] == []
@@ -108,113 +108,113 @@ class TestAddModels:
         assert "qwen" in body["model_load_times_s"]
 
 
-class TestRemoveDeployments:
-    @pytest.mark.asyncio
-    async def test_remove_last_deployment_drops_model(self, api):
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()):
-            await api.add_models({"qwen-a3f9k1b2c4": "qwen"})
+class TestReconcileRemovals:
+    """A snapshot that drops an app removes it when the generation advances; a
+    regressed generation (coordinator restart) never blanks live routing."""
+
+    def test_dropped_app_removed_on_forward_snapshot(self, api):
+        _apply(api, {"qwen-a3f9k1b2c4": "qwen"}, gen=1)
         assert "qwen" in api.models
-
-        removed = await api.remove_deployments(["qwen-a3f9k1b2c4"])
-
-        assert removed == ["qwen"]
+        _apply(api, {}, gen=2)
         assert "qwen" not in api.models
         assert api.model_list == []
         assert "qwen" not in api._round_robin
 
-    @pytest.mark.asyncio
-    async def test_remove_one_of_many_keeps_model(self, api):
+    def test_one_of_many_dropped_keeps_model(self, api):
         h1, h2 = MagicMock(), MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", side_effect=[h1, h2]):
-            await api.add_models({"qwen-aaaaaaaaaa": "qwen", "qwen-bbbbbbbbbb": "qwen"})
-
-        removed = await api.remove_deployments(["qwen-aaaaaaaaaa"])
-
-        assert removed == []  # model still has a deployment
+        _apply(api, {"qwen-aaaaaaaaaa": "qwen", "qwen-bbbbbbbbbb": "qwen"}, gen=1, handles=[h1, h2])
+        _apply(api, {"qwen-bbbbbbbbbb": "qwen"}, gen=2)
         assert "qwen" in api.models
         assert list(api.models["qwen"].keys()) == ["qwen-bbbbbbbbbb"]
         assert len(api.model_list) == 1
 
-    @pytest.mark.asyncio
-    async def test_remove_unknown_deployment_is_warning(self, api):
-        # Should not raise; just logs a warning.
-        removed = await api.remove_deployments(["nonexistent-1234567890"])
-        assert removed == []
+    def test_regressed_generation_does_not_blank_routing(self, api):
+        # Coordinator restarted (generation reset below ours) but the model is still
+        # deployed: additions are adopted, live routing is never removed.
+        _apply(api, {"qwen-a3f9k1b2c4": "qwen"}, gen=5)
+        _apply(api, {}, gen=0)
+        assert "qwen" in api.models
 
-    @pytest.mark.asyncio
-    async def test_remove_drops_from_expected_models(self, api):
-        await api.set_expected_models(["qwen", "kokoro"])
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()):
-            await api.add_models({"qwen-a3f9k1b2c4": "qwen"})
+    def test_drop_unknown_app_is_noop(self, api):
+        assert api._drop_apps(["nonexistent-1234567890"]) == []
 
-        await api.remove_deployments(["qwen-a3f9k1b2c4"])
-
+    def test_removal_drops_from_expected_when_snapshot_drops_it(self, api):
+        _apply(api, {"qwen-a3f9k1b2c4": "qwen"}, expected=["qwen", "kokoro"], gen=1)
+        _apply(api, {}, expected=["kokoro"], gen=2)
         assert api.expected_models == ["kokoro"]
 
 
 class TestListDeployments:
     @pytest.mark.asyncio
     async def test_returns_app_names_per_model(self, api):
-        h1, h2, h3 = MagicMock(), MagicMock(), MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", side_effect=[h1, h2, h3]):
-            await api.add_models(
-                {
-                    "qwen-aaaaaaaaaa": "qwen",
-                    "qwen-bbbbbbbbbb": "qwen",
-                    "kokoro-cccccccccc": "kokoro",
-                }
-            )
-
+        _apply(
+            api,
+            {"qwen-aaaaaaaaaa": "qwen", "qwen-bbbbbbbbbb": "qwen", "kokoro-cccccccccc": "kokoro"},
+        )
         listed = await api.list_deployments()
-
         assert set(listed["qwen"]) == {"qwen-aaaaaaaaaa", "qwen-bbbbbbbbbb"}
         assert listed["kokoro"] == ["kokoro-cccccccccc"]
 
 
-class TestGatewayReconstruction:
-    @pytest.mark.asyncio
-    async def test_reconstructs_from_registry_after_restart(self, api):
-        # A restarted gateway starts empty; the registry still knows its deployments.
-        records = {"qwen-aaaaaaaaaa": "qwen", "embed-bbbbbbbbbb": "embed"}
+class TestWatchReconcile:
+    """The first-request synchronous sync that seeds a (re)started replica from the
+    coordinator before the watch loop takes over."""
+
+    def test_sync_pulls_snapshot_and_builds_table(self, api):
+        api._watch_task = None  # exercise the real sync path
+        snapshot = {
+            "models": {"qwen-aaaaaaaaaa": "qwen", "embed-bbbbbbbbbb": "embed"},
+            "expected": ["qwen", "embed"],
+            "generation": 3,
+        }
         with (
             patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", return_value=MagicMock()),
-            patch("modelship.openai.api.ray.get", return_value=records),
+            patch("modelship.openai.api.ray.get", return_value=snapshot),
             patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()),
         ):
-            api._ensure_reconstructed()
+            assert api._sync_routing_blocking() is True
 
         assert set(api.models) == {"qwen", "embed"}
-        assert api._reconstructed is True
-        # Recovered set becomes the readiness baseline so the pod reports ready again.
+        assert api._gen == 3
         assert api._readyz_body()["ready"] is True
 
-    @pytest.mark.asyncio
-    async def test_retries_when_registry_unavailable(self, api):
+    def test_sync_tolerates_unavailable_coordinator(self, api):
+        api._watch_task = None
         with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", side_effect=RuntimeError):
-            api._ensure_reconstructed()
-        assert api._reconstructed is False  # not latched — retries on next request
+            assert api._sync_routing_blocking() is False
         assert api.models == {}
 
-    @pytest.mark.asyncio
-    async def test_skips_reconstruction_when_already_seeded(self, api):
-        with patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()):
-            await api.add_models({"qwen-aaaaaaaaaa": "qwen"})
-        with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator") as gc:
-            api._ensure_reconstructed()
-        gc.assert_not_called()  # driver already seeded us; don't touch the registry
+    def test_failed_sync_drops_stale_coordinator_handle(self, api):
+        # A cached handle whose actor died (recreated with a new ActorID) must be
+        # cleared so the next _coord() re-resolves instead of retrying a corpse.
+        stale = MagicMock()
+        stale.get_routing.remote.side_effect = RuntimeError("actor dead")
+        api._coordinator = stale
+        with patch("modelship.openai.api.ray.get", side_effect=RuntimeError("actor dead")):
+            assert api._sync_routing_blocking() is False
+        assert api._coordinator is None
+
+    def test_sync_keeps_live_models_on_regressed_generation(self, api):
+        # Coordinator restarted: empty snapshot at a lower generation than ours. The
+        # model is still deployed, so routing is preserved, not blanked.
+        _apply(api, {"qwen-aaaaaaaaaa": "qwen"}, gen=4)
+        empty = {"models": {}, "expected": [], "generation": 0}
+        with (
+            patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", return_value=MagicMock()),
+            patch("modelship.openai.api.ray.get", return_value=empty),
+        ):
+            api._coordinator = None
+            assert api._sync_routing_blocking() is True
+        assert "qwen" in api.models
 
 
 class TestGetHandle:
-    @pytest.mark.asyncio
-    async def test_round_robin(self, api):
-        handle_a = MagicMock()
-        handle_b = MagicMock()
-        with patch("modelship.openai.api.serve.get_app_handle", side_effect=[handle_a, handle_b]):
-            await api.add_models({"qwen-a3f9k": "qwen", "qwen-b7x2p": "qwen"})
-
-        assert api._get_handle("qwen") is handle_a
-        assert api._get_handle("qwen") is handle_b
-        assert api._get_handle("qwen") is handle_a
+    def test_round_robin(self, api):
+        ha, hb = MagicMock(), MagicMock()
+        _apply(api, {"qwen-a3f9k": "qwen", "qwen-b7x2p": "qwen"}, handles=[ha, hb])
+        assert api._get_handle("qwen") is ha
+        assert api._get_handle("qwen") is hb
+        assert api._get_handle("qwen") is ha
 
     def test_unknown_model_raises(self, api):
         from fastapi import HTTPException

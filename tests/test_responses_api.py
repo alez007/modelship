@@ -25,7 +25,11 @@ _ModelshipAPI = ModelshipAPI.func_or_class
 def api():
     with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
         mock_ctx.return_value.app_name = "test-gateway"
-        return _ModelshipAPI("test-gateway")
+        inst = _ModelshipAPI("test-gateway")
+        # Tests set api.models directly; mark the watch loop started so the routing
+        # accessors (_get_handle) don't try to reconcile from a coordinator.
+        inst._watch_task = MagicMock()
+        return inst
 
 
 def _raw_request():
