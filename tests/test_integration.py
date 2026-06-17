@@ -1,7 +1,9 @@
 import base64
+import concurrent.futures
 import io
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -13,6 +15,11 @@ from openai import OpenAI
 
 OPENAI_API_BASE = "http://localhost:8000/v1"
 HEALTH_URL = "http://localhost:8000/health"
+# Ray Serve's REST status API, served by the head dashboard on 8265 (the
+# mship_cluster fixture starts the head with the dashboard explicitly enabled).
+# Returns ServeInstanceDetails — per-application/-deployment replica states —
+# which the autoscaling test polls to observe scale out/in.
+SERVE_STATUS_URL = "http://localhost:8265/api/serve/applications/"
 
 # Per-model configs. Each `Deployer.deploy(*names)` call writes one of these
 # (or a subset) into a one-shot models.yaml and runs `mship_deploy.py
@@ -77,6 +84,25 @@ MODEL_CONFIGS: dict[str, dict] = {
         "usecase": "generate",
         "loader": "llama_cpp",
         "num_cpus": 1,
+    },
+    "autoscale-llama": {
+        "name": "autoscale-llama",
+        # Tiny CPU GGUF so the host can hold several replicas (1 cpu each, up to
+        # max_replicas) at once. autoscaling_config replaces num_replicas:
+        # target_ongoing_requests=1 makes a handful of concurrent requests
+        # exceed one replica's setpoint and drive scale-out; the short delays
+        # keep the test's poll windows tractable.
+        "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
+        "usecase": "generate",
+        "loader": "llama_cpp",
+        "num_cpus": 1,
+        "autoscaling_config": {
+            "min_replicas": 1,
+            "max_replicas": 3,
+            "target_ongoing_requests": 1,
+            "upscale_delay_s": 2,
+            "downscale_delay_s": 10,
+        },
     },
     "chat-llama-reasoning": {
         "name": "chat-llama-reasoning",
@@ -237,6 +263,11 @@ class _Deployer:
 
     def __init__(self, tmp_dir: Path) -> None:
         self._tmp = tmp_dir
+        # Same per-session state dir the operator uses (see mship_cluster), so
+        # reconcile reads the effective set the prior deploy wrote and tears down
+        # models that dropped out — instead of the shared /.cache/state default,
+        # which leaks a previous run's models into this one.
+        self._state_dir = tmp_dir / "state"
         self._current: frozenset[str] = frozenset()
 
     def deploy(self, *model_names: str) -> None:
@@ -258,6 +289,8 @@ class _Deployer:
                     "mship_deploy.py",
                     "--config",
                     str(config_path),
+                    "--state-dir",
+                    str(self._state_dir),
                     "--reconcile",
                     "--replace-strategy",
                     "stop_start",
@@ -285,6 +318,10 @@ def mship_cluster(tmp_path_factory):
     tmp_dir = tmp_path_factory.mktemp("mship_integration")
     empty_config = tmp_dir / "empty-models.yaml"
     log_path = tmp_dir / "mship_deploy.log"
+    # Per-session effective-config store (shared with every _Deployer reconcile
+    # via --state-dir). Fresh per session and under tmp, so no prior run's models
+    # leak in and nothing is left behind in the shared /.cache/state default.
+    state_dir = tmp_dir / "state"
 
     subprocess.run(["ray", "stop", "--force"], check=False)
     subprocess.run(["ray", "start", "--head", "--dashboard-host=0.0.0.0", "--disable-usage-stats"], check=True)
@@ -294,7 +331,7 @@ def mship_cluster(tmp_path_factory):
 
     log_file = open(log_path, "w")  # noqa: SIM115 — kept open for subprocess lifetime, closed in cleanup
     proc = subprocess.Popen(
-        ["uv", "run", "mship_deploy.py", "--config", str(empty_config)],
+        ["uv", "run", "mship_deploy.py", "--config", str(empty_config), "--state-dir", str(state_dir)],
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
@@ -1955,3 +1992,87 @@ class TestResponsesLlamaCpp:
         assert "".join(text_deltas).strip()
         assert completed is not None
         assert completed.status in {"completed", "incomplete"}
+
+
+def _running_replicas(model_name: str) -> int:
+    """Count RUNNING replicas of the deployment serving `model_name`, read from
+    the Serve REST status API. The app name is `<model_name>-<fingerprint>`, so
+    match by prefix; the single inner deployment carries the replica list."""
+    resp = httpx.get(SERVE_STATUS_URL, timeout=10)
+    resp.raise_for_status()
+    apps = resp.json().get("applications", {})
+    for app_name, app in apps.items():
+        if app_name == model_name or app_name.startswith(f"{model_name}-"):
+            for dep in app.get("deployments", {}).values():
+                return sum(1 for r in dep.get("replicas", []) if r.get("state") == "RUNNING")
+    return 0
+
+
+def _wait_for_replicas(model_name: str, predicate, deadline_s: float) -> int:
+    """Poll replica count until `predicate(count)` holds or the deadline passes.
+    Returns the last observed count either way (caller asserts)."""
+    end = time.time() + deadline_s
+    count = _running_replicas(model_name)
+    while time.time() < end:
+        count = _running_replicas(model_name)
+        if predicate(count):
+            return count
+        time.sleep(2)
+    return count
+
+
+def _hammer(client: OpenAI, model: str, stop: threading.Event, errors: list) -> None:
+    """Keep one request in flight at a time until `stop` is set. Several of these
+    running concurrently sustain enough load to push past the autoscaler's
+    per-replica setpoint."""
+    while not stop.is_set():
+        try:
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Write a long, detailed story about a curious robot."}],
+                max_tokens=256,
+            )
+        except Exception as exc:
+            # Surfaced via the shared list, not raised in the worker thread.
+            errors.append(exc)
+
+
+@pytest.mark.integration
+@pytest.mark.llama_cpp
+@pytest.mark.autoscaling
+class TestAutoscaling:
+    """End-to-end check that a model's autoscaling_config actually drives Ray
+    Serve: replicas scale out under sustained concurrent load (bounded by
+    max_replicas) and scale back to min_replicas once the load stops."""
+
+    MODEL = "autoscale-llama"
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy(self.MODEL)
+
+    def test_scales_out_under_load_then_back_to_min(self, client):
+        # Idle baseline: the deployment sits at min_replicas (1).
+        baseline = _wait_for_replicas(self.MODEL, lambda n: n == 1, deadline_s=60)
+        assert baseline == 1, f"expected to start at min_replicas=1, saw {baseline}"
+
+        stop = threading.Event()
+        errors: list[Exception] = []
+        # 8 concurrent in-flight requests vs target_ongoing_requests=1 asks the
+        # autoscaler for ~8 replicas, capped at max_replicas=3.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            for _ in range(8):
+                pool.submit(_hammer, client, self.MODEL, stop, errors)
+            try:
+                # Autoscaler needs a look-back window of load metrics; allow generous time.
+                peak = _wait_for_replicas(self.MODEL, lambda n: n > 1, deadline_s=120)
+            finally:
+                stop.set()
+
+        assert peak > 1, f"expected scale-out under load, replicas stayed at {peak}"
+        assert peak <= 3, f"replicas {peak} exceeded max_replicas=3"
+        assert not errors, f"load requests errored during scale-out: {errors[:3]}"
+
+        # Load stopped: scale back in to min_replicas within the downscale window + slack.
+        settled = _wait_for_replicas(self.MODEL, lambda n: n == 1, deadline_s=180)
+        assert settled == 1, f"expected scale-in to min_replicas=1 after load, saw {settled}"

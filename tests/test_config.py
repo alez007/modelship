@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from modelship.infer.infer_config import (
+    AutoscalingConfig,
     LlamaCppConfig,
     ModelLoader,
     ModelshipConfig,
@@ -560,3 +561,77 @@ class TestNumReplicas:
             num_replicas=3,
         )
         assert config.num_replicas == 3
+
+
+class TestAutoscalingConfig:
+    def _model(self, **overrides):
+        base = dict(
+            name="test",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+        )
+        base.update(overrides)
+        return ModelshipModelConfig(**base)
+
+    def test_default_is_none(self):
+        assert self._model().autoscaling_config is None
+
+    def test_to_serve_dict_omits_unset_tunables(self):
+        cfg = AutoscalingConfig(min_replicas=1, max_replicas=4)
+        assert cfg.to_serve_dict() == {"min_replicas": 1, "max_replicas": 4}
+
+    def test_to_serve_dict_includes_set_tunables(self):
+        cfg = AutoscalingConfig(
+            min_replicas=0,
+            max_replicas=8,
+            initial_replicas=2,
+            target_ongoing_requests=5,
+            upscale_delay_s=10,
+            downscale_delay_s=600,
+        )
+        assert cfg.to_serve_dict() == {
+            "min_replicas": 0,
+            "max_replicas": 8,
+            "initial_replicas": 2,
+            "target_ongoing_requests": 5,
+            "upscale_delay_s": 10,
+            "downscale_delay_s": 600,
+        }
+
+    def test_scale_to_zero_allowed(self):
+        cfg = AutoscalingConfig(min_replicas=0, max_replicas=3)
+        assert cfg.min_replicas == 0
+
+    def test_max_below_min_rejected(self):
+        with pytest.raises(ValidationError, match=r"max_replicas .* must be >= "):
+            AutoscalingConfig(min_replicas=4, max_replicas=2)
+
+    def test_initial_outside_bounds_rejected(self):
+        with pytest.raises(ValidationError, match=r"initial_replicas .* must be within"):
+            AutoscalingConfig(min_replicas=1, max_replicas=4, initial_replicas=9)
+
+    def test_negative_min_rejected(self):
+        with pytest.raises(ValidationError):
+            AutoscalingConfig(min_replicas=-1, max_replicas=4)
+
+    def test_accepted_on_model(self):
+        config = self._model(autoscaling_config={"min_replicas": 1, "max_replicas": 5})
+        assert config.autoscaling_config is not None
+        assert config.autoscaling_config.max_replicas == 5
+
+    def test_explicit_num_replicas_with_autoscaling_rejected(self):
+        with pytest.raises(ValidationError, match="either num_replicas or autoscaling_config"):
+            self._model(num_replicas=2, autoscaling_config={"min_replicas": 1, "max_replicas": 4})
+
+    def test_default_num_replicas_with_autoscaling_allowed(self):
+        # An untouched num_replicas default must not trip the mutual-exclusivity check.
+        config = self._model(autoscaling_config={"min_replicas": 1, "max_replicas": 4})
+        assert config.autoscaling_config is not None
+
+    def test_excluded_from_fingerprint(self):
+        # Changing scaling bounds is an in-place Serve rebind, not config drift.
+        a = self._model(autoscaling_config={"min_replicas": 1, "max_replicas": 2})
+        b = self._model(autoscaling_config={"min_replicas": 3, "max_replicas": 9})
+        plain = self._model()
+        assert a.fingerprint() == b.fingerprint() == plain.fingerprint()

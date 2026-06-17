@@ -15,7 +15,7 @@ from modelship.deploy.actor_options import (
 )
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, ModelUsecase, VllmEngineConfig
 from modelship.utils import rand_suffix
-from modelship.utils.cli import parse_args
+from modelship.utils.cli import apply_args_to_env, parse_args
 
 
 class TestParseArgs:
@@ -48,6 +48,13 @@ class TestParseArgs:
         args = parse_args(["--config", "/some/path/models.yaml"])
         assert args.config == "/some/path/models.yaml"
 
+    def test_state_dir(self):
+        args = parse_args(["--state-dir", "/srv/mship/state"])
+        assert args.state_dir == "/srv/mship/state"
+
+    def test_state_dir_defaults_to_none(self):
+        assert parse_args([]).state_dir is None
+
     def test_gateway_name(self):
         args = parse_args(["--gateway-name", "my-gateway"])
         assert args.gateway_name == "my-gateway"
@@ -67,6 +74,23 @@ class TestParseArgs:
         assert args.gateway_name == "llm-api"
         assert args.redeploy is True
         assert args.use_existing_ray_cluster is True
+
+
+class TestApplyArgsToEnv:
+    def test_state_dir_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_DIR", raising=False)
+        apply_args_to_env(parse_args(["--state-dir", "/srv/mship/state"]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/srv/mship/state"
+
+    def test_state_dir_flag_overrides_preset_env(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_DIR", "/from/env")
+        apply_args_to_env(parse_args(["--state-dir", "/from/flag"]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/from/flag"
+
+    def test_no_state_dir_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_DIR", "/preexisting")
+        apply_args_to_env(parse_args([]))
+        assert os.environ["MSHIP_STATE_DIR"] == "/preexisting"
 
 
 class TestRandSuffix:

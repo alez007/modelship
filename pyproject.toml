@@ -158,6 +158,7 @@ markers = [
     "vllm: integration tests that exercise the vllm loader",
     "diffusers: integration tests that exercise the diffusers loader",
     "stable_diffusion_cpp: integration tests that exercise the stable_diffusion_cpp loader",
+    "autoscaling: integration test that exercises Ray Serve autoscaling (scale out/in under load)",
 ]
 
 [tool.pyright]

@@ -107,15 +107,22 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
     if not reserved:
         return "skipped", None
 
+    # Replica sizing: autoscaling_config and a fixed num_replicas are mutually
+    # exclusive (enforced at config validation) — pass exactly one to Serve.
+    if config.autoscaling_config is not None:
+        scaling_opts: dict = {"autoscaling_config": config.autoscaling_config.to_serve_dict()}
+    else:
+        scaling_opts = {"num_replicas": config.num_replicas}
+
     try:
         logger.info("Deploying model: %s (deployment: %s)", config.name, deployment_name)
         ctx.deployed_this_run[deployment_name] = config.name
         serve.run(
             ModelDeployment.options(
                 name=deployment_name,
-                num_replicas=config.num_replicas,
                 max_constructor_retry_count=1,
                 logging_config=ctx.serve_logging_config,
+                **scaling_opts,
                 **deploy_opts,
             ).bind(config),
             name=deployment_name,
