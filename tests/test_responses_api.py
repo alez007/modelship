@@ -25,7 +25,7 @@ _ModelshipAPI = ModelshipAPI.func_or_class
 def api():
     with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
         mock_ctx.return_value.app_name = "test-gateway"
-        return _ModelshipAPI()
+        return _ModelshipAPI("test-gateway")
 
 
 def _raw_request():

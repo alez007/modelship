@@ -66,12 +66,30 @@ class ModelshipDeployCoordinator:
         self._held_since: float = 0.0
         self._watcher_task: asyncio.Task | None = None
         self._fatal_errors: dict[str, str] = {}
+        # Durable ownership registry: gateway_name -> {deployment_name -> model_name}.
+        # The driver writes it on (un)deploy; a restarted gateway reads its own
+        # entry to rebuild its routing table without the driver being present.
+        self._registry: dict[str, dict[str, str]] = {}
 
     def report_fatal_error(self, deployment_name: str, reason: str) -> None:
         self._fatal_errors[deployment_name] = reason
 
     def pop_fatal_error(self, deployment_name: str) -> str | None:
         return self._fatal_errors.pop(deployment_name, None)
+
+    def register_deployment(self, gateway_name: str, deployment_name: str, model_name: str) -> None:
+        self._registry.setdefault(gateway_name, {})[deployment_name] = model_name
+
+    def unregister_deployment(self, gateway_name: str, deployment_name: str) -> None:
+        gw = self._registry.get(gateway_name)
+        if gw is not None:
+            gw.pop(deployment_name, None)
+            if not gw:
+                del self._registry[gateway_name]
+
+    def get_deployments(self, gateway_name: str) -> dict[str, str]:
+        """`{deployment_name -> model_name}` recorded for this gateway."""
+        return dict(self._registry.get(gateway_name, {}))
 
     async def try_reserve(
         self,

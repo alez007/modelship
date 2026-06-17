@@ -1,0 +1,78 @@
+{{- if .Values.deploy.reassert.enabled }}
+{{- /*
+Self-heal CronJob. Periodically re-submits a deploy to the head's Ray Job API; the
+driver runs ON the head (where the cache PVC is mounted), reads this gateway's
+durable effective config and reconciles the live cluster to it. After a cluster
+recreation / head loss the cluster comes back EMPTY and the one-shot deploy RayJob
+has long finished — this tick redeploys the full effective set; when the cluster is
+already healthy it's an idempotent no-op.
+
+`--reconcile` with NO `--config`: reconcile the live cluster to the PERSISTED
+effective config only — no user input, nothing added or removed beyond restoring
+the recorded set. (The models.yaml ConfigMap is deliberately not mounted.)
+
+This pod is a pure submit CLIENT: it only runs `ray job submit`; the heavy code
+runs head-side. So it uses a slim upstream Ray image (no GPU/ML libs), version-
+matched to the cluster — never our multi-GB GPU image.
+*/}}
+{{- $args := list "python" "/modelship/mship_deploy.py" "--use-existing-ray-cluster"
+  "--gateway-name" .Values.gateway.name
+  "--reconcile"
+  "--replace-strategy" .Values.deploy.replaceStrategy -}}
+{{- if not .Values.metrics.enabled }}{{- $args = append $args "--no-metrics" }}{{- end }}
+{{- range .Values.deploy.extraArgs }}{{- $args = append $args . }}{{- end }}
+{{- $submitImage := .Values.deploy.reassert.image | default (printf "rayproject/ray:%s" .Values.rayVersion) -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "modelship.fullname" . }}-reassert
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.deploy.reassert.schedule | quote }}
+  # Never let two self-heal deploys overlap: each grabs the coordinator deploy
+  # lock, so a slow tick (e.g. mid model download after cluster recreation) would
+  # just make the next contend. Forbid skips the next tick until this one ends.
+  # (Cron-vs-RayJob during a helm upgrade is still safe — the coordinator lock
+  # serializes them and both are idempotent reconciles.)
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.deploy.reassert.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .Values.deploy.reassert.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.deploy.reassert.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      # One attempt per tick; the next schedule retries. No internal backoff churn.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "modelship.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: reassert
+              # Slim upstream Ray image: just the `ray job submit` client, version-
+              # matched to the cluster (rayVersion). The driver runs on the head, not
+              # here — this pod only submits and tails until the deploy finishes
+              # (blocks, so the Job's success reflects the deploy outcome).
+              image: {{ $submitImage | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - ray
+                - job
+                - submit
+                - --address
+                - http://{{ include "modelship.headServiceName" . }}:8265
+                - "--"
+                {{- range $args }}
+                - {{ . | quote }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.deploy.reassert.resources | nindent 16 }}
+{{- end }}

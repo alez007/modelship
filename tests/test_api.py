@@ -15,7 +15,7 @@ def api():
     """Create a ModelshipAPI instance with mocked Ray Serve context."""
     with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
         mock_ctx.return_value.app_name = "test-gateway"
-        return _ModelshipAPI()
+        return _ModelshipAPI("test-gateway")
 
 
 class TestAddModels:
@@ -90,9 +90,9 @@ class TestAddModels:
             assert api._all_ready_at is not None
 
     @pytest.mark.asyncio
-    async def test_status_body_ready_flag(self, api):
+    async def test_readyz_body_ready_flag(self, api):
         await api.set_expected_models(["qwen"])
-        body = api._status_body()
+        body = api._readyz_body()
         assert body["ready"] is False
         assert body["models_pending"] == ["qwen"]
         assert body["time_to_ready_s"] is None
@@ -101,7 +101,7 @@ class TestAddModels:
         with patch("modelship.openai.api.serve.get_app_handle", return_value=mock_handle):
             await api.add_models({"qwen-a3f9k": "qwen"})
 
-        body = api._status_body()
+        body = api._readyz_body()
         assert body["ready"] is True
         assert body["models_pending"] == []
         assert body["time_to_ready_s"] is not None
@@ -169,6 +169,39 @@ class TestListDeployments:
 
         assert set(listed["qwen"]) == {"qwen-aaaaaaaaaa", "qwen-bbbbbbbbbb"}
         assert listed["kokoro"] == ["kokoro-cccccccccc"]
+
+
+class TestGatewayReconstruction:
+    @pytest.mark.asyncio
+    async def test_reconstructs_from_registry_after_restart(self, api):
+        # A restarted gateway starts empty; the registry still knows its deployments.
+        records = {"qwen-aaaaaaaaaa": "qwen", "embed-bbbbbbbbbb": "embed"}
+        with (
+            patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", return_value=MagicMock()),
+            patch("modelship.openai.api.ray.get", return_value=records),
+            patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()),
+        ):
+            api._ensure_reconstructed()
+
+        assert set(api.models) == {"qwen", "embed"}
+        assert api._reconstructed is True
+        # Recovered set becomes the readiness baseline so the pod reports ready again.
+        assert api._readyz_body()["ready"] is True
+
+    @pytest.mark.asyncio
+    async def test_retries_when_registry_unavailable(self, api):
+        with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", side_effect=RuntimeError):
+            api._ensure_reconstructed()
+        assert api._reconstructed is False  # not latched — retries on next request
+        assert api.models == {}
+
+    @pytest.mark.asyncio
+    async def test_skips_reconstruction_when_already_seeded(self, api):
+        with patch("modelship.openai.api.serve.get_app_handle", return_value=MagicMock()):
+            await api.add_models({"qwen-aaaaaaaaaa": "qwen"})
+        with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator") as gc:
+            api._ensure_reconstructed()
+        gc.assert_not_called()  # driver already seeded us; don't touch the registry
 
 
 class TestGetHandle:

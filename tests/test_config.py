@@ -451,8 +451,17 @@ class TestFingerprint:
 
     def test_deployment_name_combines_name_and_fingerprint(self):
         cfg = self._cfg()
-        assert cfg.deployment_name() == f"{cfg.name}-{cfg.fingerprint()}"
+        assert cfg.deployment_name("gw") == f"{cfg.name}-{cfg.fingerprint('gw')}"
         assert len(cfg.fingerprint()) == 10
+
+    def test_fingerprint_distinct_per_gateway(self):
+        # Same config under different gateways must yield different app names so
+        # they don't collide in Serve's flat global namespace.
+        cfg = self._cfg()
+        assert cfg.fingerprint("gw-a") != cfg.fingerprint("gw-b")
+        assert cfg.deployment_name("gw-a") != cfg.deployment_name("gw-b")
+        # No gateway == the gateway-independent config hash.
+        assert cfg.fingerprint() == cfg.fingerprint("")
 
 
 class TestTransformersConfig:

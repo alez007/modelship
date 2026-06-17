@@ -18,26 +18,20 @@ The recommended way to develop Modelship is with VS Code Dev Containers. The con
 
 2. Open the repo in VS Code and run **Dev Containers: Reopen in Container** from the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
 
-3. Once inside the container, sync dependencies and start the Ray head node. By default, Ray will auto-detect the available CPUs and GPUs. You can restrict its usage by passing `--num-cpus` and `--num-gpus`.
+3. Once inside the container, sync dependencies:
 
    ```bash
    # Sync project deps (add --extra <plugin> for each plugin you need)
    uv sync --extra dev
-
-   # Start the Ray head node (auto-detects resources by default)
-   ray start --head \
-     --port=${RAY_REDIS_PORT} \
-     --dashboard-host=0.0.0.0 \
-     --disable-usage-stats
    ```
 
-4. Start the server:
+4. Start the server. It starts its own Ray head, auto-detecting CPUs/GPUs unless `RAY_HEAD_CPU_NUM` / `RAY_HEAD_GPU_NUM` are set:
 
    ```bash
    uv run mship_deploy.py
    ```
 
-> **Why the extra steps?** The Dev Container overrides the image's default `CMD` (which normally runs `start.sh` to sync deps and start Ray). Inside a Dev Container you need to run these steps manually.
+> **Why the extra steps?** The Dev Container overrides the image's default `CMD` (`uv run --no-sync mship_deploy.py`). Inside a Dev Container you sync deps and start it manually.
 
 The Dev Container automatically:
 - Builds the dev image from `Dockerfile` (target: `dev`)
@@ -52,12 +46,10 @@ The following environment variables are set in the dev image with sensible defau
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAY_REDIS_PORT` | `6379` | Ray GCS port |
-| `RAY_CLUSTER_ADDRESS` | `ray://0.0.0.0` | Ray cluster address |
 | `RAY_HEAD_CPU_NUM` | *(unset)* | **Optional override:** CPUs allocated to Ray head. If unset, Ray auto-detects. |
 | `RAY_HEAD_GPU_NUM` | *(unset)* | **Optional override:** GPUs allocated to Ray head. If unset, Ray auto-detects. |
 | `MSHIP_CACHE_DIR` | `/.cache` | Model cache directory |
-| `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to skip starting a Ray head node |
+| `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to connect to a Ray cluster you manage (must run on a cluster node) instead of starting one; implies deploy-and-exit |
 | `MSHIP_GATEWAY_REPLICAS` | `1` | Number of API gateway replicas. Raise to spread request-proxying load across processes under high concurrency. |
 | `MSHIP_GATEWAY_MAX_ONGOING` | `1024` | Per-replica Ray Serve concurrency cap for the gateway. The gateway holds a slot for the whole lifetime of each streamed response, so a low cap throttles before the engine does. |
 
@@ -107,7 +99,7 @@ docker run -it --rm --shm-size=8g \
   -p 8000:8000 modelship_dev_cpu
 ```
 
-The container's entrypoint (`start.sh`) automatically starts the Ray head node (auto-detecting resources) and drops into a shell. Then start the server:
+The dev image drops into a shell. Start the server — it starts its own Ray head, auto-detecting resources:
 
 ```bash
 uv run mship_deploy.py

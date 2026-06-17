@@ -37,11 +37,11 @@ When running tests on your own initiative, skip the slow integration suite: `uv 
 `mship_deploy.py` is the entry point (not a console script, not `python -m`). It:
 
 1. Reads `config/models.yaml` (gitignored — copy from `config/examples/`; `mship_deploy.py` errors out pointing there if missing).
-2. Connects to a **running** Ray cluster (`ray.init(address="auto")`). Outside Docker you must `ray start --head ...` first.
+2. Starts its **own** Ray head by default and tears it down on exit. With `--use-existing-ray-cluster` it instead connects to a cluster you manage via `ray.init(address="auto")` and deploys-and-exits without teardown — the driver must run **on** a cluster node (it can't attach from off-cluster; k8s does this via a KubeRay RayJob).
 3. Deploys models **additively** by default (each gets a random suffix like `qwen-a3f9k`). Use `--redeploy` to tear everything down first.
 4. Starts a FastAPI Ray Serve app named `modelship api` on port 8000. Override via `--gateway-name` (multiple gateways can coexist on one cluster).
 
-Docker's `scripts/start.sh` starts Ray (auto-detecting CPUs/GPUs unless `RAY_HEAD_CPU_NUM`/`RAY_HEAD_GPU_NUM` set) and runs `uv run --no-sync mship_deploy.py` against the prebuilt venv (extras chosen by `--build-arg MSHIP_VARIANT=gpu|cpu`). Plugin wheels in `MSHIP_PLUGIN_WHEEL_DIR` ship to Ray workers per-deployment via `runtime_env`, resolved from `models.yaml`. The Dev Container overrides this — inside it you must `uv sync`, `ray start`, and run `mship_deploy.py` manually.
+Docker's `CMD` is `uv run --no-sync mship_deploy.py` (auto-detecting CPUs/GPUs unless `RAY_HEAD_CPU_NUM`/`RAY_HEAD_GPU_NUM` set), against the prebuilt venv (extras chosen by `--build-arg MSHIP_VARIANT=gpu|cpu`). Plugin wheels in `MSHIP_PLUGIN_WHEEL_DIR` ship to Ray workers per-deployment via `runtime_env`, resolved from `models.yaml`. The Dev Container overrides this — inside it you must `uv sync` and run `mship_deploy.py` manually.
 
 ## Architecture map
 
@@ -66,7 +66,7 @@ Under `tests/`, `pytest-asyncio` for async. Tests **mock out Ray Serve** — the
 ## Sharp edges
 
 - `vllm==0.20.1` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor.
-- Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables.
+- Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables. When `mship_deploy` starts its own head (no `--use-existing-ray-cluster`), `connect_ray` pins that port via `ray.init(_metrics_export_port=…)` — a **private** Ray kwarg (accepted through `**kwargs`). A `TestConnectRay` test guards it so a Ray bump that drops it fails loudly.
 - `TRACE` is a custom log level below `DEBUG`; it logs full request/response payloads.
 - Docker CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a `:latest-cpu` tag suffix.
 

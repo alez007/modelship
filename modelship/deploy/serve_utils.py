@@ -47,19 +47,43 @@ def delete_apps_quietly(app_names) -> None:
             logger.exception("Failed to delete deployment: %s", name)
 
 
-def remove_apps(gateway_handle, app_names: list[str]) -> None:
-    """Unregister the given deployment apps from the gateway (so new requests
-    stop routing) and then delete them from Ray Serve. `serve.delete` drains
-    in-flight requests before tearing the deployment down. The deploy
-    coordinator is intentionally not involved — it gates admission, not
-    teardown; freed resources show up on the next try_reserve."""
+def remove_apps(gateway_handle, app_names: list[str], coordinator=None, gateway_name: str | None = None) -> None:
+    """Unregister the given deployment apps from the gateway (so new requests stop
+    routing), drop them from the coordinator's ownership registry, then delete
+    them from Ray Serve (`serve.delete` drains in-flight requests first)."""
     if not app_names:
         return
     try:
         gateway_handle.remove_deployments.remote(app_names).result()
     except Exception:
         logger.exception("Failed to unregister deployments from gateway: %s", app_names)
+    if coordinator is not None and gateway_name is not None:
+        try:
+            ray.get([coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
+        except Exception:
+            logger.exception("Failed to drop deployments from registry: %s", app_names)
     delete_apps_quietly(app_names)
+
+
+def _own_cluster_init_kwargs() -> dict[str, object]:
+    """ray.init kwargs to start our own head, mirroring the flags start_ray.sh
+    used to pass. Resources auto-detect when RAY_HEAD_* are unset."""
+    kwargs: dict[str, object] = {}
+    if os.environ.get("MSHIP_RAY_DASHBOARD", "false").lower() == "true":
+        kwargs["include_dashboard"] = True
+        kwargs["dashboard_host"] = "0.0.0.0"
+    else:
+        kwargs["include_dashboard"] = False
+    if cpus := os.environ.get("RAY_HEAD_CPU_NUM"):
+        kwargs["num_cpus"] = int(cpus)
+    if gpus := os.environ.get("RAY_HEAD_GPU_NUM"):
+        kwargs["num_gpus"] = int(gpus)
+    if os.environ.get("MSHIP_METRICS", "true").lower() == "true":
+        # _metrics_export_port is a private ray.init kwarg (accepted via **kwargs)
+        # that pins Ray's metrics agent — and thus all serve_*/vllm:*/modelship
+        # Prometheus metrics — to a stable port. Guarded by a connect_ray test.
+        kwargs["_metrics_export_port"] = int(os.environ.get("RAY_METRICS_EXPORT_PORT", "8079"))
+    return kwargs
 
 
 def connect_ray(lib_level: int) -> None:
@@ -67,13 +91,17 @@ def connect_ray(lib_level: int) -> None:
     os.environ.setdefault("RAY_GCS_RPC_TIMEOUT_S", "30")
 
     if use_existing_cluster:
-        ray_cluster_address = os.environ["RAY_CLUSTER_ADDRESS"]
-        ray_redis_port = os.environ["RAY_REDIS_PORT"]
-        address = f"{ray_cluster_address}:{ray_redis_port}"
+        # We don't own the cluster: attach to the running one. The driver must run
+        # ON a cluster node (Docker co-located / k8s RayJob / bare-metal node) —
+        # "auto" finds the local raylet + GCS. A driver cannot attach via a remote
+        # GCS address from off-cluster.
+        ray.init(address="auto", ignore_reinit_error=True, logging_level=lib_level)
     else:
-        address = "auto"
-
-    ray.init(address=address, ignore_reinit_error=True, logging_level=lib_level)
+        # We own the cluster: start a local head sized from RAY_HEAD_* (what
+        # start_ray.sh used to do). mship_deploy stays alive as the operator and
+        # tears it down on exit (owns_cluster in mship_deploy).
+        os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
+        ray.init(ignore_reinit_error=True, logging_level=lib_level, **_own_cluster_init_kwargs())
     # ray.init re-sets ray.* loggers, so re-pin them after init.
     logging.getLogger("ray").setLevel(lib_level)
     logging.getLogger("ray._private.worker").setLevel(lib_level)
@@ -116,7 +144,7 @@ def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> Non
             max_ongoing_requests=gateway_max_ongoing,
             ray_actor_options={"num_cpus": 0},
             logging_config=serve_logging_config,
-        ).bind(),
+        ).bind(gateway_name),
         name=gateway_name,
         route_prefix="/",
     )

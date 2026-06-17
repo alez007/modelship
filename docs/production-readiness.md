@@ -14,7 +14,7 @@ Future development priorities for making Modelship production-ready, organized b
 
 ### Health & Readiness
 
-- [x] **Detailed readiness probe** — `/status` returns 200 only when every expected model is registered with the gateway; 503 with loaded/pending lists while loading. `/health` stays as a cheap liveness endpoint. Per-model load times and total time-to-ready are exposed via `/status` for observability.
+- [x] **Detailed readiness probe** — `/readyz` returns 200 only when every expected model is registered with the gateway; 503 with loaded/pending lists while loading. `/health` stays as a cheap liveness endpoint. Per-model load times and total time-to-ready are exposed via `/readyz` for observability.
 - [ ] **Model-specific health checks** — per-model liveness status (vLLM engine, Ray actor state)
 - [ ] **GPU memory checks** — detect and report memory pressure before OOM
 
@@ -35,7 +35,7 @@ Future development priorities for making Modelship production-ready, organized b
 - [ ] **Kubernetes manifests** — Deployment, Service, ConfigMap, PVC, Ingress with proper resource requests/limits, GPU scheduling, node affinity, tolerations
 - [ ] **Helm chart** — parameterized deployment for different environments
 - [ ] **Docker Compose** — for simpler non-K8s deployments
-- [ ] **Liveness/readiness probes in container spec** — wire `/health` (liveness) and `/status` (readiness) into K8s probes
+- [ ] **Liveness/readiness probes in container spec** — wire `/health` (liveness) and `/readyz` (readiness) into K8s probes
 
 ### Alerting & Observability
 

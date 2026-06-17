@@ -9,8 +9,6 @@ import os
 # precedence over env vars; downstream code (Ray init, logging, gateway start)
 # reads exclusively from os.environ so a single source of truth is preserved.
 _STRING_ARG_TO_ENV: dict[str, str] = {
-    "ray_cluster_address": "RAY_CLUSTER_ADDRESS",
-    "ray_redis_port": "RAY_REDIS_PORT",
     "cache_dir": "MSHIP_CACHE_DIR",
     "log_format": "MSHIP_LOG_FORMAT",
     "log_target": "MSHIP_LOG_TARGET",
@@ -23,8 +21,6 @@ _STRING_ARG_TO_ENV: dict[str, str] = {
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Modelship — serve LLMs with Ray Serve")
-    parser.add_argument("--ray-cluster-address", help="Ray cluster address (env: RAY_CLUSTER_ADDRESS)")
-    parser.add_argument("--ray-redis-port", help="Ray Redis port (env: RAY_REDIS_PORT)")
     parser.add_argument("--config", help="Path to models.yaml config file (default: config/models.yaml)")
     parser.add_argument(
         "--model-stack",
@@ -77,6 +73,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Diff models.yaml against the cluster: add new models, remove dropped ones, "
             "replace those whose config changed (matched by name + fingerprint). "
+            "With no --config, reconciles the live cluster to this gateway's persisted "
+            "effective config only (self-heal after cluster loss). "
             "Mutually exclusive with --redeploy."
         ),
     )

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import yaml
 from pydantic_yaml import parse_yaml_raw_as
 
 from modelship.deploy.actor_options import resolve_plugin_wheel
@@ -101,6 +102,24 @@ def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) ->
 def load_yaml_config(arg_path: str | None) -> ModelshipConfig:
     with open(resolve_config_path(arg_path)) as f:
         return parse_yaml_raw_as(ModelshipConfig, f)
+
+
+def load_raw_models(arg_path: str | None) -> list[dict]:
+    """Read the user's models.yaml as raw, pre-validation dicts.
+
+    The effective-config store keeps raw dicts (not validated configs, which don't
+    round-trip through num_gpus/tp normalization), so the deploy path merges at the
+    raw-dict level and validates only the merged result. Shares resolve_config_path
+    with load_yaml_config so MSHIP_MODEL_STACK generation runs at most once per
+    deploy (callers should use one or the other, not both)."""
+    with open(resolve_config_path(arg_path)) as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError("models.yaml: top-level document must be a mapping with a 'models' key.")
+    models = data.get("models", [])
+    if not isinstance(models, list):
+        raise ValueError("models.yaml: 'models' must be a list.")
+    return models
 
 
 def resolve_all_plugin_wheels(yml_conf: ModelshipConfig) -> dict[str, Path]:

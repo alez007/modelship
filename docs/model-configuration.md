@@ -11,9 +11,7 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--config` | — | `config/models.yaml` | Path to models config file |
 | `--model-stack` | `MSHIP_MODEL_STACK` | — | Auto-generate a config from a [profile](#profiles-mship_model_stack) (`chat`/`assistant`/`studio`/`everything`) sized to detected hardware |
 | `--gateway-name` | `MSHIP_GATEWAY_NAME` | `modelship api` | Name for the API gateway app |
-| `--ray-cluster-address` | `RAY_CLUSTER_ADDRESS` | — | Ray cluster address |
-| `--ray-redis-port` | `RAY_REDIS_PORT` | — | Ray Redis port |
-| `--use-existing-ray-cluster` | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Connect to an existing Ray cluster |
+| `--use-existing-ray-cluster` | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Connect to a Ray cluster you manage (must run on a cluster node) instead of starting one. Implies deploy-and-exit (no teardown) |
 | `--redeploy` | — | `false` | Tear down all existing deployments before deploying |
 | `--cache-dir` | `MSHIP_CACHE_DIR` | `/.cache` | Base cache directory |
 | — | `MSHIP_LOG_LEVEL` | `INFO` | Log level (env-var-only: must be set before `import ray` so library loggers latch the right level) |
@@ -505,7 +503,6 @@ In this example, requests to model `kokoro` are distributed across three backend
 | `MSHIP_LOG_TARGET` | Log target: `console` or syslog URI (e.g. `syslog://host:514`, `syslog+tcp://host:514`) | `console` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint for log export (e.g. `http://collector:4317`). Requires `uv sync --extra otel`. | — |
 | `CUDA_DEVICE_ORDER` | GPU enumeration order; set to `PCI_BUS_ID` for deterministic ordering in multi-GPU systems | `PCI_BUS_ID` |
-| `RAY_REDIS_PORT` | Ray GCS server port | `6379` |
 | `RAY_DASHBOARD_PORT` | Ray dashboard port | `8265` |
 | `RAY_HEAD_CPU_NUM` | Optional override: CPUs allocated to Ray head | — |
 | `RAY_HEAD_GPU_NUM` | Optional override: GPUs allocated to Ray head | — |

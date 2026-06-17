@@ -1,0 +1,137 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ include "modelship.fullname" . }}
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+spec:
+  rayVersion: {{ .Values.rayVersion | quote }}
+  # ---- Head: CPU-only coordination (GCS, dashboard, Serve proxy). ----
+  headGroupSpec:
+    rayStartParams:
+      {{- toYaml .Values.head.rayStartParams | nindent 6 }}
+    template:
+      metadata:
+        labels:
+          {{- include "modelship.selectorLabels" . | nindent 10 }}
+        {{- with .Values.head.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        securityContext:
+          {{- toYaml .Values.podSecurityContext | nindent 10 }}
+        {{- with .Values.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        # KubeRay treats containers[0] as the Ray container (injects `ray start`).
+        containers:
+          - name: ray-head
+            image: {{ include "modelship.image" . }}
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            # KubeRay manages gcs/client internally, but the RayJob controller
+            # reads the dashboard port from this named `dashboard` containerPort to
+            # build the job-submission URL — so it MUST be declared (8265 = Ray's
+            # default; change it together with rayStartParams.dashboard-port).
+            ports:
+              - { name: dashboard, containerPort: 8265 }
+              - { name: serve, containerPort: {{ .Values.gateway.port }} }
+              - { name: metrics, containerPort: {{ .Values.metrics.port }} }
+            envFrom:
+              {{- include "modelship.envFrom" . | nindent 14 }}
+            resources:
+              {{- toYaml .Values.head.resources | nindent 14 }}
+            volumeMounts:
+              # models.yaml for the RayJob deploy entrypoint, which runs on the head.
+              - name: models-config
+                mountPath: /etc/modelship
+                readOnly: true
+              {{- include "modelship.volumeMounts" . | nindent 14 }}
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "ray stop"]
+        volumes:
+          - name: models-config
+            configMap:
+              name: {{ include "modelship.configMapName" . }}
+          {{- include "modelship.volumes" . | nindent 10 }}
+        {{- with .Values.head.nodeSelector }}
+        nodeSelector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.head.tolerations }}
+        tolerations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.head.affinity }}
+        affinity:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+  # ---- Workers: one group per entry in .Values.workerGroups. ----
+  workerGroupSpecs:
+    {{- range .Values.workerGroups }}
+    - groupName: {{ .name }}
+      replicas: {{ .replicas }}
+      minReplicas: {{ .minReplicas }}
+      maxReplicas: {{ .maxReplicas }}
+      rayStartParams:
+        {{- toYaml .rayStartParams | nindent 8 }}
+      template:
+        metadata:
+          labels:
+            {{- include "modelship.selectorLabels" $ | nindent 12 }}
+          {{- with .annotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          {{- with .runtimeClassName }}
+          # Optional per-group RuntimeClass (e.g. "nvidia" on k3s/containerd, so the
+          # NVIDIA container runtime injects the GPU). Omit on CPU groups / clusters
+          # where the GPU runtime is already the default.
+          runtimeClassName: {{ . }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Per-group image override: a worker group may set its own `image`
+          # (repository/tag/pullPolicy); any field left unset falls back to the
+          # cluster-wide `image`. Lets a CPU image run cluster-wide while the GPU
+          # group pulls the full GPU image (both built at the same Ray version).
+          {{- $img := .image | default dict }}
+          containers:
+            - name: ray-worker
+              image: {{ printf "%s:%s" ($img.repository | default $.Values.image.repository) ($img.tag | default $.Values.image.tag) }}
+              imagePullPolicy: {{ $img.pullPolicy | default $.Values.image.pullPolicy }}
+              ports:
+                - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
+              envFrom:
+                {{- include "modelship.envFrom" $ | nindent 16 }}
+              resources:
+                {{- toYaml .resources | nindent 16 }}
+              volumeMounts:
+                {{- include "modelship.volumeMounts" $ | nindent 16 }}
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          volumes:
+            {{- include "modelship.volumes" $ | nindent 12 }}
+          {{- with .nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+    {{- end }}

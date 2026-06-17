@@ -1,0 +1,215 @@
+# Default values for the modelship chart.
+# Topology: a KubeRay RayCluster (head + worker groups) plus a RayJob that submits
+# mship_deploy.py to run on the head and deploy the models in models.yaml.
+
+# -- Container image. Used by every Ray pod AND the RayJob submitter (they must
+# share the exact image so the Ray/Python versions match across the cluster).
+image:
+  repository: ghcr.io/alez007/modelship
+  # GPU image. For a CPU-only cluster use the "-cpu" suffixed tag, e.g. "0.3.0-cpu".
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+
+# Secrets needed to pull the image (GHCR is public for this project, so usually empty).
+imagePullSecrets: []
+
+# Ray version baked into the image above. KubeRay compares this against the
+# cluster and refuses mismatches — keep it in lockstep with the image.
+rayVersion: "2.54.1"
+
+# -- Optional bootstrap of the KubeRay operator + CRDs as a subchart.
+# OFF by default: cluster-scoped, install-once, needs cluster-admin. Turn on for
+# greenfield/single-tenant clusters; leave off where an admin manages KubeRay.
+kuberay-operator:
+  enabled: false
+
+# -- Gateway: the OpenAI-compatible HTTP surface (Ray Serve proxy).
+gateway:
+  name: "modelship api"
+  port: 8000
+
+# -- Metrics exporter (Ray + modelship Prometheus metrics).
+metrics:
+  enabled: true
+  port: 8079
+
+# -- models.yaml. Either render the inline `config` into a ConfigMap, or point
+# at an existing ConfigMap (key: models.yaml) you manage yourself.
+models:
+  existingConfigMap: ""
+  # Inline models.yaml (ignored when existingConfigMap is set). Replace with your
+  # real model set; see config/examples/ in the repo.
+  config: |
+    models: []
+
+# -- Secrets: Hugging Face token (gated/private weights) and gateway API keys.
+# Provide inline (rendered into a Secret) or reference an existing Secret with
+# keys: HF_TOKEN, MSHIP_API_KEYS.
+secrets:
+  existingSecret: ""
+  huggingfaceToken: ""
+  # Comma-separated keys; when non-empty the gateway requires Authorization.
+  apiKeys: ""
+
+# -- Shared model-weight cache. vLLM/transformers/diffusers download weights here.
+# Multi-node clusters REQUIRE ReadWriteMany so every worker shares one copy;
+# a single-node cluster can use ReadWriteOnce.
+cache:
+  enabled: true
+  # Reuse an existing PVC instead of templating one.
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 100Gi
+  mountPath: /.cache
+
+# -- /dev/shm. vLLM/NCCL use POSIX shared memory; the default 64Mi tmpfs is far
+# too small and crashes engine startup. Sized as an emptyDir(memory) per pod.
+shm:
+  sizeLimit: 8Gi
+
+# -- Pod security. The image runs unprivileged as UID/GID 1000; fsGroup lets the
+# mounted cache PVC be group-writable by that user.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# -- Ray head: CPU-only coordination node. No models are scheduled here
+# (num-gpus=0) so a GPU is never wasted on the GCS/dashboard/proxy.
+head:
+  rayStartParams:
+    num-gpus: "0"
+    dashboard-host: 0.0.0.0
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 8Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  annotations: {}
+
+
+workerGroups: []
+  # - name: gpu
+  #   # Optional per-group image override. Maps to KubeRay's standard per-group pod
+  #   # template (workerGroupSpecs[].template.containers[0].image) — leave the
+  #   # top-level `image` on the lean CPU image and override only the GPU group with
+  #   # the full GPU image, so CPU nodes don't pull CUDA they never use. Any field
+  #   # omitted here falls back to the top-level `image`. Both images must be the
+  #   # same modelship release (same Ray version) or KubeRay rejects the cluster.
+  #   image:
+  #     repository: ghcr.io/alez007/modelship
+  #     tag: "0.3.0"            # GPU image; top-level image.tag might be "0.3.0-cpu"
+  #   # On k3s/containerd the GPU group usually needs the NVIDIA RuntimeClass so the
+  #   # GPU is injected. Omit where the GPU runtime is already the cluster default
+  #   # (e.g. the NVIDIA GPU Operator). CPU groups never set this.
+  #   runtimeClassName: nvidia
+  #   replicas: 1
+  #   minReplicas: 1
+  #   maxReplicas: 1
+  #   rayStartParams: {}
+  #   resources:
+  #     requests:
+  #       cpu: "4"
+  #       memory: 16Gi
+  #       nvidia.com/gpu: "1"
+  #     limits:
+  #       cpu: "4"
+  #       memory: 32Gi
+  #       nvidia.com/gpu: "1"
+  #   nodeSelector: {}
+  #   tolerations:
+  #     - key: nvidia.com/gpu
+  #       operator: Exists
+  #       effect: NoSchedule
+  #   affinity: {}
+  #   annotations: {}
+  # - name: cpu
+  #   replicas: 1
+  #   minReplicas: 1
+  #   maxReplicas: 1
+  #   rayStartParams:
+  #     num-gpus: "0"
+  #   resources:
+  #     requests:
+  #       cpu: "4"
+  #       memory: 8Gi
+  #     limits:
+  #       cpu: "6"
+  #       memory: 16Gi
+  #   nodeSelector: {}
+  #   tolerations: []
+  #   affinity: {}
+  #   annotations: {}
+
+# -- The deploy RayJob: submits mship_deploy.py to run on the head
+# (--use-existing-ray-cluster), which deploys then exits. Re-run (helm upgrade)
+# to apply models.yaml changes.
+deploy:
+  # Diff models.yaml against what this gateway already owns and remove the
+  # difference (vs. additive default). Maps to mship_deploy.py --reconcile.
+  reconcile: false
+  # How to replace a model whose config changed (only takes effect during a
+  # replace). blue_green: new alongside old, then drop old (no request loss,
+  # peak resource = old+new). stop_start: drop old first (brief gap, no overlap).
+  replaceStrategy: blue_green
+  # Extra raw args appended to mship_deploy.py (e.g. ["--gateway-name", "edge"]).
+  extraArgs: []
+  # Clean up the finished RayJob automatically after N seconds (null = keep).
+  ttlSecondsAfterFinished: null
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+  # -- Self-heal CronJob. Periodically submits `mship_deploy --reconcile` (no
+  # --config) to the head's Ray Job API; the driver reads this gateway's durable
+  # effective config (on the cache PVC) and reconciles the live cluster back to it.
+  # Restores the full model set after the cluster is recreated empty (the one-shot
+  # deploy RayJob has long finished by then); a no-op when already healthy.
+  reassert:
+    enabled: true
+    # How often to re-assert. This guards a rare event (whole cluster back up
+    # empty), so the interval mainly bounds recovery latency — it needn't be tight.
+    # Every tick spawns a small client pod and a head-side no-op reconcile.
+    schedule: "*/15 * * * *"
+    # Submit-client image. Empty = rayproject/ray:<rayVersion> — a slim upstream
+    # Ray image (no GPU/ML libs); this pod only runs `ray job submit`, the heavy
+    # deploy code runs on the head. Override only to pin a mirror/digest; it MUST
+    # match the cluster's Ray version.
+    image: ""
+    # Tolerance for a missed start (e.g. controller downtime) before skipping a tick.
+    startingDeadlineSeconds: 120
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+    resources:
+      requests:
+        cpu: "250m"
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
+# -- Gateway Service. ClusterIP by default; switch to LoadBalancer/NodePort to
+# expose the OpenAI API outside the cluster. Targets the Ray head, where the
+# Serve HTTP proxy listens.
+service:
+  type: ClusterIP
+  annotations: {}
+
+# -- Prometheus Operator PodMonitor for the metrics port (optional). A PodMonitor
+# (not ServiceMonitor) because every Ray pod — head and workers — exports on the
+# metrics port, so scraping is per-pod by label rather than via one Service.
+podMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

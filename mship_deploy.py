@@ -33,11 +33,20 @@ from ray import serve  # noqa: E402
 from ray.serve.schema import LoggingConfig  # noqa: E402
 
 from modelship.deploy.config import (  # noqa: E402
-    load_yaml_config,
+    load_raw_models,
     resolve_all_model_sources,
     resolve_all_plugin_wheels,
     resolve_all_reasoning_parsers,
     resolve_all_tool_parsers,
+)
+from modelship.deploy.effective_config import (  # noqa: E402
+    deployment_names,
+    evict_failed,
+    merge,
+    read_effective,
+    resolve_mode,
+    to_config,
+    write_effective,
 )
 from modelship.deploy.serve_utils import (  # noqa: E402
     connect_ray,
@@ -53,6 +62,7 @@ from modelship.deploy.serve_utils import (  # noqa: E402
 from modelship.deploy.strategy import DeployContext, compute_deploy_plan, run_deploy_loop  # noqa: E402
 from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator  # noqa: E402
 from modelship.logging import configure_logging, get_lib_log_config, get_logger  # noqa: E402
+from modelship.state import get_state_store  # noqa: E402
 from modelship.utils.cli import apply_args_to_env, parse_args  # noqa: E402
 
 logger = get_logger("startup")
@@ -65,6 +75,12 @@ def main(argv: list[str] | None = None) -> None:
 
     configure_logging()
     gateway_name = os.environ.get("MSHIP_GATEWAY_NAME", _DEFAULT_GATEWAY_NAME)
+    # apply_args_to_env (above) has folded --use-existing-ray-cluster into this env
+    # var, the same source connect_ray uses. With an external cluster (KubeRay)
+    # this process is a one-shot deployer: exit after deploying, never tear down a
+    # cluster it doesn't own. The gateway + deployments persist and the gateway
+    # self-heals its routing table from the coordinator registry.
+    owns_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() != "true"
     # Library log level (one step above app level). Used to silence Ray Serve's
     # system actors (controller/proxy/replica access logs) and Ray's driver
     # logger, which both ignore Python-level setLevel from the parent process.
@@ -85,12 +101,42 @@ def main(argv: list[str] | None = None) -> None:
     if fresh_install and not args.redeploy:
         logger.info("No existing gateway found — treating as fresh install.")
 
-    yml_conf = load_yaml_config(args.config)
-    logger.info("Init modelship app with config: %s", yml_conf)
+    # Fold the user's input into this gateway's durable effective config, then
+    # deploy by ALWAYS reconciling live -> effective. The mode only decides how the
+    # input merges (additive=union, reconcile/redeploy=replace); the deploy itself
+    # is always a reconcile — that's what makes self-heal just "re-run the deploy"
+    # (it reads the persisted effective set and reconciles onto an empty cluster).
+    mode = resolve_mode(reconcile=args.reconcile, redeploy=args.redeploy)
+    store = get_state_store()
+    effective_raw = read_effective(store, gateway_name)
+
+    # --reconcile with no --config is the self-heal path: there's no user input, so
+    # reconcile the live cluster to the persisted effective config as-is (restores
+    # the true model set after the cluster is recreated empty). Any other mode, or
+    # an explicit --config, loads the user input and folds it into effective per the
+    # merge verb (additive=union, reconcile/redeploy=replace).
+    if mode == "reconcile" and args.config is None:
+        desired_raw = effective_raw
+        logger.info("Self-heal: reconciling to persisted effective config (no --config given).")
+    else:
+        input_raw = load_raw_models(args.config)
+        desired_raw = merge(effective_raw, input_raw, gateway_name, mode)
+    yml_conf = to_config(desired_raw)
+    logger.info("Deploying effective config (%s mode, %d model(s)): %s", mode, len(desired_raw), yml_conf)
 
     plugin_wheels = resolve_all_plugin_wheels(yml_conf)
+
+    # The detached coordinator holds the cross-operator deploy lock and the durable
+    # ownership registry (used for the deploy lock + gateway-restart self-heal).
+    coordinator = get_or_create_coordinator()
+    # Scope reconcile-removal to deployments this gateway's effective set managed
+    # BEFORE this run, so a fresh/empty effective config (e.g. migration over
+    # pre-existing live models) removes nothing.
     plan = compute_deploy_plan(
-        yml_conf, existing_apps, gateway_name, fresh_install=fresh_install, reconcile=args.reconcile
+        yml_conf,
+        existing_apps,
+        deployment_names(effective_raw, gateway_name),
+        gateway_name,
     )
     apps_to_remove = list(plan.apps_to_remove)
 
@@ -101,7 +147,7 @@ def main(argv: list[str] | None = None) -> None:
     def _cleanup(sig, _frame) -> None:
         logger.info("Shutting down (signal %s), cleaning up deployments from this run...", sig)
         delete_apps_quietly(reversed(deployed_this_run))
-        if fresh_install:
+        if fresh_install and owns_cluster:
             shutdown_ray()
         sys.exit(0)
 
@@ -130,14 +176,12 @@ def main(argv: list[str] | None = None) -> None:
         # freed resources are available for the deploy loop. Used when the
         # cluster can't fit old + new at the same time.
         if args.replace_strategy == "stop_start":
-            remove_apps(gateway_handle, apps_to_remove)
+            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
             apps_to_remove = []
 
-        # Coordinator actor serialises deploys across operators on the same
-        # cluster; the probe is driver-owned so Ray force-releases the lock
-        # if this process dies ungracefully.
+        # The probe is driver-owned so Ray force-releases the coordinator lock if
+        # this process dies ungracefully.
         operator_id = make_operator_id()
-        coordinator = get_or_create_coordinator()
         probe = OperatorProbe.options(num_cpus=0).remote()
         logger.info("Operator id=%s; coordinator acquired.", operator_id)
 
@@ -146,6 +190,7 @@ def main(argv: list[str] | None = None) -> None:
             coordinator=coordinator,
             probe=probe,
             operator_id=operator_id,
+            gateway_name=gateway_name,
             gateway_handle=gateway_handle,
             serve_logging_config=serve_logging_config,
             deployed_this_run=deployed_this_run,
@@ -163,20 +208,29 @@ def main(argv: list[str] | None = None) -> None:
         # round-robins across both old and new handles for the same model,
         # so no requests are lost.
         if apps_to_remove:
-            remove_apps(gateway_handle, apps_to_remove)
+            remove_apps(gateway_handle, apps_to_remove, coordinator, gateway_name)
+
+        # Persist the achieved effective config (desired minus permanently-failed
+        # models) so a re-assert after cluster loss restores exactly this set and
+        # never retries a broken config. Written after the deploy settles so a
+        # crash mid-deploy keeps the last known-good effective config.
+        failed_deployment_names = {cfg.deployment_name(gateway_name) for cfg, _ in fatally_failed}
+        write_effective(store, gateway_name, evict_failed(desired_raw, gateway_name, failed_deployment_names))
 
         if fatally_failed:
             logger.error(
-                "%d model(s) failed to deploy and were skipped — fix config and restart:",
+                "%d model(s) failed to deploy and were evicted from the effective config — fix config and redeploy:",
                 len(fatally_failed),
             )
-            for name, reason in fatally_failed:
-                logger.error("  - %s: %s", name, reason)
+            for cfg, reason in fatally_failed:
+                logger.error("  - %s: %s", cfg.name, reason)
 
-        if fresh_install:
-            # Stay alive as the operator process. _cleanup gracefully deletes
-            # each deployment (letting actors run __del__ and clean up child
-            # processes like vllm EngineCore) before tearing down Ray.
+        if fresh_install and owns_cluster:
+            # Standalone (we own Ray): stay alive as the operator process.
+            # _cleanup gracefully deletes each deployment (letting actors run
+            # __del__ and clean up child processes like vllm EngineCore) before
+            # tearing down Ray. With an external cluster we instead exit here,
+            # leaving the gateway + deployments running under KubeRay.
             signal.pause()
 
     except BaseException as e:
@@ -184,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
             raise
         logger.exception("Startup failed, cleaning up deployments from this run...")
         delete_apps_quietly(reversed(deployed_this_run))
-        if fresh_install:
+        if fresh_install and owns_cluster:
             shutdown_ray()
         raise
 
