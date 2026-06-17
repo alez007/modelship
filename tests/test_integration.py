@@ -331,7 +331,21 @@ def mship_cluster(tmp_path_factory):
 
     log_file = open(log_path, "w")  # noqa: SIM115 — kept open for subprocess lifetime, closed in cleanup
     proc = subprocess.Popen(
-        ["uv", "run", "mship_deploy.py", "--config", str(empty_config), "--state-dir", str(state_dir)],
+        # 2 gateway replicas for the whole session so TestGatewayReplicaConsistency
+        # can verify the coordinator watch loop converges every replica (and all
+        # other tests get free multi-replica coverage). Gateway replicas are
+        # num_cpus=0, so this is cheap.
+        [
+            "uv",
+            "run",
+            "mship_deploy.py",
+            "--config",
+            str(empty_config),
+            "--state-dir",
+            str(state_dir),
+            "--gateway-replicas",
+            "2",
+        ],
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
@@ -2076,3 +2090,64 @@ class TestAutoscaling:
         # Load stopped: scale back in to min_replicas within the downscale window + slack.
         settled = _wait_for_replicas(self.MODEL, lambda n: n == 1, deadline_s=180)
         assert settled == 1, f"expected scale-in to min_replicas=1 after load, saw {settled}"
+
+
+def _model_in_all_samples(client: OpenAI, model: str, samples: int = 20) -> bool:
+    """True iff `model` appears in /v1/models on EVERY sampled request. With the
+    gateway load-balanced across replicas, a stale replica would omit it on some
+    requests — so 'present in all samples' means every replica has converged."""
+    return all(model in {m.id for m in client.models.list().data} for _ in range(samples))
+
+
+def _model_in_no_samples(client: OpenAI, model: str, samples: int = 20) -> bool:
+    return all(model not in {m.id for m in client.models.list().data} for _ in range(samples))
+
+
+def _poll(predicate, deadline_s: float) -> bool:
+    end = time.time() + deadline_s
+    while time.time() < end:
+        if predicate():
+            return True
+        time.sleep(1)
+    return False
+
+
+@pytest.mark.integration
+@pytest.mark.llama_cpp
+@pytest.mark.gateway_ha
+class TestGatewayReplicaConsistency:
+    """With 2 gateway replicas (the session starts --gateway-replicas 2), a deployed
+    model must become routable on BOTH replicas and a removed one must stop routing
+    on both — i.e. the coordinator watch loop reconciles every replica, not just the
+    one a direct push would have hit."""
+
+    def test_add_and_remove_propagate_to_all_replicas(self, client, model_deployer):
+        # Warm both replicas (spread requests so each starts its watch loop).
+        for _ in range(10):
+            client.models.list()
+
+        # Deploy: the model becomes routable on every replica.
+        model_deployer.deploy("chat-limited")
+        assert _poll(lambda: _model_in_all_samples(client, "chat-limited"), deadline_s=60), (
+            "deployed model did not become routable on all gateway replicas"
+        )
+        completion = client.chat.completions.create(
+            model="chat-limited", messages=[{"role": "user", "content": "hi"}], max_tokens=5
+        )
+        assert completion.choices[0].message.content is not None
+
+        # Reconcile to a different model — chat-limited is removed everywhere.
+        model_deployer.deploy("chat-llama-mship")
+        assert _poll(lambda: _model_in_no_samples(client, "chat-limited"), deadline_s=60), (
+            "removed model still routable on some gateway replica"
+        )
+
+        # Requests to the removed model now 404 on every replica — none route into
+        # the torn-down deployment (which would surface as a 5xx, not a 404).
+        import openai
+
+        for _ in range(20):
+            with pytest.raises(openai.NotFoundError):
+                client.chat.completions.create(
+                    model="chat-limited", messages=[{"role": "user", "content": "hi"}], max_tokens=5
+                )

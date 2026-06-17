@@ -82,7 +82,6 @@ class DeployContext:
     probe: Any
     operator_id: str
     gateway_name: str
-    gateway_handle: Any
     serve_logging_config: LoggingConfig
     deployed_this_run: dict[str, str]
 
@@ -129,12 +128,9 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
             route_prefix=None,
         )
         logger.info("Model ready: %s (deployment: %s)", config.name, deployment_name)
-        try:
-            ctx.gateway_handle.add_models.remote({deployment_name: config.name}).result()
-        except Exception:
-            logger.exception("Failed to register %s with gateway", deployment_name)
-        # Durable ownership record so the gateway can rebuild its routing table
-        # from the registry after a restart.
+        # Record ownership in the coordinator — the single source of truth. This
+        # bumps the gateway's generation, so every gateway replica's watch loop
+        # picks the new deployment up (the driver never pushes to replicas directly).
         try:
             ray.get(ctx.coordinator.register_deployment.remote(ctx.gateway_name, deployment_name, config.name))
         except Exception:

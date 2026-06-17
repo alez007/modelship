@@ -25,6 +25,7 @@ Design:
 """
 
 import asyncio
+import contextlib
 import time
 
 import ray
@@ -40,6 +41,11 @@ COORDINATOR_NAMESPACE = "modelship"
 _LIVENESS_POLL_INTERVAL_S = 5.0
 _LIVENESS_CALL_TIMEOUT_S = 3.0
 _LIVENESS_TIMEOUT_STRIKES = 3
+
+# How long a gateway replica's wait_for_change blocks before returning the
+# current generation unchanged. Bounds how long a missed wake / coordinator
+# restart can leave a replica un-reconciled (it re-pulls on every return).
+_WATCH_TIMEOUT_S = 30.0
 
 
 @ray.remote(num_cpus=0)
@@ -67,9 +73,17 @@ class ModelshipDeployCoordinator:
         self._watcher_task: asyncio.Task | None = None
         self._fatal_errors: dict[str, str] = {}
         # Durable ownership registry: gateway_name -> {deployment_name -> model_name}.
-        # The driver writes it on (un)deploy; a restarted gateway reads its own
-        # entry to rebuild its routing table without the driver being present.
+        # The driver writes it on (un)deploy; gateway replicas reconcile their
+        # routing tables from it (see get_routing / wait_for_change), so the driver
+        # never pushes to individual replicas.
         self._registry: dict[str, dict[str, str]] = {}
+        # Per-gateway change notification driving the gateway watch loop: a
+        # monotonic generation bumped on every routing/expected change, plus an
+        # asyncio.Event woken on each bump so a long-polling replica returns at
+        # once. _expected is the desired model set used for gateway readiness.
+        self._generation: dict[str, int] = {}
+        self._expected: dict[str, list[str]] = {}
+        self._change: dict[str, asyncio.Event] = {}
 
     def report_fatal_error(self, deployment_name: str, reason: str) -> None:
         self._fatal_errors[deployment_name] = reason
@@ -77,19 +91,58 @@ class ModelshipDeployCoordinator:
     def pop_fatal_error(self, deployment_name: str) -> str | None:
         return self._fatal_errors.pop(deployment_name, None)
 
-    def register_deployment(self, gateway_name: str, deployment_name: str, model_name: str) -> None:
-        self._registry.setdefault(gateway_name, {})[deployment_name] = model_name
+    # --- Routing registry + change notification (drives the gateway watch loop) ---
+    # These are async so every registry / generation / Event mutation runs on the
+    # actor's single event loop, serialised with wait_for_change and race-free.
 
-    def unregister_deployment(self, gateway_name: str, deployment_name: str) -> None:
+    def _bump(self, gateway_name: str) -> None:
+        """Advance the gateway's generation and wake any current waiters. The old
+        Event is set (releasing replicas blocked on it) then replaced with a fresh
+        unset Event for the next round."""
+        self._generation[gateway_name] = self._generation.get(gateway_name, 0) + 1
+        old = self._change.get(gateway_name)
+        if old is not None:
+            old.set()
+        self._change[gateway_name] = asyncio.Event()
+
+    async def register_deployment(self, gateway_name: str, deployment_name: str, model_name: str) -> None:
+        self._registry.setdefault(gateway_name, {})[deployment_name] = model_name
+        self._bump(gateway_name)
+
+    async def unregister_deployment(self, gateway_name: str, deployment_name: str) -> None:
         gw = self._registry.get(gateway_name)
         if gw is not None:
             gw.pop(deployment_name, None)
             if not gw:
                 del self._registry[gateway_name]
+        self._bump(gateway_name)
 
-    def get_deployments(self, gateway_name: str) -> dict[str, str]:
-        """`{deployment_name -> model_name}` recorded for this gateway."""
-        return dict(self._registry.get(gateway_name, {}))
+    async def set_expected(self, gateway_name: str, names: list[str]) -> None:
+        """Record the desired model set for readiness; bumps so replicas adopt it."""
+        self._expected[gateway_name] = list(names)
+        self._bump(gateway_name)
+
+    async def get_routing(self, gateway_name: str) -> dict:
+        """Snapshot a replica pulls after a change: the app->model map, the
+        expected-model set, and the current generation."""
+        return {
+            "models": dict(self._registry.get(gateway_name, {})),
+            "expected": list(self._expected.get(gateway_name, [])),
+            "generation": self._generation.get(gateway_name, 0),
+        }
+
+    async def wait_for_change(self, gateway_name: str, since_gen: int, timeout: float = _WATCH_TIMEOUT_S) -> int:
+        """Long-poll for a routing change. Returns the current generation at once
+        if it differs from since_gen (covers both a forward bump and a coordinator
+        restart that reset it to 0); otherwise waits for the next bump up to
+        timeout, then returns the current generation regardless."""
+        current = self._generation.get(gateway_name, 0)
+        if current != since_gen:
+            return current
+        event = self._change.setdefault(gateway_name, asyncio.Event())
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout)
+        return self._generation.get(gateway_name, 0)
 
     async def try_reserve(
         self,

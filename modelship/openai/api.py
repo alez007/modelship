@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from http import HTTPStatus
@@ -60,6 +61,8 @@ from modelship.utils import random_uuid
 logger = get_logger("api")
 
 _DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
+# Backoff before retrying the gateway watch loop after a transient coordinator error.
+_WATCH_RETRY_S = 5.0
 
 
 class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -159,27 +162,25 @@ class ModelshipAPI:
         self.expected_models: list[str] = []
         self._started_at = time.time()
         self._gateway_name = gateway_name
-        # Routing state is in-memory, normally seeded by the deploy driver. After a
-        # replica restart the driver isn't around, so rebuild from the coordinator
-        # registry on first use rather than serving 503 forever. One-shot.
-        self._reconstructed = False
-        # Timing state — set_expected_models stamps a start, each add_models
-        # arrival records the gap since the previous arrival as that model's
-        # load duration (mship_deploy.py deploys sequentially so the gap ≈ load time).
+        # Routing state is reconciled from the coordinator, the cluster-wide source
+        # of truth — not pushed by the driver (a push hits only one replica). Each
+        # replica runs a watch loop (started lazily on first request) that pulls a
+        # snapshot whenever the coordinator's per-gateway generation advances, so
+        # every replica — including restarted / autoscaled ones — converges.
+        self._gen = 0  # last coordinator generation this replica reconciled to
+        self._watch_task: asyncio.Task | None = None
+        self._coordinator = None  # cached coordinator handle
+        # Timing state — the first sync with a non-empty expected set stamps a start;
+        # each model's first appearance records the gap since the previous arrival as
+        # an approximate load duration.
         self._expected_set_at: float | None = None
         self._last_model_at: float | None = None
         self._all_ready_at: float | None = None
         self._model_load_times: dict[str, float] = {}
 
-    async def set_expected_models(self, names: list[str]):
-        self.expected_models = list(names)
-        now = time.time()
-        self._expected_set_at = now
-        self._last_model_at = now
-
     def _register_deployment(self, app_name: str, model_name: str) -> bool:
         """Wire one deployment handle into the routing table. Returns True iff the
-        model was newly added. Sync so both add_models and reconstruction reuse it."""
+        model was newly added. Sync so the reconcile path applies atomically."""
         try:
             handle = serve.get_app_handle(app_name)
         except Exception:
@@ -195,76 +196,19 @@ class ModelshipAPI:
         logger.info("Registered deployment: %s (model: %s)", app_name, model_name)
         return newly_added
 
-    def _ensure_reconstructed(self) -> None:
-        """Rebuild routing state from the registry once, on first use after a
-        restart. Sync and await-free so it runs atomically on the event loop;
-        retried later if the registry can't be read this time."""
-        if self._reconstructed:
-            return
-        if self._reconstruct_from_registry():
-            self._reconstructed = True
-
-    def _reconstruct_from_registry(self) -> bool:
-        """Re-own this gateway's deployments from the coordinator registry after a
-        restart wiped our in-memory state. Returns False (retry) only if the
-        registry couldn't be read."""
-        if self.models:
-            return True  # driver already seeded us this run
-        try:
-            coordinator = deploy_coordinator.get_or_create_coordinator()
-            records: dict[str, str] = ray.get(coordinator.get_deployments.remote(self._gateway_name))
-        except Exception:
-            logger.debug("gateway: reconstruct deferred; registry unavailable", exc_info=True)
-            return False
-        if not records:
-            return True  # nothing recorded for us; driver seeds as models come up
-        for app_name, model_name in records.items():
-            self._register_deployment(app_name, model_name)
-        # Adopt the recovered set as the readiness baseline so a restart with no
-        # driver re-run still reports ready; a later driver call overrides it.
-        if not self.expected_models:
-            self.expected_models = sorted(self.models)
-        MODELS_LOADED.set(len(self.models))
-        logger.info("gateway: reconstructed %d model(s) from registry after restart", len(self.models))
-        return True
-
-    async def add_models(self, deployments: dict[str, str]):
-        """Register new model deployments with the gateway.
-
-        Args:
-            deployments: mapping of deployment_app_name -> model_name.
-        """
-        for app_name, model_name in deployments.items():
-            if not self._register_deployment(app_name, model_name):
-                continue  # handle lookup failed, or an extra replica of a known model
-            now = time.time()
-            base = self._last_model_at or self._started_at
-            self._model_load_times[model_name] = round(now - base, 2)
-            self._last_model_at = now
-
-        if self.expected_models and self._all_ready_at is None and all(m in self.models for m in self.expected_models):
-            self._all_ready_at = time.time()
-
-        MODELS_LOADED.set(len(self.models))
-
-    async def remove_deployments(self, app_names: list[str]) -> list[str]:
+    def _drop_apps(self, app_names: list[str]) -> list[str]:
         """Drop the given deployment app names from the routing tables. The owning
-        model is found by reverse lookup over the routing table (not parsed out of
-        the app name). If a model has no remaining deployments after removal, its
-        model entry, card, round-robin counter, expected-models entry, and
-        load-time entry are also dropped. Returns the names of fully-removed models.
-        """
+        model is found by reverse lookup. When a model loses its last deployment its
+        model entry, card, round-robin counter, expected-models entry, and load-time
+        entry are also dropped. Returns the names of fully-removed models."""
         removed_models: list[str] = []
         for app_name in app_names:
             model_name = next((m for m, handles in self.models.items() if app_name in handles), None)
             if model_name is None:
-                logger.warning("remove_deployments: no deployment named %s", app_name)
                 continue
-
             handles = self.models[model_name]
             del handles[app_name]
             logger.info("Unregistered deployment: %s (model: %s)", app_name, model_name)
-
             if not handles:
                 del self.models[model_name]
                 self._round_robin.pop(model_name, None)
@@ -272,9 +216,93 @@ class ModelshipAPI:
                 self._model_load_times.pop(model_name, None)
                 self.expected_models = [m for m in self.expected_models if m != model_name]
                 removed_models.append(model_name)
-
-        MODELS_LOADED.set(len(self.models))
         return removed_models
+
+    def _apply_routing(self, desired: dict[str, str], *, allow_removals: bool) -> None:
+        """Reconcile the routing table to `desired` ({app_name: model_name}): add
+        handles for newly-present apps and, when `allow_removals`, drop apps no
+        longer present. Sync / await-free → atomic w.r.t. in-flight requests."""
+        routed = {app for handles in self.models.values() for app in handles}
+
+        for app_name, model_name in desired.items():
+            if app_name in routed or not self._register_deployment(app_name, model_name):
+                continue
+            base = self._last_model_at or self._started_at
+            self._model_load_times[model_name] = round(time.time() - base, 2)
+            self._last_model_at = time.time()
+
+        if allow_removals:
+            stale = [app for app in routed if app not in desired]
+            if stale:
+                self._drop_apps(stale)
+
+    def _apply_snapshot(self, snapshot: dict) -> None:
+        """Apply a coordinator routing snapshot to this replica (atomic mutation).
+
+        Removals are honored only when the generation advances. A *lower*
+        generation means the coordinator lost state (restart) — we still adopt its
+        additions but never let it blank live routing; a genuine change always
+        advances the generation, so real removals propagate immediately."""
+        new_gen = snapshot.get("generation", self._gen)
+        self._apply_routing(snapshot.get("models", {}), allow_removals=new_gen >= self._gen)
+        # Prefer the coordinator's explicit expected set; fall back to the live set
+        # so a restarted coordinator (empty expected) doesn't flip us to not-ready.
+        self.expected_models = snapshot.get("expected") or sorted(self.models)
+        if self.expected_models and self._expected_set_at is None:
+            self._expected_set_at = self._last_model_at or time.time()
+        if self.expected_models and self._all_ready_at is None and all(m in self.models for m in self.expected_models):
+            self._all_ready_at = time.time()
+        self._gen = new_gen
+        MODELS_LOADED.set(len(self.models))
+
+    def _coord(self):
+        if self._coordinator is None:
+            self._coordinator = deploy_coordinator.get_or_create_coordinator()
+        return self._coordinator
+
+    def _ensure_watching(self) -> None:
+        """First-request hook: do one synchronous sync so this request isn't blocked
+        on the loop's first tick, then start the background watch loop (once)."""
+        if self._watch_task is not None:
+            return
+        self._sync_routing_blocking()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop yet; a later in-loop call starts it
+        self._watch_task = loop.create_task(self._watch_loop())
+
+    def _sync_routing_blocking(self) -> bool:
+        """One-shot synchronous reconcile (first request). Blocking ray.get is fine
+        here — it runs at most once per request until the loop is established."""
+        try:
+            snapshot = cast(dict, ray.get(self._coord().get_routing.remote(self._gateway_name)))
+        except Exception:
+            logger.debug("gateway: initial routing sync deferred; coordinator unavailable", exc_info=True)
+            return False
+        self._apply_snapshot(snapshot)
+        return True
+
+    async def _watch_loop(self) -> None:
+        """Long-poll the coordinator and reconcile on every generation change. The
+        await happens on the actor call; the reconcile mutation is await-free so it
+        stays atomic w.r.t. in-flight requests."""
+        while True:
+            try:
+                gen = await self._coord().wait_for_change.remote(self._gateway_name, self._gen)
+                if gen != self._gen:
+                    snapshot = await self._coord().get_routing.remote(self._gateway_name)
+                    self._apply_snapshot(snapshot)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.debug("gateway: watch iteration failed; retrying", exc_info=True)
+                await asyncio.sleep(_WATCH_RETRY_S)
+
+    def __del__(self):
+        task = getattr(self, "_watch_task", None)
+        if task is not None and not task.done():
+            task.cancel()
 
     async def list_deployments(self) -> dict[str, list[str]]:
         """Return model_name -> list of deployment app_names currently registered."""
@@ -287,7 +315,7 @@ class ModelshipAPI:
         request_id_var.set(request_id)
 
     def _get_handle(self, model_name: str | None) -> DeploymentHandle:
-        self._ensure_reconstructed()
+        self._ensure_watching()
         if model_name is None or model_name not in self.models:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND.value, detail="model not found")
         handles = list(self.models[model_name].values())
@@ -398,7 +426,7 @@ class ModelshipAPI:
         }
 
     def _readyz_body(self) -> dict:
-        self._ensure_reconstructed()
+        self._ensure_watching()
         expected = list(self.expected_models)
         pending = [m for m in expected if m not in self.models] if expected else []
         ready = bool(expected) and len(pending) == 0
@@ -425,10 +453,12 @@ class ModelshipAPI:
 
     @app.get("/v1/models", response_model=OpenaiModelList)
     async def list_models(self):
+        self._ensure_watching()
         return OpenaiModelList(data=self.model_list)
 
     @app.get("/v1/models/{model}", response_model=OpenAiModelCard)
     async def model_info(self, model: str) -> OpenAiModelCard:
+        self._ensure_watching()
         for card in self.model_list:
             if card.id == model:
                 return card
