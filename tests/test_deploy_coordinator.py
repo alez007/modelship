@@ -3,10 +3,13 @@ truth gateway replicas reconcile from). Exercises the undecorated class directly
 in-process, without a Ray cluster."""
 
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from modelship.infer import deploy_coordinator
 from modelship.infer.deploy_coordinator import ModelshipDeployCoordinator
+from modelship.state import MemoryStateStore
 
 # The plain class behind @ray.remote — its async methods are ordinary coroutines.
 _Coord = ModelshipDeployCoordinator.__ray_metadata__.modified_class
@@ -89,3 +92,45 @@ class TestWaitForChange:
         await asyncio.sleep(0.05)
         await coord.set_expected("gw", ["x"])
         assert await waiter == 2
+
+
+class TestDurableState:
+    """Registry + expected are written through a StateStore so a resurrected
+    coordinator (max_restarts) reloads them instead of coming back empty."""
+
+    @pytest.mark.asyncio
+    async def test_reloads_registry_and_expected_from_shared_store(self):
+        store = MemoryStateStore()  # stand-in for a redis:// store across restarts
+        with patch.object(deploy_coordinator, "get_state_store", return_value=store):
+            first = _Coord()
+            await first.register_deployment("gw", "qwen-aaaa", "qwen")
+            await first.set_expected("gw", ["qwen", "kokoro"])
+
+            # A brand-new coordinator backed by the same store = a resurrected actor.
+            second = _Coord()
+        routing = await second.get_routing("gw")
+        assert routing["models"] == {"qwen-aaaa": "qwen"}
+        assert routing["expected"] == ["qwen", "kokoro"]
+        # Generation is ephemeral — restart resets it to 0 (the gateway treats that
+        # as "changed" and re-pulls).
+        assert routing["generation"] == 0
+
+    @pytest.mark.asyncio
+    async def test_unregister_persists_removal(self):
+        store = MemoryStateStore()
+        with patch.object(deploy_coordinator, "get_state_store", return_value=store):
+            first = _Coord()
+            await first.register_deployment("gw", "qwen-aaaa", "qwen")
+            await first.unregister_deployment("gw", "qwen-aaaa")
+            second = _Coord()
+        assert (await second.get_routing("gw"))["models"] == {}
+
+    def test_get_or_create_sets_max_restarts(self):
+        # Resurrection only helps because the actor auto-restarts; assert the option.
+        with (
+            patch.object(deploy_coordinator.ray, "get_actor", side_effect=ValueError("absent")),
+            patch.object(deploy_coordinator.ModelshipDeployCoordinator, "options") as options,
+        ):
+            options.return_value.remote.return_value = MagicMock()
+            deploy_coordinator.get_or_create_coordinator()
+        assert options.call_args.kwargs["max_restarts"] == -1
