@@ -32,10 +32,10 @@ Future development priorities for making Modelship production-ready, organized b
 
 ### Deployment & Infrastructure
 
-- [ ] **Kubernetes manifests** — Deployment, Service, ConfigMap, PVC, Ingress with proper resource requests/limits, GPU scheduling, node affinity, tolerations
-- [ ] **Helm chart** — parameterized deployment for different environments
+- [x] **Kubernetes manifests** — KubeRay `RayCluster` + `RayJob`, gateway `Service`, models `ConfigMap`, cache `PVC`, secrets, optional `PodMonitor` (via the Helm chart in `helm/modelship`), with resource requests/limits, GPU scheduling, node affinity, and tolerations per worker group
+- [x] **Helm chart** — parameterized deployment in `helm/modelship` (see its README)
 - [ ] **Docker Compose** — for simpler non-K8s deployments
-- [ ] **Liveness/readiness probes in container spec** — wire `/health` (liveness) and `/readyz` (readiness) into K8s probes
+- [x] **Liveness/readiness probes in container spec** — KubeRay gates each Ray pod on a Serve proxy `/-/healthz` check (via the named `serve` port); `/readyz` returns 503 until all models load, suitable for an external LB/Ingress health check
 
 ### Alerting & Observability
 
@@ -58,6 +58,9 @@ Future development priorities for making Modelship production-ready, organized b
 ### Update Strategy
 
 - [ ] **Rolling update support** — configure Ray Serve's built-in rolling updates for zero-downtime deploys
+- [x] **Per-model autoscaling** — `autoscaling_config` (min/max replicas, target ongoing requests, up/downscale delays; scale-to-zero supported) scales replica count with load instead of a fixed `num_replicas`
+- [x] **Gateway HA** — `MSHIP_GATEWAY_REPLICAS > 1` runs multiple gateway replicas; routing tables stay consistent via the deploy coordinator's watch loop, and a Serve proxy on every node lets the gateway Service survive single-pod loss
+- [x] **Self-heal after cluster loss** — each deploy persists this gateway's effective config to the cache PVC; `mship_deploy --reconcile` (no `--config`) replays it, and the chart's `deploy.reassert` CronJob runs it periodically to restore the full model set if the cluster is recreated empty
 - [x] **Model hot-reload** — allow `models.yaml` changes without full server restart (via `mship_deploy --reconcile`)
 - [x] **Changelog** — track breaking changes between versions
 - [x] **Migration guide** — document config format changes between versions
@@ -79,7 +82,7 @@ Future development priorities for making Modelship production-ready, organized b
 - [ ] **Troubleshooting runbook** — common failure modes and resolution steps for on-call
 - [ ] **Capacity planning guide** — estimate concurrent users per GPU setup per model mix
 - [ ] **GPU memory budgeting guide** — model co-location recommendations to avoid fragmentation
-- [ ] **Multi-node Ray cluster setup docs** — head + worker topology, networking, failure handling
+- [x] **Multi-node Ray cluster setup docs** — head + worker topology, multi-node ingress, cache PVC access modes, and self-heal documented in the Helm chart README (`helm/modelship/README.md`)
 - [ ] **Request audit trail** — persistent log of requests for compliance/debugging
 
 ### Documentation
@@ -99,7 +102,7 @@ Future development priorities for making Modelship production-ready, organized b
 | Monitoring (metrics)         | 9/10    | 9/10   |
 | Monitoring (alerting + logs) | 9/10    | 9/10   |
 | Security                     | 4/10    | 8/10   |
-| Resilience                   | 6/10    | 8/10   |
+| Resilience                   | 7/10    | 8/10   |
 | Testing                      | 8/10    | 9/10   |
-| DevOps Experience            | 6/10    | 8/10   |
-| Update/Deploy Strategy       | 6/10    | 7/10   |
+| DevOps Experience            | 8/10    | 8/10   |
+| Update/Deploy Strategy       | 7/10    | 7/10   |
