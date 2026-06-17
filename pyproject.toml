@@ -33,6 +33,7 @@ dependencies = [
     "pip>=25.0",
     "psutil>=5.9",
     "gguf>=0.18.0",
+    "redis>=8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +76,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.25.0",
     "pre-commit>=4.0.0",
+    "fakeredis>=2.36.2",
 ]
 
 [project.urls]
