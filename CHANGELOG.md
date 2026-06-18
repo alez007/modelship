@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-06-18
+
+### Added
+- image.variant selector (gpu default) for cpu/gpu image tags
+- redis-backed GCS fault tolerance, retire reassert cron
+- durable coordinator state for head-restart self-heal
+- URI-selectable state stores (memory/file/redis)
+- multi-node ingress — proxy on every node, Service spans all pods
+- coordinator-driven watch model for multi-replica routing
+- per-model autoscaling + --state-dir flag
+- self-heal CronJob reconciling to the effective config
+- durable per-gateway effective config for self-heal
+- per-group image/runtimeClassName override; empty workerGroups default
+- deploy via RayJob on the cluster, not an off-cluster Job
+- KubeRay chart — RayCluster + deploy Job, /readyz gating
+- k8s/KubeRay readiness — gateway self-heal, ownership registry, /readyz
+
+### Fixed
+- reject file:// URIs with a non-empty host
+- opt out of vLLM dictConfig so head-restart recovery doesn't crash GPU replicas
+- resolve coordinator off the event loop in the watch loop
+- drop stale coordinator handle so the watch loop recovers
+- address code-review feedback
+- declare head dashboard port (8265) for RayJob submission
+- RayJob clusterSelector rejects backoffLimit; drop head /readyz probe
+- exit instead of blocking/teardown on an external cluster
+- compare MSHIP_RAY_DASHBOARD case-insensitively
+
+### Changed
+- chart OCI install + image.variant
+- validate Helm chart (lint, kubeconform, kind server dry-run)
+- publish Helm chart as OCI artifact to GHCR
+- stamp Helm chart version/appVersion + image tag from release tag
+- head-node HA, state-store URI, reassert cron removal
+- per-model autoscaling, gateway HA, state-dir/self-heal
+- mship_deploy owns its Ray head; --use-existing connects
+- disable Ray dashboard by default to cut host RAM
+
 ## [0.3.0] - 2026-06-14
 
 ### Added
