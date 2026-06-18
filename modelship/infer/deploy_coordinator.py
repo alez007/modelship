@@ -32,11 +32,14 @@ import ray
 from ray import exceptions as ray_exceptions
 
 from modelship.logging import get_logger
+from modelship.state import get_state_store
 
 logger = get_logger("deploy_coordinator")
 
 COORDINATOR_ACTOR_NAME = "modelship-deploy-coordinator"
 COORDINATOR_NAMESPACE = "modelship"
+
+_STATE_KEY = "coordinator/state"
 
 _LIVENESS_POLL_INTERVAL_S = 5.0
 _LIVENESS_CALL_TIMEOUT_S = 3.0
@@ -76,13 +79,21 @@ class ModelshipDeployCoordinator:
         # The driver writes it on (un)deploy; gateway replicas reconcile their
         # routing tables from it (see get_routing / wait_for_change), so the driver
         # never pushes to individual replicas.
-        self._registry: dict[str, dict[str, str]] = {}
+        # _registry and _expected are durable (loaded below, written through on
+        # every change); _generation/_change are ephemeral wakeup state. On a
+        # resurrected coordinator the generation restarts at 0, which the gateway's
+        # wait_for_change already treats as "changed" so replicas re-pull and
+        # reconcile from the reloaded registry.
+        self._store = get_state_store()
+        saved = self._store.get(_STATE_KEY)
+        saved = saved if isinstance(saved, dict) else {}
+        self._registry: dict[str, dict[str, str]] = saved.get("registry") or {}
         # Per-gateway change notification driving the gateway watch loop: a
         # monotonic generation bumped on every routing/expected change, plus an
         # asyncio.Event woken on each bump so a long-polling replica returns at
         # once. _expected is the desired model set used for gateway readiness.
         self._generation: dict[str, int] = {}
-        self._expected: dict[str, list[str]] = {}
+        self._expected: dict[str, list[str]] = saved.get("expected") or {}
         self._change: dict[str, asyncio.Event] = {}
 
     def report_fatal_error(self, deployment_name: str, reason: str) -> None:
@@ -105,8 +116,14 @@ class ModelshipDeployCoordinator:
             old.set()
         self._change[gateway_name] = asyncio.Event()
 
+    def _persist(self) -> None:
+        """Write the durable routing state through the StateStore. A no-op for the
+        memory store; for redis/file this is what survives coordinator death."""
+        self._store.set(_STATE_KEY, {"registry": self._registry, "expected": self._expected})
+
     async def register_deployment(self, gateway_name: str, deployment_name: str, model_name: str) -> None:
         self._registry.setdefault(gateway_name, {})[deployment_name] = model_name
+        self._persist()
         self._bump(gateway_name)
 
     async def unregister_deployment(self, gateway_name: str, deployment_name: str) -> None:
@@ -115,11 +132,13 @@ class ModelshipDeployCoordinator:
             gw.pop(deployment_name, None)
             if not gw:
                 del self._registry[gateway_name]
+        self._persist()
         self._bump(gateway_name)
 
     async def set_expected(self, gateway_name: str, names: list[str]) -> None:
         """Record the desired model set for readiness; bumps so replicas adopt it."""
         self._expected[gateway_name] = list(names)
+        self._persist()
         self._bump(gateway_name)
 
     async def get_routing(self, gateway_name: str) -> dict:
@@ -251,6 +270,7 @@ def get_or_create_coordinator():
             namespace=COORDINATOR_NAMESPACE,
             lifetime="detached",
             num_cpus=0,
+            max_restarts=-1,
         ).remote()
     except ValueError:
         return ray.get_actor(COORDINATOR_ACTOR_NAME, namespace=COORDINATOR_NAMESPACE)

@@ -11,6 +11,7 @@ import os
 _STRING_ARG_TO_ENV: dict[str, str] = {
     "cache_dir": "MSHIP_CACHE_DIR",
     "state_dir": "MSHIP_STATE_DIR",
+    "state_store": "MSHIP_STATE_STORE",
     "log_format": "MSHIP_LOG_FORMAT",
     "log_target": "MSHIP_LOG_TARGET",
     "otel_endpoint": "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -36,6 +37,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--state-dir",
         help=(
             "Directory for the durable effective-config state store (env: MSHIP_STATE_DIR, default: <cache-dir>/state)"
+        ),
+    )
+    parser.add_argument(
+        "--state-store",
+        help=(
+            "State-store connection URI for the effective config and deploy coordinator "
+            "(env: MSHIP_STATE_STORE, default: memory://). Schemes: memory:// | file:///path | "
+            "redis://[:password@]host:port/db (rediss:// for TLS). A redis:// store also enables "
+            "GCS fault tolerance when modelship starts its own Ray head."
         ),
     )
     parser.add_argument(

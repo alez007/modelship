@@ -42,10 +42,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The container image reference shared by Ray pods and the RayJob submitter.
+Effective image tag, resolving the gpu/cpu variant onto the base tag. `variant: cpu` appends "-cpu";
+an explicit `tag`/`variant` (e.g. a per-worker-group override) wins over the
+cluster-wide image values. Call with a dict: (dict "root" $) or
+(dict "root" $ "tag" $img.tag "variant" $img.variant).
+*/}}
+{{- define "modelship.imageTag" -}}
+{{- $tag := .tag | default .root.Values.image.tag -}}
+{{- $variant := .variant | default .root.Values.image.variant | default "gpu" -}}
+{{- if eq $variant "cpu" -}}{{ printf "%s-cpu" $tag }}{{- else -}}{{ $tag }}{{- end -}}
+{{- end -}}
+
+{{/*
+The container image reference shared by the Ray head and the RayJob submitter.
 */}}
 {{- define "modelship.image" -}}
-{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- printf "%s:%s" .Values.image.repository (include "modelship.imageTag" (dict "root" .)) -}}
 {{- end -}}
 
 {{/*
@@ -97,6 +109,47 @@ when no Secret was created (e.g. all-ungated models, no auth).
 - secretRef:
     name: {{ include "modelship.secretName" . }}
     optional: true
+{{- end -}}
+
+{{/*
+Name of the Secret holding the Redis password (existing or the chart's own).
+*/}}
+{{- define "modelship.redisSecretName" -}}
+{{- .Values.redis.existingSecret | default (include "modelship.secretName" .) -}}
+{{- end -}}
+
+{{/*
+Explicit env for every Ray pod (head + workers): the state-store URI the
+coordinator and effective-config read via get_state_store(). It MUST be on every
+pod so the coordinator — scheduled on any node — agrees with the driver.
+  redis.enabled  -> redis://[:$(REDIS_PASSWORD)@]<addr>/<db> (password kept in the
+                    Secret; k8s expands $(REDIS_PASSWORD) so it never lands in the
+                    manifest/argv). The same Redis also backs GCS fault tolerance.
+  cache.enabled  -> file://<mountPath>/state on the shared cache PVC (durable).
+  otherwise      -> memory:// (ephemeral).
+*/}}
+{{- define "modelship.env" -}}
+{{- if .Values.redis.enabled }}
+{{- $hasPw := or .Values.redis.password .Values.redis.existingSecret }}
+{{- if $hasPw }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "modelship.redisSecretName" . }}
+      key: {{ .Values.redis.passwordKey }}
+- name: MSHIP_STATE_STORE
+  value: "redis://:$(REDIS_PASSWORD)@{{ .Values.redis.address }}/{{ .Values.redis.db }}"
+{{- else }}
+- name: MSHIP_STATE_STORE
+  value: "redis://{{ .Values.redis.address }}/{{ .Values.redis.db }}"
+{{- end }}
+{{- else if .Values.cache.enabled }}
+- name: MSHIP_STATE_STORE
+  value: "file://{{ .Values.cache.mountPath }}/state"
+{{- else }}
+- name: MSHIP_STATE_STORE
+  value: "memory://"
+{{- end }}
 {{- end -}}
 
 {{/*

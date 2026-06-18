@@ -109,6 +109,12 @@ def propagate_lib_log_env(level_name: str | None = None) -> None:
         val = lib_level_name.lower() if lib_name in _LOWERCASE_LEVEL_LIBS else lib_level_name
         os.environ.setdefault(env_var, val)
 
+    # Opt out of vLLM's import-time logging.config.dictConfig(), which closes Ray
+    # Serve's MemoryHandler and crashes replica recovery (see TestVllmConfigureLoggingOptOut).
+    # We own vLLM's level via setLevel + VLLM_LOGGING_LEVEL, so its dictConfig is pure
+    # downside. setdefault so an explicit user value wins.
+    os.environ.setdefault("VLLM_CONFIGURE_LOGGING", "0")
+
 
 def _parse_syslog_target(target: str) -> SysLogHandler:
     """Parse a syslog URI and return a configured SysLogHandler.

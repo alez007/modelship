@@ -49,7 +49,8 @@ The following environment variables are set in the dev image with sensible defau
 | `RAY_HEAD_CPU_NUM` | *(unset)* | **Optional override:** CPUs allocated to Ray head. If unset, Ray auto-detects. |
 | `RAY_HEAD_GPU_NUM` | *(unset)* | **Optional override:** GPUs allocated to Ray head. If unset, Ray auto-detects. |
 | `MSHIP_CACHE_DIR` | `/.cache` | Model cache directory |
-| `MSHIP_STATE_DIR` | `<cache-dir>/state` | Durable effective-config store (this gateway's desired model set). Lives on the cache PVC in k8s so it survives a full cluster loss; `mship_deploy --reconcile` (no `--config`) replays it to self-heal. |
+| `MSHIP_STATE_STORE` | `memory://` | State-store URI for the effective config + deploy coordinator: `memory://`, `file:///path`, or `redis://[:pw@]host:port/db`. See [model-configuration.md](model-configuration.md#state-store-mship_state_store). The chart sets `file://`/`redis://` for k8s. |
+| `MSHIP_STATE_DIR` | `<cache-dir>/state` | Default directory for a `file://` state store with no path |
 | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to connect to a Ray cluster you manage (must run on a cluster node) instead of starting one; implies deploy-and-exit |
 | `MSHIP_GATEWAY_REPLICAS` | `1` | Number of API gateway replicas. Raise for routing/ingress HA and to spread request-proxying load under high concurrency; replicas keep routing tables in sync via the deploy coordinator's watch loop. |
 | `MSHIP_GATEWAY_MAX_ONGOING` | `1024` | Per-replica Ray Serve concurrency cap for the gateway. The gateway holds a slot for the whole lifetime of each streamed response, so a low cap throttles before the engine does. |

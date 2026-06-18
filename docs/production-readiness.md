@@ -49,6 +49,7 @@ Future development priorities for making Modelship production-ready, organized b
 
 ### Resilience
 
+- [x] **Head-node HA (GCS fault tolerance)** — `redis.enabled` backs Ray's GCS with Redis (`gcsFaultToleranceOptions`), so a restarted head pod recovers cluster state and workers + model actors survive instead of the whole cluster going down. The same Redis backs the modelship state store (`redis://`), so the deploy coordinator's routing registry survives head/coordinator death and the gateway self-heals its routing on recovery (the coordinator runs `max_restarts=-1`)
 - [ ] **Ray actor restart policies** — auto-restart crashed model actors
 - [ ] **Circuit breaker** — stop routing to a failing model after N consecutive errors
 - [ ] **Backpressure / queue depth limits** — reject requests when queue is saturated instead of unbounded queuing
@@ -60,7 +61,7 @@ Future development priorities for making Modelship production-ready, organized b
 - [ ] **Rolling update support** — configure Ray Serve's built-in rolling updates for zero-downtime deploys
 - [x] **Per-model autoscaling** — `autoscaling_config` (min/max replicas, target ongoing requests, up/downscale delays; scale-to-zero supported) scales replica count with load instead of a fixed `num_replicas`
 - [x] **Gateway HA** — `MSHIP_GATEWAY_REPLICAS > 1` runs multiple gateway replicas; routing tables stay consistent via the deploy coordinator's watch loop, and a Serve proxy on every node lets the gateway Service survive single-pod loss
-- [x] **Self-heal after cluster loss** — each deploy persists this gateway's effective config to the cache PVC; `mship_deploy --reconcile` (no `--config`) replays it, and the chart's `deploy.reassert` CronJob runs it periodically to restore the full model set if the cluster is recreated empty
+- [x] **Self-heal after cluster loss** — each deploy persists this gateway's effective config + routing registry to the configured state store (`MSHIP_STATE_STORE`: `redis://` for HA, else `file://` on the cache PVC). With Redis the gateway self-heals automatically on a head restart; after a full cluster loss `mship_deploy --reconcile` (no `--config`, run via `helm upgrade`) replays the recorded set
 - [x] **Model hot-reload** — allow `models.yaml` changes without full server restart (via `mship_deploy --reconcile`)
 - [x] **Changelog** — track breaking changes between versions
 - [x] **Migration guide** — document config format changes between versions
@@ -102,7 +103,7 @@ Future development priorities for making Modelship production-ready, organized b
 | Monitoring (metrics)         | 9/10    | 9/10   |
 | Monitoring (alerting + logs) | 9/10    | 9/10   |
 | Security                     | 4/10    | 8/10   |
-| Resilience                   | 7/10    | 8/10   |
+| Resilience                   | 8/10    | 8/10   |
 | Testing                      | 8/10    | 9/10   |
 | DevOps Experience            | 8/10    | 8/10   |
 | Update/Deploy Strategy       | 7/10    | 7/10   |

@@ -20,6 +20,7 @@ from modelship.logging import (
     _setup_otel,
     configure_logging,
     get_logger,
+    propagate_lib_log_env,
     request_id_var,
 )
 
@@ -124,6 +125,36 @@ class TestConfigureLogging:
         root = logging.getLogger("modelship")
         handler = root.handlers[0]
         assert isinstance(handler.formatter, ModelshipTextFormatter)
+
+
+class TestVllmConfigureLoggingOptOut:
+    """vLLM runs logging.config.dictConfig() at import time. Python's dictConfig
+    unconditionally calls _clearExistingHandlers() -> logging.shutdown(), which
+    closes *every* live handler — including Ray Serve's MemoryHandler on the
+    `ray.serve` logger — and MemoryHandler.close() sets target=None. shutdown()
+    does NOT remove the handler from the logger, so Ray's
+    get_component_logger_file_path() later dereferences handler.target.baseFilename
+    and raises AttributeError, killing the replica's is_allocated() health check.
+
+    This only bites the vLLM loader (llama_cpp etc. never import vllm) and only on
+    the head-restart recovery path: on a cold deploy is_allocated() runs before the
+    replica __init__ imports vLLM; on recovery the replica re-imports vLLM first, so
+    the nulled target is hit. We set VLLM_CONFIGURE_LOGGING=0 in propagate_lib_log_env
+    (which runs before any vLLM import, in both driver and replica) so vLLM skips its
+    dictConfig and never touches Ray's handler. Log levels are unaffected — modelship
+    sets the vllm logger level directly and via VLLM_LOGGING_LEVEL.
+    """
+
+    def test_disabled_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_CONFIGURE_LOGGING", None)
+            propagate_lib_log_env("INFO")
+            assert os.environ["VLLM_CONFIGURE_LOGGING"] == "0"
+
+    def test_explicit_user_value_wins(self):
+        with patch.dict(os.environ, {"VLLM_CONFIGURE_LOGGING": "1"}):
+            propagate_lib_log_env("INFO")
+            assert os.environ["VLLM_CONFIGURE_LOGGING"] == "1"
 
 
 class TestRequestIdFilter:

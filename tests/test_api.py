@@ -194,6 +194,17 @@ class TestWatchReconcile:
             assert api._sync_routing_blocking() is False
         assert api._coordinator is None
 
+    @pytest.mark.asyncio
+    async def test_coord_async_resolves_off_thread_and_caches(self, api):
+        # The watch loop resolves the coordinator via asyncio.to_thread (so the sync
+        # ray.get_actor never blocks the event loop) and caches the handle.
+        api._coordinator = None
+        sentinel = MagicMock()
+        with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", return_value=sentinel) as goc:
+            assert await api._coord_async() is sentinel
+            assert await api._coord_async() is sentinel
+        goc.assert_called_once()  # second call served from cache, no re-resolve
+
     def test_sync_keeps_live_models_on_regressed_generation(self, api):
         # Coordinator restarted: empty snapshot at a lower generation than ours. The
         # model is still deployed, so routing is preserved, not blanked.
