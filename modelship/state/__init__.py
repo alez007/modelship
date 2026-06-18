@@ -53,6 +53,14 @@ def _build_memory(_: ParseResult) -> StateStore:
 def _build_file(parsed: ParseResult) -> StateStore:
     # The folder is the URI path; an empty path (``file://``) falls back to the
     # default location, so the historical behaviour is just the no-path form.
+    # A non-empty netloc means a two-slash path like ``file://some/dir``, whose
+    # first segment urlparse reads as a host — reject it loudly so the directory
+    # isn't silently dropped. Absolute paths need three slashes (``file:///dir``).
+    if parsed.netloc:
+        raise ValueError(
+            f"file:// URI must have an empty host: {parsed.geturl()!r} parses host {parsed.netloc!r}. "
+            f"Use file:///path/to/state (three slashes) for an absolute path."
+        )
     base = Path(parsed.path) if parsed.path else _default_file_dir()
     return FileStateStore(base)
 

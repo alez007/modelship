@@ -60,6 +60,12 @@ class TestStateStoreFromUri:
         assert isinstance(store, FileStateStore)
         assert str(store.base_dir) == "/var/lib/mship/state"
 
+    def test_file_scheme_two_slash_path_rejected(self):
+        # file://some/dir is malformed: urlparse reads "some" as the host and
+        # would silently drop it. Must raise, not fall back to the default dir.
+        with pytest.raises(ValueError, match="must have an empty host"):
+            state_store_from_uri("file://some/dir")
+
     def test_redis_scheme_builds_redis_store(self, monkeypatch):
         # Don't hit a real server: stub redis.from_url.
         import redis
