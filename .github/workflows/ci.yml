@@ -44,3 +44,60 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v -m "not integration"
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Lint chart
+        run: |
+          helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+          helm dependency build helm/modelship
+          # helm 3.16 leaves only the .tgz in charts/; template/lint need the dir form.
+          ( cd helm/modelship/charts && for f in *.tgz; do tar xzf "$f"; done )
+          helm lint helm/modelship
+
+      - name: Validate rendered manifests (kubeconform)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin kubeconform
+          # CRDs (RayCluster/RayJob/PodMonitor) aren't in the standard schema set, so
+          # skip those and validate everything else strictly across value permutations.
+          for args in \
+            "" \
+            "--set image.variant=cpu" \
+            "--set redis.enabled=true --set redis.address=cache:6379 --set redis.password=pw" \
+            "--set podMonitor.enabled=true"; do
+            echo "== helm template $args =="
+            helm template modelship helm/modelship $args \
+              | kubeconform -strict -ignore-missing-schemas -summary
+          done
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: modelship-ci
+
+      - name: Server dry-run against real KubeRay CRDs
+        run: |
+          # Install the operator so the RayCluster/RayJob CRDs exist, then server-side
+          # dry-run the chart: the API server validates the CRs (incl.
+          # gcsFaultToleranceOptions) against the real CRD schemas. Head-only (no
+          # workers/cache) so nothing needs GPUs or PVCs.
+          helm install kuberay-operator kuberay/kuberay-operator --wait --timeout 5m
+          for redis in "false" "true"; do
+            echo "== dry-run redis.enabled=$redis =="
+            helm install modelship helm/modelship \
+              --set kuberay-operator.enabled=false \
+              --set cache.enabled=false \
+              --set redis.enabled=$redis \
+              --set redis.address=cache:6379 \
+              --set redis.password=pw \
+              --dry-run=server
+          done
