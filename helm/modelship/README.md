@@ -36,8 +36,9 @@ reconciles the live cluster back to the recorded set.
 # From the repo (path install):
 helm install mship ./helm/modelship -f my-values.yaml
 
-# From GHCR (OCI), once published:
-helm install mship oci://ghcr.io/alez007/charts/modelship --version 0.1.0 -f my-values.yaml
+# From GHCR (OCI). The chart version is kept in lockstep with the app/image
+# version, so --version <X.Y.Z> always pairs with the matching image:
+helm install mship oci://ghcr.io/alez007/charts/modelship --version 0.4.0 -f my-values.yaml
 ```
 
 Because images and model weights take time to pull, raise Helm's timeout:
@@ -147,7 +148,8 @@ single instance with a PVC is plenty; the chart only wires an address).
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `image.repository` / `image.tag` | `ghcr.io/alez007/modelship` / `0.3.0` | Use a `-cpu` tag on CPU-only clusters |
+| `image.repository` / `image.tag` | `ghcr.io/alez007/modelship` / `<app version>` | Stamped to the release version |
+| `image.variant` | `gpu` | `cpu` appends `-cpu` to the tag. GPU runs everywhere; set `cpu` on CPU-only clusters, or per worker group for a mixed cluster |
 | `rayVersion` | `2.54.1` | Must match the Ray in the image |
 | `models.config` / `models.existingConfigMap` | `models: []` | Your model set |
 | `gateway.replicas` | `1` | API gateway replicas; raise (with ≥1 worker) for routing/ingress HA |
