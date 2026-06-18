@@ -118,13 +118,14 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           # Per-group image override: a worker group may set its own `image`
-          # (repository/tag/pullPolicy); any field left unset falls back to the
-          # cluster-wide `image`. Lets a CPU image run cluster-wide while the GPU
-          # group pulls the full GPU image (both built at the same Ray version).
+          # (repository/tag/variant/pullPolicy); any field left unset falls back to
+          # the cluster-wide `image`. Lets a lean CPU image run cluster-wide while
+          # the GPU group pulls the full GPU image — set `variant: gpu` on that group
+          # (both built at the same Ray version).
           {{- $img := .image | default dict }}
           containers:
             - name: ray-worker
-              image: {{ printf "%s:%s" ($img.repository | default $.Values.image.repository) ($img.tag | default $.Values.image.tag) }}
+              image: {{ printf "%s:%s" ($img.repository | default $.Values.image.repository) (include "modelship.imageTag" (dict "root" $ "tag" $img.tag "variant" $img.variant)) }}
               imagePullPolicy: {{ $img.pullPolicy | default $.Values.image.pullPolicy }}
               # `serve` exposes the per-node Ray Serve HTTP proxy (proxy_location=
               # EveryNode runs one on every worker). It backs the gateway Service so

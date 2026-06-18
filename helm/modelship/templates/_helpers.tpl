@@ -42,10 +42,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The container image reference shared by Ray pods and the RayJob submitter.
+Effective image tag, resolving the gpu/cpu variant onto the base tag. `variant: cpu` appends "-cpu";
+an explicit `tag`/`variant` (e.g. a per-worker-group override) wins over the
+cluster-wide image values. Call with a dict: (dict "root" $) or
+(dict "root" $ "tag" $img.tag "variant" $img.variant).
+*/}}
+{{- define "modelship.imageTag" -}}
+{{- $tag := .tag | default .root.Values.image.tag -}}
+{{- $variant := .variant | default .root.Values.image.variant | default "gpu" -}}
+{{- if eq $variant "cpu" -}}{{ printf "%s-cpu" $tag }}{{- else -}}{{ $tag }}{{- end -}}
+{{- end -}}
+
+{{/*
+The container image reference shared by the Ray head and the RayJob submitter.
 */}}
 {{- define "modelship.image" -}}
-{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- printf "%s:%s" .Values.image.repository (include "modelship.imageTag" (dict "root" .)) -}}
 {{- end -}}
 
 {{/*
