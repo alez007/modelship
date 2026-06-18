@@ -60,6 +60,12 @@ _release:
 	@echo "Bumping version: $(VERSION) -> $(NEW_VERSION)"
 	@sed -i '0,/^version = ".*"/{s/^version = ".*"/version = "$(NEW_VERSION)"/}' pyproject.toml
 	@uv lock
+	@# --- lockstep the Helm chart with the app version (single source of truth: the tag) ---
+	@# chart version == appVersion == image tag == app version, so a checked-out tag
+	@# renders an installable chart and `helm install --version X.Y.Z` pairs image X.Y.Z.
+	@sed -i 's/^version: .*/version: $(NEW_VERSION)/' helm/modelship/Chart.yaml
+	@sed -i 's/^appVersion: .*/appVersion: "$(NEW_VERSION)"/' helm/modelship/Chart.yaml
+	@sed -i '0,/^  tag: ".*"/{s/^  tag: ".*"/  tag: "$(NEW_VERSION)"/}' helm/modelship/values.yaml
 	@# --- auto-update CHANGELOG.md ---
 	@PREV_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$PREV_TAG" ]; then \
@@ -78,7 +84,7 @@ _release:
 	if [ -n "$$CHANGED" ]; then echo "" >> "$$TMPF"; echo "### Changed" >> "$$TMPF"; echo "$$CHANGED" >> "$$TMPF"; fi; \
 	sed -i "/^The format is based on/r $$TMPF" CHANGELOG.md; \
 	rm -f "$$TMPF"
-	@git add pyproject.toml uv.lock CHANGELOG.md
+	@git add pyproject.toml uv.lock CHANGELOG.md helm/modelship/Chart.yaml helm/modelship/values.yaml
 	@git commit -m "release: v$(NEW_VERSION)"
 	@git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	@git push origin main --follow-tags
