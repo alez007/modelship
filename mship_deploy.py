@@ -1,6 +1,7 @@
 import os
 import signal
 import sys
+import time
 
 # Must be set BEFORE `import ray`: ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV
 # is a module-level constant, evaluated at ray's import time. Leaving it on
@@ -61,6 +62,7 @@ from modelship.deploy.serve_utils import (  # noqa: E402
 from modelship.deploy.strategy import DeployContext, compute_deploy_plan, run_deploy_loop  # noqa: E402
 from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator  # noqa: E402
 from modelship.logging import configure_logging, get_lib_log_config, get_logger  # noqa: E402
+from modelship.metrics import DEPLOY_DURATION_SECONDS, DEPLOY_MODELS_CHANGED_TOTAL  # noqa: E402
 from modelship.state import get_state_store  # noqa: E402
 from modelship.utils.cli import apply_args_to_env, parse_args  # noqa: E402
 
@@ -74,6 +76,9 @@ def main(argv: list[str] | None = None) -> None:
 
     configure_logging()
     gateway_name = os.environ.get("MSHIP_GATEWAY_NAME", _DEFAULT_GATEWAY_NAME)
+    # Export the resolved name so it rides along to each replica via runtime_env
+    # passthrough — that's how metrics.py stamps every metric with its gateway.
+    os.environ["MSHIP_GATEWAY_NAME"] = gateway_name
     # apply_args_to_env (above) has folded --use-existing-ray-cluster into this env
     # var, the same source connect_ray uses. With an external cluster (KubeRay)
     # this process is a one-shot deployer: exit after deploying, never tear down a
@@ -134,6 +139,8 @@ def main(argv: list[str] | None = None) -> None:
         gateway_name,
     )
     apps_to_remove = list(plan.apps_to_remove)
+    removed_count = len(apps_to_remove)
+    deploy_started = time.monotonic()
 
     # Track deployments created by this invocation: deployment_name -> model_name.
     # Shared with the SIGINT/SIGTERM cleanup handler below via closure.
@@ -209,6 +216,15 @@ def main(argv: list[str] | None = None) -> None:
         # crash mid-deploy keeps the last known-good effective config.
         failed_deployment_names = {cfg.deployment_name(gateway_name) for cfg, _ in fatally_failed}
         write_effective(store, gateway_name, evict_failed(desired_raw, gateway_name, failed_deployment_names))
+
+        DEPLOY_DURATION_SECONDS.observe(time.monotonic() - deploy_started, tags={"gateway": gateway_name})
+        for action, count in (
+            ("add", len(deployed_this_run)),
+            ("remove", removed_count),
+            ("evict", len(fatally_failed)),
+        ):
+            if count:
+                DEPLOY_MODELS_CHANGED_TOTAL.inc(count, tags={"gateway": gateway_name, "action": action})
 
         if fatally_failed:
             logger.error(

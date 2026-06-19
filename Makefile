@@ -66,6 +66,9 @@ _release:
 	@sed -i 's/^version: .*/version: $(NEW_VERSION)/' helm/modelship/Chart.yaml
 	@sed -i 's/^appVersion: .*/appVersion: "$(NEW_VERSION)"/' helm/modelship/Chart.yaml
 	@sed -i '0,/^  tag: ".*"/{s/^  tag: ".*"/  tag: "$(NEW_VERSION)"/}' helm/modelship/values.yaml
+	@# --- sync monitoring assets into the chart (Helm .Files can't read docs/) ---
+	@cp docs/grafana-dashboard.json helm/modelship/files/grafana-dashboard.json
+	@cp docs/prometheus-alerts.yml helm/modelship/files/prometheus-alerts.yml
 	@# --- auto-update CHANGELOG.md ---
 	@PREV_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$PREV_TAG" ]; then \
@@ -84,7 +87,7 @@ _release:
 	if [ -n "$$CHANGED" ]; then echo "" >> "$$TMPF"; echo "### Changed" >> "$$TMPF"; echo "$$CHANGED" >> "$$TMPF"; fi; \
 	sed -i "/^The format is based on/r $$TMPF" CHANGELOG.md; \
 	rm -f "$$TMPF"
-	@git add pyproject.toml uv.lock CHANGELOG.md helm/modelship/Chart.yaml helm/modelship/values.yaml
+	@git add pyproject.toml uv.lock CHANGELOG.md helm/modelship/Chart.yaml helm/modelship/values.yaml helm/modelship/files
 	@git commit -m "release: v$(NEW_VERSION)"
 	@git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	@git push origin main --follow-tags

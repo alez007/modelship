@@ -163,6 +163,8 @@ single instance with a PVC is plenty; the chart only wires an address).
 | `redis.password` / `redis.existingSecret` | `""` | Redis password inline, or reference an existing Secret (`passwordKey`) |
 | `service.type` | `ClusterIP` | Set `LoadBalancer` to expose externally |
 | `podMonitor.enabled` | `false` | Prometheus Operator scraping |
+| `prometheusRule.enabled` | `false` | Ship the modelship alert rules as a PrometheusRule |
+| `grafanaDashboard.enabled` | `false` | Ship the Grafana dashboard as a sidecar-imported ConfigMap |
 | `kuberay-operator.enabled` | `false` | Bootstrap the operator as a subchart |
 
 See [values.yaml](values.yaml) for the full set with inline documentation.

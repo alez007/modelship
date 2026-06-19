@@ -21,12 +21,16 @@ from modelship.infer import deploy_coordinator
 from modelship.infer.infer_config import RequestWatcher
 from modelship.logging import get_logger
 from modelship.metrics import (
+    GATEWAY_RECONCILES_TOTAL,
+    GATEWAY_ROUTING_GENERATION,
+    GATEWAY_WATCH_ERRORS_TOTAL,
     MODELS_LOADED,
     REQUEST_DURATION_SECONDS,
     REQUEST_ERRORS_TOTAL,
     REQUEST_IN_PROGRESS,
     REQUEST_TOTAL,
     STREAM_CHUNKS_TOTAL,
+    stamp_gateway,
 )
 from modelship.openai.auth import ApiKeyMiddleware, get_api_keys
 from modelship.openai.protocol import (
@@ -162,6 +166,7 @@ class ModelshipAPI:
         self.expected_models: list[str] = []
         self._started_at = time.time()
         self._gateway_name = gateway_name
+        stamp_gateway(gateway_name)
         # Routing state is reconciled from the coordinator, the cluster-wide source
         # of truth — not pushed by the driver (a push hits only one replica). Each
         # replica runs a watch loop (started lazily on first request) that pulls a
@@ -254,6 +259,8 @@ class ModelshipAPI:
             self._all_ready_at = time.time()
         self._gen = new_gen
         MODELS_LOADED.set(len(self.models))
+        GATEWAY_RECONCILES_TOTAL.inc()
+        GATEWAY_ROUTING_GENERATION.set(new_gen)
 
     def _coord(self):
         if self._coordinator is None:
@@ -308,6 +315,7 @@ class ModelshipAPI:
                 return
             except Exception:
                 self._coordinator = None
+                GATEWAY_WATCH_ERRORS_TOTAL.inc()
                 logger.debug("gateway: watch iteration failed; retrying", exc_info=True)
                 await asyncio.sleep(_WATCH_RETRY_S)
 

@@ -21,6 +21,7 @@ from modelship.metrics import (
     MODEL_LOAD_FAILURES_TOTAL,
     TRANSCRIPTION_DURATION_SECONDS,
     TTS_GENERATION_DURATION_SECONDS,
+    stamp_gateway,
 )
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -141,6 +142,9 @@ def _spawn_orphan_reaper() -> subprocess.Popen | None:
 class ModelDeployment:
     async def __init__(self, config: ModelshipModelConfig):
         configure_logging()
+        # MSHIP_GATEWAY_NAME is forwarded to this actor via runtime_env (see
+        # actor_options), so the gateway tag is set without threading a param in.
+        stamp_gateway(os.environ.get("MSHIP_GATEWAY_NAME", ""))
         self.config = config
         # Spawn before loader init so the sidecar exists even if init blocks
         # in C code and the actor gets SIGKILL'd before __init__ completes.

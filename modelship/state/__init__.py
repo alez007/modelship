@@ -13,9 +13,11 @@ from ``MSHIP_STATE_STORE``.
 """
 
 import os
+import time
 from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 
+from modelship.metrics import STATE_STORE_OPERATION_DURATION_SECONDS, STATE_STORE_OPERATIONS_TOTAL
 from modelship.state.base import JsonValue, StateStore
 from modelship.state.file import FileStateStore
 from modelship.state.memory import MemoryStateStore
@@ -33,6 +35,43 @@ __all__ = [
 # are opted into explicitly (the chart sets one for k8s).
 _STATE_STORE_ENV = "MSHIP_STATE_STORE"
 _DEFAULT_URI = "memory://"
+
+
+class _InstrumentedStateStore(StateStore):
+    """Wraps any backend to record per-op latency + ok/error counts by backend, so
+    a slow/failing durable store (which silently breaks self-heal) is visible."""
+
+    def __init__(self, inner: StateStore, backend: str) -> None:
+        self._inner = inner
+        self._backend = backend
+
+    @property
+    def inner(self) -> StateStore:
+        """The wrapped backend (the concrete store the URI selected)."""
+        return self._inner
+
+    def _run(self, op: str, fn):
+        start = time.perf_counter()
+        result = "ok"
+        try:
+            return fn()
+        except Exception:
+            result = "error"
+            raise
+        finally:
+            STATE_STORE_OPERATION_DURATION_SECONDS.observe(
+                time.perf_counter() - start, tags={"backend": self._backend, "op": op}
+            )
+            STATE_STORE_OPERATIONS_TOTAL.inc(tags={"backend": self._backend, "op": op, "result": result})
+
+    def get(self, key: str) -> JsonValue | None:
+        return self._run("get", lambda: self._inner.get(key))
+
+    def set(self, key: str, value: JsonValue) -> None:
+        self._run("set", lambda: self._inner.set(key, value))
+
+    def delete(self, key: str) -> None:
+        self._run("delete", lambda: self._inner.delete(key))
 
 
 def _default_file_dir() -> Path:
@@ -90,7 +129,7 @@ def state_store_from_uri(uri: str) -> StateStore:
     builder = _BUILDERS.get(scheme)
     if builder is None:
         raise ValueError(f"unknown state-store scheme {scheme!r}; known: {sorted(_BUILDERS)}")
-    return builder(parsed)
+    return _InstrumentedStateStore(builder(parsed), backend=scheme)
 
 
 def get_state_store() -> StateStore:

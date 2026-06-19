@@ -16,7 +16,9 @@ from modelship.logging import get_logger
 
 logger = get_logger("startup")
 
-_LOG_PASSTHROUGH_ENV_VARS = ("MSHIP_LOG_LEVEL", "MSHIP_LOG_FORMAT", "MSHIP_LOG_TARGET")
+# Forwarded from the driver to each replica's runtime_env. Logging vars plus the
+# gateway name, which metrics.py reads to stamp every metric with its gateway.
+_PASSTHROUGH_ENV_VARS = ("MSHIP_LOG_LEVEL", "MSHIP_LOG_FORMAT", "MSHIP_LOG_TARGET", "MSHIP_GATEWAY_NAME")
 
 
 def build_cache_env_vars() -> dict[str, str]:
@@ -92,10 +94,10 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
     forwarded as the per-replica Ray Serve concurrency cap.
     """
     env_vars = build_cache_env_vars()
-    for log_var in _LOG_PASSTHROUGH_ENV_VARS:
-        val = os.environ.get(log_var)
+    for passthrough_var in _PASSTHROUGH_ENV_VARS:
+        val = os.environ.get(passthrough_var)
         if val is not None:
-            env_vars[log_var] = val
+            env_vars[passthrough_var] = val
 
     runtime_env: dict = {"env_vars": env_vars}
     if plugin_wheel is not None:

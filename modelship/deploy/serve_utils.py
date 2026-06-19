@@ -208,7 +208,9 @@ def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> Non
             name=gateway_name,
             num_replicas=gateway_replicas,
             max_ongoing_requests=gateway_max_ongoing,
-            ray_actor_options={"num_cpus": 0},
+            # Forward the gateway name so metrics.py stamps it on a replica that
+            # lands on a node whose env carries a different (or no) value.
+            ray_actor_options={"num_cpus": 0, "runtime_env": {"env_vars": {"MSHIP_GATEWAY_NAME": gateway_name}}},
             logging_config=serve_logging_config,
         ).bind(gateway_name),
         name=gateway_name,

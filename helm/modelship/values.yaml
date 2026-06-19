@@ -205,3 +205,25 @@ podMonitor:
   enabled: false
   interval: 30s
   labels: {}
+
+# -- Prometheus Operator PrometheusRule with the modelship alert rules (request
+# errors, latency, model-load failures, plus the HA control-plane and KubeRay
+# alerts). Needs the Prometheus Operator CRDs; rules are synced from
+# docs/prometheus-alerts.yml. `labels` should match your Prometheus's ruleSelector.
+prometheusRule:
+  enabled: false
+  labels: {}
+
+# -- Grafana dashboard as a ConfigMap, auto-imported by the Grafana sidecar that
+# watches for the discovery label. Set `label`/`labelValue` to match your sidecar
+# (kube-prometheus-stack defaults to grafana_dashboard: "1"). The dashboard's
+# Gateway/Model/Node dropdowns let one dashboard serve multiple gateways.
+grafanaDashboard:
+  enabled: false
+  label: grafana_dashboard
+  labelValue: "1"
+  extraLabels: {}
+  # Optional folder placement via the sidecar's folder annotation (e.g.
+  # "grafana_folder"); leave folderAnnotation empty to use the sidecar default.
+  folderAnnotation: ""
+  folder: "Modelship"
