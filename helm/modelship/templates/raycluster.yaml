@@ -25,7 +25,7 @@ spec:
   # ---- Head: CPU-only coordination (GCS, dashboard, Serve proxy). ----
   headGroupSpec:
     rayStartParams:
-      {{- toYaml .Values.head.rayStartParams | nindent 6 }}
+      {{- include "modelship.rayStartParams" (dict "root" $ "isHead" true "params" .Values.head.rayStartParams) | nindent 6 }}
     template:
       metadata:
         labels:
@@ -95,7 +95,7 @@ spec:
       minReplicas: {{ .minReplicas }}
       maxReplicas: {{ .maxReplicas }}
       rayStartParams:
-        {{- toYaml .rayStartParams | nindent 8 }}
+        {{- include "modelship.rayStartParams" (dict "root" $ "isHead" false "params" .rayStartParams) | nindent 8 }}
       template:
         metadata:
           labels:

@@ -100,9 +100,9 @@ podSecurityContext:
 # -- Ray head: CPU-only coordination node. No models are scheduled here
 # (num-gpus=0) so a GPU is never wasted on the GCS/dashboard/proxy.
 head:
-  rayStartParams:
-    num-gpus: "0"
-    dashboard-host: 0.0.0.0
+  # Overrides only — the chart already pins num-gpus=0, dashboard-host=0.0.0.0, and
+  # metrics-export-port (=metrics.port) on the head. Add extra ray start flags here.
+  rayStartParams: {}
   resources:
     requests:
       cpu: "2"
