@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-06-19
+
+### Added
+- HA control-plane metrics, per-gateway dimension, chart-shipped alerts/dashboard
+- reclaim Ray temp disk on restart and drop --redeploy
+
+### Fixed
+- warn when backed by a non-durable memory state store
+- retry routing reconcile when a deployment handle isn't ready yet
+- wire the Model dropdown into per-model panels
+- never let metric emission mask a state-store error
+- forward MSHIP_METRICS to replicas so --no-metrics is cluster-wide
+- export Ray metrics on the declared port
+
+### Changed
+- correct gateway-tagged HA metric count (six, not three)
+- make metric/state-store proxies transparent via __getattr__
+
 ## [0.4.0] - 2026-06-18
 
 ### Added
