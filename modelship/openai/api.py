@@ -185,13 +185,10 @@ class ModelshipAPI:
 
     def _register_deployment(self, app_name: str, model_name: str) -> bool:
         """Wire one deployment handle into the routing table. Returns True iff the
-        model was newly added. Sync so the reconcile path applies atomically."""
-        try:
-            handle = serve.get_app_handle(app_name)
-        except Exception:
-            logger.exception("Failed to get handle for app: %s", app_name)
-            return False
-
+        model was newly added. Raises if the app handle isn't resolvable yet (e.g.
+        controller lag / app not ready) so the caller can retry this generation
+        instead of skipping the model. Sync so the reconcile applies atomically."""
+        handle = serve.get_app_handle(app_name)
         newly_added = model_name not in self.models
         if newly_added:
             self.models[model_name] = {}
@@ -226,20 +223,36 @@ class ModelshipAPI:
     def _apply_routing(self, desired: dict[str, str], *, allow_removals: bool) -> None:
         """Reconcile the routing table to `desired` ({app_name: model_name}): add
         handles for newly-present apps and, when `allow_removals`, drop apps no
-        longer present. Sync / await-free → atomic w.r.t. in-flight requests."""
+        longer present. Sync / await-free → atomic w.r.t. in-flight requests.
+
+        Applies every app that can be registered (and any removals), then raises if
+        any could not be. The caller leaves `_gen` unadvanced so the watch loop
+        retries — re-pulling the latest snapshot — instead of skipping a model until
+        the next unrelated deploy."""
         routed = {app for handles in self.models.values() for app in handles}
 
+        failed: list[str] = []
         for app_name, model_name in desired.items():
-            if app_name in routed or not self._register_deployment(app_name, model_name):
+            if app_name in routed:
                 continue
-            base = self._last_model_at or self._started_at
-            self._model_load_times[model_name] = round(time.time() - base, 2)
-            self._last_model_at = time.time()
+            try:
+                newly_added = self._register_deployment(app_name, model_name)
+            except Exception:
+                logger.warning("gateway: deferring registration of %s (not ready yet)", app_name, exc_info=True)
+                failed.append(app_name)
+                continue
+            if newly_added:
+                base = self._last_model_at or self._started_at
+                self._model_load_times[model_name] = round(time.time() - base, 2)
+                self._last_model_at = time.time()
 
         if allow_removals:
             stale = [app for app in routed if app not in desired]
             if stale:
                 self._drop_apps(stale)
+
+        if failed:
+            raise RuntimeError(f"deployments not yet registerable: {failed}")
 
     def _apply_snapshot(self, snapshot: dict) -> None:
         """Apply a coordinator routing snapshot to this replica (atomic mutation).
@@ -297,7 +310,13 @@ class ModelshipAPI:
             self._coordinator = None  # re-resolve next time in case the handle went stale
             logger.debug("gateway: initial routing sync deferred; coordinator unavailable", exc_info=True)
             return False
-        self._apply_snapshot(snapshot)
+        try:
+            self._apply_snapshot(snapshot)
+        except Exception:
+            # A deployment isn't handle-able yet; defer to the watch loop rather than
+            # failing the first request. The replica stays not-ready until it retries.
+            logger.debug("gateway: initial routing apply deferred; deployment not ready", exc_info=True)
+            return False
         return True
 
     async def _watch_loop(self) -> None:

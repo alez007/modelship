@@ -77,10 +77,41 @@ class TestApplyRouting:
         assert api.models["qwen"]["qwen-b7x2p"] is h2
         assert len(api.model_list) == 1
 
-    def test_handle_failure_skips(self, api):
-        _apply(api, {"qwen-a3f9k": "qwen"}, handles=Exception("not found"))
+    def test_handle_failure_raises_and_holds_generation(self, api):
+        # A transient get_app_handle failure must not be swallowed: the apply raises
+        # and _gen is left unadvanced, so the watch loop re-pulls and retries this
+        # generation instead of black-holing the (successfully deployed) model.
+        api._gen = 0
+        with pytest.raises(RuntimeError, match="not yet registerable"):
+            _apply(api, {"qwen-a3f9k": "qwen"}, gen=1, handles=Exception("controller lag"))
         assert "qwen" not in api.models
         assert len(api.model_list) == 0
+        assert api._gen == 0
+
+    def test_handle_failure_then_retry_registers(self, api):
+        api._gen = 0
+        with pytest.raises(RuntimeError):
+            _apply(api, {"qwen-a3f9k": "qwen"}, gen=1, handles=Exception("controller lag"))
+        # Same generation re-pulled once the controller has caught up: now it sticks.
+        _apply(api, {"qwen-a3f9k": "qwen"}, gen=1)
+        assert "qwen" in api.models
+        assert api._gen == 1
+
+    def test_partial_failure_applies_good_apps_and_raises(self, api):
+        # One app registers, the other's handle lags. The good one is wired up, the
+        # apply still raises (naming the laggard), and _gen does not advance.
+        api._gen = 0
+        h_ok = MagicMock()
+        with pytest.raises(RuntimeError, match="kokoro"):
+            _apply(
+                api,
+                {"qwen-a3f9k": "qwen", "kokoro-c1m4n": "kokoro"},
+                gen=1,
+                handles=[h_ok, RuntimeError("lag")],
+            )
+        assert "qwen" in api.models
+        assert "kokoro" not in api.models
+        assert api._gen == 0
 
     def test_records_per_model_load_times_and_ready_timestamp(self, api):
         _apply(api, {"qwen-a3f9k": "qwen"}, expected=["qwen", "kokoro"])
@@ -183,6 +214,21 @@ class TestWatchReconcile:
         with patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", side_effect=RuntimeError):
             assert api._sync_routing_blocking() is False
         assert api.models == {}
+
+    def test_sync_defers_when_deployment_not_ready(self, api):
+        # Snapshot fetched fine, but a deployment isn't handle-able yet: the blocking
+        # sync defers (returns False, _gen unadvanced) rather than failing the first
+        # request; the watch loop retries.
+        api._watch_task = None
+        snapshot = {"models": {"qwen-aaaaaaaaaa": "qwen"}, "expected": ["qwen"], "generation": 2}
+        with (
+            patch("modelship.infer.deploy_coordinator.get_or_create_coordinator", return_value=MagicMock()),
+            patch("modelship.openai.api.ray.get", return_value=snapshot),
+            patch("modelship.openai.api.serve.get_app_handle", side_effect=RuntimeError("controller lag")),
+        ):
+            assert api._sync_routing_blocking() is False
+        assert api.models == {}
+        assert api._gen == 0
 
     def test_failed_sync_drops_stale_coordinator_handle(self, api):
         # A cached handle whose actor died (recreated with a new ActorID) must be
