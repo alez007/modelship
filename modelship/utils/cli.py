@@ -73,6 +73,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="OpenTelemetry OTLP endpoint e.g. http://collector:4317 (env: OTEL_EXPORTER_OTLP_ENDPOINT)",
     )
     parser.add_argument("--no-metrics", action="store_true", default=None, help="Disable metrics (env: MSHIP_METRICS)")
+    parser.add_argument(
+        "--prune-ray-sessions",
+        choices=["true", "false"],
+        default=None,
+        help=(
+            "Whether to delete stale dead-pid Ray session dirs under the temp root on "
+            "own-cluster startup (env: MSHIP_PRUNE_RAY_SESSIONS, default: true)"
+        ),
+    )
     parser.add_argument("--api-keys", help="Comma-separated API keys (env: MSHIP_API_KEYS)")
     parser.add_argument(
         "--max-request-body-bytes", type=int, help="Max request body size in bytes (env: MSHIP_MAX_REQUEST_BODY_BYTES)"
@@ -83,12 +92,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Port for the OpenAI-compatible API (env: MSHIP_OPENAI_API_PORT, default: 8000)",
     )
     parser.add_argument(
-        "--redeploy",
-        action="store_true",
-        default=False,
-        help="Tear down all existing deployments before deploying (default: additive)",
-    )
-    parser.add_argument(
         "--reconcile",
         action="store_true",
         default=False,
@@ -96,8 +99,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Diff models.yaml against the cluster: add new models, remove dropped ones, "
             "replace those whose config changed (matched by name + fingerprint). "
             "With no --config, reconciles the live cluster to this gateway's persisted "
-            "effective config only (self-heal after cluster loss). "
-            "Mutually exclusive with --redeploy."
+            "effective config only (self-heal after cluster loss)."
         ),
     )
     parser.add_argument(
@@ -110,10 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "stop_start: drop old first, then deploy new (brief unavailability, no overlap)."
         ),
     )
-    args = parser.parse_args(argv)
-    if args.redeploy and args.reconcile:
-        parser.error("--redeploy and --reconcile are mutually exclusive")
-    return args
+    return parser.parse_args(argv)
 
 
 def apply_args_to_env(args: argparse.Namespace) -> None:
@@ -127,6 +126,8 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_USE_EXISTING_RAY_CLUSTER"] = "true"
     if args.no_metrics is True:
         os.environ["MSHIP_METRICS"] = "false"
+    if args.prune_ray_sessions is not None:
+        os.environ["MSHIP_PRUNE_RAY_SESSIONS"] = args.prune_ray_sessions
     if args.max_request_body_bytes is not None:
         os.environ["MSHIP_MAX_REQUEST_BODY_BYTES"] = str(args.max_request_body_bytes)
     if args.gateway_replicas is not None:

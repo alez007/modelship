@@ -58,7 +58,7 @@ Entry point is `mship_deploy.py` (not a console script, not `python -m`). It:
 
 1. Reads `config/models.yaml` (gitignored — copy one from `config/examples/`).
 2. Starts its **own** Ray head by default (sized from `RAY_HEAD_CPU_NUM`/`RAY_HEAD_GPU_NUM`, auto-detected if unset; metrics on `RAY_METRICS_EXPORT_PORT`) and tears it down on exit. With `--use-existing-ray-cluster` it instead connects to a cluster you manage via `ray.init(address="auto")` and deploys-and-exits without teardown — the driver must run **on** a cluster node (Docker co-located / k8s RayJob / bare-metal node); it cannot attach from off-cluster.
-3. Deploys models **additively** by default (new deployments get a random suffix, e.g. `qwen-a3f9k`). Pass `--redeploy` to tear everything down first.
+3. Deploys models **additively** by default (new deployments get a random suffix, e.g. `qwen-a3f9k`). Pass `--reconcile` to instead make the cluster match the config exactly (add/remove/replace) — it never tears the cluster down.
 4. Starts a FastAPI gateway Ray Serve app named `modelship api` (override with `--gateway-name`), listening on port `8000`.
 
 The Docker image's `CMD` is `uv run --no-sync mship_deploy.py` (against the venv baked at build time; extras selected by `--build-arg MSHIP_VARIANT=gpu|cpu`), which starts its own Ray head and runs the deploy loop. Plugin wheels under `MSHIP_PLUGIN_WHEEL_DIR` are injected per-deployment via Ray `runtime_env`, resolved automatically from `models.yaml`. The Dev Container overrides this `CMD`, so inside a Dev Container you run `mship_deploy.py` manually (see `docs/development.md`).

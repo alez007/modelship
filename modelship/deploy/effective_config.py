@@ -1,7 +1,7 @@
 """Per-gateway *effective config* — the durable desired-state for deploys.
 
 Every ``mship_deploy`` invocation, whatever its mode, folds the user's input into
-the gateway's effective set (additive = union; reconcile/redeploy = replace), then
+the gateway's effective set (additive = union; reconcile = replace), then
 the deploy ALWAYS reconciles the live cluster to that effective set. Self-heal is
 then just "re-run the deploy": it reads the persisted effective set and reconciles
 onto an empty cluster, restoring the TRUE live set after the cluster dies — not
@@ -23,19 +23,15 @@ from modelship.state import StateStore
 
 logger = get_logger("startup")
 
-DeployMode = Literal["additive", "reconcile", "redeploy"]
+DeployMode = Literal["additive", "reconcile"]
 
 # State-store namespace; one key per gateway: "effective/<gateway-name>".
 _NAMESPACE = "effective"
 
 
-def resolve_mode(*, reconcile: bool, redeploy: bool) -> DeployMode:
-    """Map the mutually-exclusive CLI flags to the effective-config merge verb."""
-    if redeploy:
-        return "redeploy"
-    if reconcile:
-        return "reconcile"
-    return "additive"
+def resolve_mode(*, reconcile: bool) -> DeployMode:
+    """Map the CLI flags to the effective-config merge verb."""
+    return "reconcile" if reconcile else "additive"
 
 
 def _deployment_name(raw: dict, gateway_name: str) -> str:
@@ -57,9 +53,9 @@ def merge(
     - additive: union — append input dicts whose deployment name isn't already
       present (identical config = idempotent skip; same name + different config =
       a distinct deployment the gateway round-robins, preserved as today).
-    - reconcile / redeploy: input replaces the effective set entirely.
+    - reconcile: input replaces the effective set entirely.
     """
-    if mode in ("reconcile", "redeploy"):
+    if mode == "reconcile":
         return list(input_raw)
 
     present = {_deployment_name(d, gateway_name) for d in effective_raw}

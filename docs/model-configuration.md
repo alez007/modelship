@@ -12,7 +12,9 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--model-stack` | `MSHIP_MODEL_STACK` | — | Auto-generate a config from a [profile](#profiles-mship_model_stack) (`chat`/`assistant`/`studio`/`everything`) sized to detected hardware |
 | `--gateway-name` | `MSHIP_GATEWAY_NAME` | `modelship api` | Name for the API gateway app |
 | `--use-existing-ray-cluster` | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Connect to a Ray cluster you manage (must run on a cluster node) instead of starting one. Implies deploy-and-exit (no teardown) |
-| `--redeploy` | — | `false` | Tear down all existing deployments before deploying |
+| `--prune-ray-sessions` | `MSHIP_PRUNE_RAY_SESSIONS` | `true` | When starting its own Ray head, delete stale `session_*` dirs left under the Ray temp root (default `/tmp/ray`) by previous, no-longer-running heads — Ray never cleans these up, so they fill the disk across restarts. A live head's session is always kept. Set `false` to keep them (e.g. for debugging). No effect with `--use-existing-ray-cluster` |
+| `--reconcile` | — | `false` | Reconcile the cluster to the config: add new models, remove dropped ones, replace changed ones (vs. the default additive union). With no `--config`, reconciles to this gateway's persisted effective config (self-heal) |
+| `--replace-strategy` | — | `blue_green` | How to replace a changed model: `blue_green` (deploy new before dropping old, no request loss) or `stop_start` (drop old first, brief unavailability) |
 | `--cache-dir` | `MSHIP_CACHE_DIR` | `/.cache` | Base cache directory |
 | `--state-store` | `MSHIP_STATE_STORE` | `memory://` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) |
 | — | `MSHIP_LOG_LEVEL` | `INFO` | Log level (env-var-only: must be set before `import ray` so library loggers latch the right level) |
@@ -47,10 +49,12 @@ python mship_deploy.py --config config/tts.yaml
 python mship_deploy.py --config config/embeddings.yaml
 ```
 
-Use `--redeploy` to tear down everything and start fresh:
+Use `--reconcile` to make the running cluster match a config exactly — new models
+are added, dropped ones removed, and changed ones replaced (gracefully, draining
+in-flight requests). Unlike additive mode it never tears down the Ray cluster:
 
 ```bash
-python mship_deploy.py --config config/models.yaml --redeploy
+python mship_deploy.py --config config/models.yaml --reconcile
 ```
 
 Multiple gateways can run independently by using `--gateway-name`:
