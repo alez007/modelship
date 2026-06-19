@@ -172,6 +172,35 @@ class TestBuildDeploymentOptions:
         opts = build_deployment_options(config)
         assert opts["ray_actor_options"]["num_gpus"] == 0
 
+    def test_passthrough_env_vars_forwarded_to_replicas(self, monkeypatch):
+        # --no-metrics / logging / gateway set on the driver must reach the replica
+        # via runtime_env, else the replica defaults to metrics-on (inconsistent).
+        monkeypatch.setenv("MSHIP_METRICS", "false")
+        monkeypatch.setenv("MSHIP_GATEWAY_NAME", "edge")
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=1,
+        )
+        env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
+        assert env_vars["MSHIP_METRICS"] == "false"
+        assert env_vars["MSHIP_GATEWAY_NAME"] == "edge"
+
+    def test_unset_passthrough_env_vars_not_forwarded(self, monkeypatch):
+        # Unset on the driver → not forwarded, so the replica keeps its own default.
+        monkeypatch.delenv("MSHIP_METRICS", raising=False)
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=1,
+        )
+        env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
+        assert "MSHIP_METRICS" not in env_vars
+
     def test_pipeline_parallel_uses_placement_group(self):
         # num_gpus=2 + pp=2 satisfies the world_size==num_gpus invariant; the
         # outer actor sits in bundle 0 with no GPU and vLLM workers claim the

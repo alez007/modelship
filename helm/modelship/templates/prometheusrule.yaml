@@ -1,0 +1,18 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- /*
+PrometheusRule with the modelship alert rules (synced from docs/prometheus-alerts.yml
+into files/ at release). Requires the Prometheus Operator CRDs. The KubeRay group
+needs kube-state-metrics scraped; tune its selectors to your release/namespace.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "modelship.fullname" . }}
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/prometheus-alerts.yml" | nindent 2 }}
+{{- end }}

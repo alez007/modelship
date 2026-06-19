@@ -32,7 +32,13 @@ import ray
 from ray import exceptions as ray_exceptions
 
 from modelship.logging import get_logger
-from modelship.state import get_state_store
+from modelship.metrics import (
+    COORDINATOR_GENERATION,
+    DEPLOY_LOCK_HELD,
+    DEPLOY_RESERVATIONS_TOTAL,
+    OPERATOR_FORCE_RELEASE_TOTAL,
+)
+from modelship.state import MemoryStateStore, get_state_store
 
 logger = get_logger("deploy_coordinator")
 
@@ -85,6 +91,16 @@ class ModelshipDeployCoordinator:
         # wait_for_change already treats as "changed" so replicas re-pull and
         # reconcile from the reloaded registry.
         self._store = get_state_store()
+        if isinstance(getattr(self._store, "inner", self._store), MemoryStateStore):
+            # A memory store dies with the actor: a restarted coordinator reloads an
+            # empty registry, and the next deploy (gen advances) re-enables removals
+            # against it — dropping still-healthy models from gateway routing. Fine
+            # single-node; for multi-node/HA set MSHIP_STATE_STORE to file:// or redis://.
+            logger.warning(
+                "Deploy coordinator is backed by a non-durable memory state store; its routing "
+                "registry will be lost on coordinator restart. Set MSHIP_STATE_STORE to file:// "
+                "or redis:// for multi-node/HA."
+            )
         saved = self._store.get(_STATE_KEY)
         saved = saved if isinstance(saved, dict) else {}
         self._registry: dict[str, dict[str, str]] = saved.get("registry") or {}
@@ -111,6 +127,7 @@ class ModelshipDeployCoordinator:
         Event is set (releasing replicas blocked on it) then replaced with a fresh
         unset Event for the next round."""
         self._generation[gateway_name] = self._generation.get(gateway_name, 0) + 1
+        COORDINATOR_GENERATION.set(self._generation[gateway_name], tags={"gateway": gateway_name})
         old = self._change.get(gateway_name)
         if old is not None:
             old.set()
@@ -172,18 +189,23 @@ class ModelshipDeployCoordinator:
         probe_handle,
     ) -> tuple[bool, str]:
         if self._held_by is not None:
+            DEPLOY_RESERVATIONS_TOTAL.inc(tags={"result": "locked"})
             return False, f"locked_by:{self._held_by}:{self._held_deployment}"
 
         avail = ray.available_resources()
         eps = 1e-6
         if float(num_gpus or 0) > avail.get("GPU", 0) + eps:
+            DEPLOY_RESERVATIONS_TOTAL.inc(tags={"result": "insufficient_gpu"})
             return False, "insufficient_gpu"
         if float(num_cpus or 0) > avail.get("CPU", 0) + eps:
+            DEPLOY_RESERVATIONS_TOTAL.inc(tags={"result": "insufficient_cpu"})
             return False, "insufficient_cpu"
 
         self._held_by = operator_id
         self._held_deployment = deployment_name
         self._held_since = time.time()
+        DEPLOY_RESERVATIONS_TOTAL.inc(tags={"result": "granted"})
+        DEPLOY_LOCK_HELD.set(1)
         self._watcher_task = asyncio.create_task(self._watch_operator_liveness(operator_id, probe_handle))
         logger.info(
             "Reserved for operator=%s deployment=%s (num_gpus=%s, num_cpus=%s)",
@@ -217,6 +239,7 @@ class ModelshipDeployCoordinator:
         self._held_by = None
         self._held_deployment = None
         self._held_since = 0.0
+        DEPLOY_LOCK_HELD.set(0)
         if self._watcher_task is not None and not self._watcher_task.done():
             self._watcher_task.cancel()
         self._watcher_task = None
@@ -244,6 +267,7 @@ class ModelshipDeployCoordinator:
                     operator_id,
                     self._held_deployment,
                 )
+                OPERATOR_FORCE_RELEASE_TOTAL.inc(tags={"reason": "probe_gone"})
                 self._clear_hold()
                 return
             except TimeoutError:
@@ -254,6 +278,7 @@ class ModelshipDeployCoordinator:
                         operator_id,
                         timeout_strikes * _LIVENESS_POLL_INTERVAL_S,
                     )
+                    OPERATOR_FORCE_RELEASE_TOTAL.inc(tags={"reason": "unresponsive"})
                     self._clear_hold()
                     return
 

@@ -1,0 +1,25 @@
+{{- if .Values.grafanaDashboard.enabled }}
+{{- /*
+The modelship Grafana dashboard as a ConfigMap. The Grafana sidecar auto-imports
+ConfigMaps carrying the discovery label (default grafana_dashboard: "1"); set
+grafanaDashboard.label to match your sidecar's configured label if different.
+JSON is synced from docs/grafana-dashboard.json into files/ at release.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "modelship.fullname" . }}-dashboard
+  labels:
+    {{- include "modelship.labels" . | nindent 4 }}
+    {{ .Values.grafanaDashboard.label }}: {{ .Values.grafanaDashboard.labelValue | quote }}
+    {{- with .Values.grafanaDashboard.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.grafanaDashboard.folderAnnotation }}
+  annotations:
+    {{ . }}: {{ $.Values.grafanaDashboard.folder | quote }}
+  {{- end }}
+data:
+  modelship.json: |
+    {{- .Files.Get "files/grafana-dashboard.json" | nindent 4 }}
+{{- end }}

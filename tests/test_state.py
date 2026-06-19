@@ -43,20 +43,22 @@ class TestMemoryStateStore:
 
 
 class TestStateStoreFromUri:
+    # state_store_from_uri wraps the chosen backend in an instrumented proxy; the
+    # concrete store the URI selected is exposed as `.inner`.
     def test_memory_scheme(self):
-        assert isinstance(state_store_from_uri("memory://"), MemoryStateStore)
+        assert isinstance(state_store_from_uri("memory://").inner, MemoryStateStore)
 
     def test_bare_value_treated_as_scheme(self):
-        assert isinstance(state_store_from_uri("memory"), MemoryStateStore)
+        assert isinstance(state_store_from_uri("memory").inner, MemoryStateStore)
 
     def test_file_scheme_uses_uri_path(self):
-        store = state_store_from_uri("file:///tmp/mship-state-test")
+        store = state_store_from_uri("file:///tmp/mship-state-test").inner
         assert isinstance(store, FileStateStore)
         assert str(store.base_dir) == "/tmp/mship-state-test"
 
     def test_file_scheme_empty_path_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv("MSHIP_STATE_DIR", "/var/lib/mship/state")
-        store = state_store_from_uri("file://")
+        store = state_store_from_uri("file://").inner
         assert isinstance(store, FileStateStore)
         assert str(store.base_dir) == "/var/lib/mship/state"
 
@@ -71,7 +73,7 @@ class TestStateStoreFromUri:
         import redis
 
         monkeypatch.setattr(redis, "from_url", lambda *a, **k: object())
-        assert isinstance(state_store_from_uri("redis://cache:6379/0"), RedisStateStore)
+        assert isinstance(state_store_from_uri("redis://cache:6379/0").inner, RedisStateStore)
 
     def test_unknown_scheme_raises(self):
         with pytest.raises(ValueError, match="unknown state-store scheme"):
@@ -79,11 +81,11 @@ class TestStateStoreFromUri:
 
     def test_get_state_store_defaults_to_memory(self, monkeypatch):
         monkeypatch.delenv("MSHIP_STATE_STORE", raising=False)
-        assert isinstance(get_state_store(), MemoryStateStore)
+        assert isinstance(get_state_store().inner, MemoryStateStore)
 
     def test_get_state_store_reads_env(self, monkeypatch):
         monkeypatch.setenv("MSHIP_STATE_STORE", "file:///tmp/mship-env-state")
-        store = get_state_store()
+        store = get_state_store().inner
         assert isinstance(store, FileStateStore)
         assert str(store.base_dir) == "/tmp/mship-env-state"
 

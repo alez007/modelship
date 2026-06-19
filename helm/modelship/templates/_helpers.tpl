@@ -119,6 +119,24 @@ Name of the Secret holding the Redis password (existing or the chart's own).
 {{- end -}}
 
 {{/*
+Full rayStartParams for a Ray node: chart-managed defaults plus the caller's
+overrides (overrides win). metrics-export-port is pinned to metrics.port on every
+node so Ray's Prometheus endpoint matches the `metrics` containerPort + PodMonitor
+(unset, ray start binds a random port and scrapes fail). The head additionally
+runs CPU-only (num-gpus 0) and binds the dashboard on all interfaces; workers keep
+num-gpus caller-controlled (GPU groups omit it to autodetect).
+Call with (dict "root" $ "isHead" <bool> "params" <rayStartParams>).
+*/}}
+{{- define "modelship.rayStartParams" -}}
+{{- $defaults := dict "metrics-export-port" (.root.Values.metrics.port | toString) -}}
+{{- if .isHead -}}
+{{- $_ := set $defaults "num-gpus" "0" -}}
+{{- $_ := set $defaults "dashboard-host" "0.0.0.0" -}}
+{{- end -}}
+{{- merge (deepCopy (.params | default dict)) $defaults | toYaml -}}
+{{- end -}}
+
+{{/*
 Explicit env for every Ray pod (head + workers): the state-store URI the
 coordinator and effective-config read via get_state_store(). It MUST be on every
 pod so the coordinator — scheduled on any node — agrees with the driver.
