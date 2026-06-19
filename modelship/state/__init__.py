@@ -67,10 +67,14 @@ class _InstrumentedStateStore(StateStore):
             result = "error"
             raise
         finally:
-            STATE_STORE_OPERATION_DURATION_SECONDS.observe(
-                time.perf_counter() - start, tags={"backend": self._backend, "op": op}
-            )
-            STATE_STORE_OPERATIONS_TOTAL.inc(tags={"backend": self._backend, "op": op, "result": result})
+            # Best-effort: a metrics-agent hiccup must never mask the real op error.
+            try:
+                STATE_STORE_OPERATION_DURATION_SECONDS.observe(
+                    time.perf_counter() - start, tags={"backend": self._backend, "op": op}
+                )
+                STATE_STORE_OPERATIONS_TOTAL.inc(tags={"backend": self._backend, "op": op, "result": result})
+            except Exception:
+                pass
 
     def get(self, key: str) -> JsonValue | None:
         return self._run("get", lambda: self._inner.get(key))
