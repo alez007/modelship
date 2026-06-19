@@ -16,9 +16,16 @@ from modelship.logging import get_logger
 
 logger = get_logger("startup")
 
-# Forwarded from the driver to each replica's runtime_env. Logging vars plus the
-# gateway name, which metrics.py reads to stamp every metric with its gateway.
-_PASSTHROUGH_ENV_VARS = ("MSHIP_LOG_LEVEL", "MSHIP_LOG_FORMAT", "MSHIP_LOG_TARGET", "MSHIP_GATEWAY_NAME")
+# Forwarded from the driver to each replica's runtime_env: logging vars, the gateway
+# name (metrics.py stamps every metric with it), and MSHIP_METRICS so --no-metrics on
+# the driver also disables metrics in the replicas (else they'd default to on).
+_PASSTHROUGH_ENV_VARS = (
+    "MSHIP_LOG_LEVEL",
+    "MSHIP_LOG_FORMAT",
+    "MSHIP_LOG_TARGET",
+    "MSHIP_GATEWAY_NAME",
+    "MSHIP_METRICS",
+)
 
 
 def build_cache_env_vars() -> dict[str, str]:
