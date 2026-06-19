@@ -38,7 +38,7 @@ from modelship.metrics import (
     DEPLOY_RESERVATIONS_TOTAL,
     OPERATOR_FORCE_RELEASE_TOTAL,
 )
-from modelship.state import get_state_store
+from modelship.state import MemoryStateStore, get_state_store
 
 logger = get_logger("deploy_coordinator")
 
@@ -91,6 +91,16 @@ class ModelshipDeployCoordinator:
         # wait_for_change already treats as "changed" so replicas re-pull and
         # reconcile from the reloaded registry.
         self._store = get_state_store()
+        if isinstance(getattr(self._store, "inner", self._store), MemoryStateStore):
+            # A memory store dies with the actor: a restarted coordinator reloads an
+            # empty registry, and the next deploy (gen advances) re-enables removals
+            # against it — dropping still-healthy models from gateway routing. Fine
+            # single-node; for multi-node/HA set MSHIP_STATE_STORE to file:// or redis://.
+            logger.warning(
+                "Deploy coordinator is backed by a non-durable memory state store; its routing "
+                "registry will be lost on coordinator restart. Set MSHIP_STATE_STORE to file:// "
+                "or redis:// for multi-node/HA."
+            )
         saved = self._store.get(_STATE_KEY)
         saved = saved if isinstance(saved, dict) else {}
         self._registry: dict[str, dict[str, str]] = saved.get("registry") or {}
