@@ -50,6 +50,14 @@ class _InstrumentedStateStore(StateStore):
         """The wrapped backend (the concrete store the URI selected)."""
         return self._inner
 
+    def __getattr__(self, name: str):
+        # Fires only on a miss (get/set/delete/inner are defined). Delegate any
+        # backend-specific attr to the wrapped store; guard _inner so a lookup
+        # before __init__ (e.g. unpickling) raises instead of recursing.
+        if name == "_inner":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
     def _run(self, op: str, fn):
         start = time.perf_counter()
         result = "ok"

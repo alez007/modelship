@@ -108,6 +108,14 @@ class _GatewayScopedMetric:
     def __init__(self, inner):
         self._inner = inner
 
+    def __getattr__(self, name):
+        # Fires only on a miss (inc/set/observe are defined). Delegate any other
+        # metric attr (name, description, Ray internals) to the wrapped metric;
+        # guard _inner so a pre-__init__ lookup raises instead of recursing.
+        if name == "_inner":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
     def _tags(self, tags):
         merged = dict(tags) if tags else {}
         merged["gateway"] = _GATEWAY["name"]
