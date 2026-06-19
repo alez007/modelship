@@ -61,13 +61,10 @@ class TestFileStateStore:
 
 class TestResolveMode:
     def test_default_is_additive(self):
-        assert resolve_mode(reconcile=False, redeploy=False) == "additive"
+        assert resolve_mode(reconcile=False) == "additive"
 
     def test_reconcile(self):
-        assert resolve_mode(reconcile=True, redeploy=False) == "reconcile"
-
-    def test_redeploy_wins(self):
-        assert resolve_mode(reconcile=False, redeploy=True) == "redeploy"
+        assert resolve_mode(reconcile=True) == "reconcile"
 
 
 class TestMerge:
@@ -89,10 +86,6 @@ class TestMerge:
 
     def test_reconcile_replaces(self):
         merged = merge([_model("a"), _model("b")], [_model("c")], "g", "reconcile")
-        assert [m["name"] for m in merged] == ["c"]
-
-    def test_redeploy_replaces(self):
-        merged = merge([_model("a")], [_model("c")], "g", "redeploy")
         assert [m["name"] for m in merged] == ["c"]
 
 

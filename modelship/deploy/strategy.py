@@ -33,8 +33,8 @@ def compute_deploy_plan(
     gateway_name: str,
 ) -> DeployPlan:
     """Diff the desired effective set against what's live. The deploy ALWAYS
-    reconciles live -> desired (the merge verb already folded additive/reconcile/
-    redeploy into `desired_conf`). Deployment names are `{model}-{fingerprint}`, so
+    reconciles live -> desired (the merge verb already folded additive/reconcile
+    into `desired_conf`). Deployment names are `{model}-{fingerprint}`, so
     a pure set comparison detects renames and config drift.
 
     Removal is scoped to `prev_effective_names` — the deployments that were under

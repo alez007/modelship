@@ -22,13 +22,9 @@ class TestParseArgs:
     def test_defaults(self):
         args = parse_args([])
         assert args.config is None
-        assert args.redeploy is False
+        assert args.reconcile is False
         assert args.gateway_name is None
         assert args.use_existing_ray_cluster is None
-
-    def test_redeploy_flag(self):
-        args = parse_args(["--redeploy"])
-        assert args.redeploy is True
 
     def test_reconcile_flag(self):
         args = parse_args(["--reconcile"])
@@ -39,10 +35,6 @@ class TestParseArgs:
         args = parse_args(["--reconcile", "--replace-strategy", "stop_start"])
         assert args.reconcile is True
         assert args.replace_strategy == "stop_start"
-
-    def test_redeploy_and_reconcile_mutually_exclusive(self):
-        with pytest.raises(SystemExit):
-            parse_args(["--redeploy", "--reconcile"])
 
     def test_config_path(self):
         args = parse_args(["--config", "/some/path/models.yaml"])
@@ -72,13 +64,13 @@ class TestParseArgs:
                 "llm.yaml",
                 "--gateway-name",
                 "llm-api",
-                "--redeploy",
+                "--reconcile",
                 "--use-existing-ray-cluster",
             ]
         )
         assert args.config == "llm.yaml"
         assert args.gateway_name == "llm-api"
-        assert args.redeploy is True
+        assert args.reconcile is True
         assert args.use_existing_ray_cluster is True
 
 
@@ -102,6 +94,26 @@ class TestApplyArgsToEnv:
         monkeypatch.delenv("MSHIP_GATEWAY_REPLICAS", raising=False)
         apply_args_to_env(parse_args(["--gateway-replicas", "4"]))
         assert os.environ["MSHIP_GATEWAY_REPLICAS"] == "4"
+
+    def test_prune_ray_sessions_false_sets_env(self):
+        # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit
+        # — otherwise MSHIP_PRUNE_RAY_SESSIONS=false leaks into the prune tests.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_PRUNE_RAY_SESSIONS", None)
+            apply_args_to_env(parse_args(["--prune-ray-sessions", "false"]))
+            assert os.environ["MSHIP_PRUNE_RAY_SESSIONS"] == "false"
+
+    def test_prune_ray_sessions_true_sets_env(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_PRUNE_RAY_SESSIONS", None)
+            apply_args_to_env(parse_args(["--prune-ray-sessions", "true"]))
+            assert os.environ["MSHIP_PRUNE_RAY_SESSIONS"] == "true"
+
+    def test_prune_ray_sessions_absent_leaves_env_untouched(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_PRUNE_RAY_SESSIONS", None)
+            apply_args_to_env(parse_args([]))
+            assert "MSHIP_PRUNE_RAY_SESSIONS" not in os.environ
 
 
 class TestRandSuffix:
@@ -388,6 +400,8 @@ class TestConnectRay:
         with (
             patch.dict(os.environ, env, clear=False),
             patch.object(serve_utils.ray, "init") as mock_init,
+            # Don't let the own-cluster branch sweep the real /tmp/ray during tests.
+            patch.object(serve_utils, "prune_ray_sessions"),
         ):
             serve_utils.connect_ray(20)
         _, kwargs = mock_init.call_args
@@ -428,3 +442,141 @@ class TestConnectRay:
         kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_METRICS": "false"})
         assert "address" not in kwargs
         assert "_metrics_export_port" not in kwargs
+
+    def test_prunes_stale_sessions_on_own_cluster(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, clear=False),
+            patch.object(serve_utils.ray, "init"),
+            patch.object(serve_utils, "prune_ray_sessions") as mock_prune,
+        ):
+            serve_utils.connect_ray(20)
+        mock_prune.assert_called_once()
+
+    def test_skips_prune_on_existing_cluster(self):
+        from modelship.deploy import serve_utils
+
+        # We don't own the temp root on an external cluster — never sweep it.
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"}, clear=False),
+            patch.object(serve_utils.ray, "init"),
+            patch.object(serve_utils, "prune_ray_sessions") as mock_prune,
+        ):
+            serve_utils.connect_ray(20)
+        mock_prune.assert_not_called()
+
+
+class TestPruneRaySessions:
+    """`prune_ray_sessions` resolves the temp root via Ray's own
+    `get_ray_temp_dir()`, which returns `<RAY_TMPDIR>/ray` — so pointing
+    RAY_TMPDIR at a tmp dir fully isolates these tests from the real /tmp/ray."""
+
+    def _temp_root(self, tmp_path):
+        root = tmp_path / "ray"
+        root.mkdir()
+        return root
+
+    def _make_session(self, root, pid, name=None):
+        session = root / (name or f"session_2026-06-19_10-00-00_000000_{pid}")
+        (session / "logs").mkdir(parents=True)
+        (session / "logs" / "raylet.out").write_text("log")
+        return session
+
+    def test_removes_dead_pid_session(self, tmp_path):
+        from modelship.deploy import serve_utils
+
+        root = self._temp_root(tmp_path)
+        dead = self._make_session(root, 111)
+        with (
+            patch.dict(
+                os.environ,
+                {"RAY_TMPDIR": str(tmp_path), "MSHIP_PRUNE_RAY_SESSIONS": "true"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "_pid_alive", return_value=False),
+        ):
+            serve_utils.prune_ray_sessions()
+        assert not dead.exists()
+
+    def test_keeps_live_pid_session(self, tmp_path):
+        from modelship.deploy import serve_utils
+
+        root = self._temp_root(tmp_path)
+        live = self._make_session(root, 222)
+        with (
+            patch.dict(
+                os.environ,
+                {"RAY_TMPDIR": str(tmp_path), "MSHIP_PRUNE_RAY_SESSIONS": "true"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "_pid_alive", return_value=True),
+        ):
+            serve_utils.prune_ray_sessions()
+        assert live.exists()
+
+    def test_skips_symlink_and_non_session_entries(self, tmp_path):
+        from modelship.deploy import serve_utils
+
+        root = self._temp_root(tmp_path)
+        dead = self._make_session(root, 333)
+        latest = root / "session_latest"
+        latest.symlink_to(dead)
+        marker = root / "ray_current_cluster"
+        marker.write_text("127.0.0.1:6379")
+        unrelated = root / "not_a_session"
+        unrelated.mkdir()
+        with (
+            patch.dict(
+                os.environ,
+                {"RAY_TMPDIR": str(tmp_path), "MSHIP_PRUNE_RAY_SESSIONS": "true"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "_pid_alive", return_value=False),
+        ):
+            serve_utils.prune_ray_sessions()
+        assert not dead.exists()  # the real session dir is removed
+        assert latest.is_symlink()  # the symlink itself survives (now dangling)
+        assert marker.exists()  # non-session files untouched
+        assert unrelated.exists()  # non-matching dirs untouched
+
+    def test_disabled_via_env_keeps_everything(self, tmp_path):
+        from modelship.deploy import serve_utils
+
+        root = self._temp_root(tmp_path)
+        dead = self._make_session(root, 444)
+        with (
+            patch.dict(
+                os.environ,
+                {"RAY_TMPDIR": str(tmp_path), "MSHIP_PRUNE_RAY_SESSIONS": "false"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "_pid_alive", return_value=False),
+        ):
+            serve_utils.prune_ray_sessions()
+        assert dead.exists()
+
+    def test_missing_temp_root_is_noop(self, tmp_path):
+        from modelship.deploy import serve_utils
+
+        # No <tmp>/ray dir exists — must not raise.
+        with patch.dict(
+            os.environ,
+            {"RAY_TMPDIR": str(tmp_path), "MSHIP_PRUNE_RAY_SESSIONS": "true"},
+            clear=False,
+        ):
+            serve_utils.prune_ray_sessions()
+
+    def test_pid_alive_true_for_current_process(self):
+        from modelship.deploy import serve_utils
+
+        assert serve_utils._pid_alive(os.getpid()) is True
+
+    def test_pid_alive_false_for_reaped_pid(self):
+        import subprocess
+
+        from modelship.deploy import serve_utils
+
+        proc = subprocess.Popen(["true"])
+        proc.wait()
+        assert serve_utils._pid_alive(proc.pid) is False

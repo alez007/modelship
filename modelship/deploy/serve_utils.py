@@ -1,9 +1,13 @@
 import logging
 import os
+import re
+import shutil
 import socket
+from pathlib import Path
 
 import ray
 from ray import serve
+from ray._common.utils import get_ray_temp_dir
 from ray.serve.config import HTTPOptions, ProxyLocation
 from ray.serve.schema import LoggingConfig
 
@@ -14,6 +18,10 @@ from modelship.utils import rand_suffix
 
 logger = get_logger("startup")
 _DEFAULT_OPENAI_API_PORT = 8000
+
+# Ray names each head's session dir `session_<timestamp>_<pid>` under its temp
+# root and never cleans them up; the trailing group captures the owning pid.
+_RAY_SESSION_DIR_RE = re.compile(r"^session_.*_(\d+)$")
 
 
 def make_operator_id() -> str:
@@ -82,6 +90,63 @@ def _own_cluster_init_kwargs() -> dict[str, object]:
     return kwargs
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if a process with *pid* currently exists. Used to avoid deleting a
+    still-running head's session dir."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but is owned by another user — treat as alive (keep it).
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def prune_ray_sessions() -> None:
+    """Delete stale `session_<timestamp>_<pid>` dirs Ray leaves under its temp
+    root (default /tmp/ray). Ray never cleans them up, so they accumulate across
+    container/process restarts and slowly fill the disk on long-lived self-hosted
+    boxes.
+
+    Called only when we start our OWN head (connect_ray's own-cluster branch),
+    before ray.init creates this run's session — so this run's dir doesn't exist
+    yet and can't be removed. A session whose owning pid is still alive is kept:
+    on a single machine a second non---use-existing deploy joins this machine's
+    running head (ray.init reads /tmp/ray/ray_current_cluster), so a live head may
+    be present even on the own-cluster path. The `session_latest` symlink and
+    non-session files (e.g. ray_current_cluster) never match and are left alone.
+
+    Best-effort: pruning never aborts startup — any failure is logged as a
+    warning and the deploy proceeds. Set MSHIP_PRUNE_RAY_SESSIONS=false to disable
+    (e.g. to keep a crashed session's logs for debugging)."""
+    if os.environ.get("MSHIP_PRUNE_RAY_SESSIONS", "true").lower() != "true":
+        return
+    try:
+        temp_root = Path(get_ray_temp_dir())
+        if not temp_root.is_dir():
+            return
+        removed = 0
+        for entry in temp_root.iterdir():
+            match = _RAY_SESSION_DIR_RE.match(entry.name)
+            if not match or entry.is_symlink() or not entry.is_dir():
+                continue
+            if _pid_alive(int(match.group(1))):
+                continue
+            try:
+                shutil.rmtree(entry)
+                removed += 1
+            except OSError:
+                logger.warning("Failed to prune stale Ray session dir %s (continuing).", entry, exc_info=True)
+        if removed:
+            logger.info("Pruned %d stale Ray session dir(s) under %s", removed, temp_root)
+    except Exception:
+        # Cleanup is never worth failing a deploy over — warn and carry on.
+        logger.warning("Ray session pruning failed; continuing without it.", exc_info=True)
+
+
 def connect_ray(lib_level: int) -> None:
     use_existing_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() == "true"
     os.environ.setdefault("RAY_GCS_RPC_TIMEOUT_S", "30")
@@ -97,6 +162,10 @@ def connect_ray(lib_level: int) -> None:
         # start_ray.sh used to do). mship_deploy stays alive as the operator and
         # tears it down on exit (owns_cluster in mship_deploy).
         os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
+        # Reclaim disk from prior runs' leftover session dirs before this run's
+        # session is created. Skipped on the existing-cluster branch (KubeRay /
+        # an operator we don't own manages its own temp root).
+        prune_ray_sessions()
         ray.init(ignore_reinit_error=True, logging_level=lib_level, **_own_cluster_init_kwargs())
     # ray.init re-sets ray.* loggers, so re-pin them after init.
     logging.getLogger("ray").setLevel(lib_level)

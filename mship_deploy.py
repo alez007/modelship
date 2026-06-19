@@ -86,26 +86,22 @@ def main(argv: list[str] | None = None) -> None:
     lib_level, lib_level_name = get_lib_log_config()
     serve_logging_config = LoggingConfig(log_level=lib_level_name)
 
-    if args.redeploy:
-        logger.info("--redeploy: tearing down existing deployments...")
-        shutdown_ray()
-
     connect_ray(lib_level)
     start_serve(serve_logging_config)
 
-    existing_apps = set() if args.redeploy else get_existing_apps()
+    existing_apps = get_existing_apps()
     fresh_install = gateway_name not in existing_apps
     if existing_apps:
         logger.info("Found existing deployments: %s", ", ".join(sorted(existing_apps)))
-    if fresh_install and not args.redeploy:
+    if fresh_install:
         logger.info("No existing gateway found — treating as fresh install.")
 
     # Fold the user's input into this gateway's durable effective config, then
     # deploy by ALWAYS reconciling live -> effective. The mode only decides how the
-    # input merges (additive=union, reconcile/redeploy=replace); the deploy itself
+    # input merges (additive=union, reconcile=replace); the deploy itself
     # is always a reconcile — that's what makes self-heal just "re-run the deploy"
     # (it reads the persisted effective set and reconciles onto an empty cluster).
-    mode = resolve_mode(reconcile=args.reconcile, redeploy=args.redeploy)
+    mode = resolve_mode(reconcile=args.reconcile)
     store = get_state_store()
     effective_raw = read_effective(store, gateway_name)
 
@@ -113,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
     # reconcile the live cluster to the persisted effective config as-is (restores
     # the true model set after the cluster is recreated empty). Any other mode, or
     # an explicit --config, loads the user input and folds it into effective per the
-    # merge verb (additive=union, reconcile/redeploy=replace).
+    # merge verb (additive=union, reconcile=replace).
     if mode == "reconcile" and args.config is None:
         desired_raw = effective_raw
         logger.info("Self-heal: reconciling to persisted effective config (no --config given).")

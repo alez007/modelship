@@ -26,7 +26,7 @@ Each model in `models.yaml` becomes an isolated Ray Serve deployment (`ModelDepl
 - **Independent lifecycle** — one model crashing doesn't affect others
 - **Per-model GPU budgeting** — `num_gpus` controls VRAM allocation (e.g. 0.70 for 70%)
 - **Sequential startup** — models deploy one at a time to prevent memory spikes, ordered by tensor parallelism size (TP > 1 first)
-- **Additive deploys** — by default, `mship_deploy.py` adds models to a running cluster without disrupting existing deployments, enabling incremental composition from multiple config files. Use `--redeploy` to tear down and start fresh
+- **Additive deploys** — by default, `mship_deploy.py` adds models to a running cluster without disrupting existing deployments, enabling incremental composition from multiple config files. Use `--reconcile` to instead make the cluster match a config exactly (add/remove/replace), without ever tearing down the cluster
 - **Multi-deployment routing** — the same model name can appear multiple times with different configs (e.g. GPU + CPU). The gateway round-robins requests across all deployments sharing a name. Each deployment also supports `num_replicas` for scaling identical copies via Ray Serve's built-in load balancing
 - **Multi-gateway support** — multiple independent gateways can run on the same cluster via `--gateway-name`, each managing its own set of models
 
@@ -93,7 +93,7 @@ See [Plugin Development](plugins.md) for details.
 
 | File | Purpose |
 |------|---------|
-| `mship_deploy.py` | Entry point — initializes Ray, deploys models additively (or fresh with `--redeploy`) |
+| `mship_deploy.py` | Entry point — initializes Ray, deploys models additively (or reconciles with `--reconcile`) |
 | `modelship/openai/api.py` | FastAPI gateway with OpenAI endpoints |
 | `modelship/openai/protocol/responses/` | `/v1/responses` schemas + stateless chat adapter (`adapter.py`) and streaming translator (`streaming.py`) |
 | `modelship/infer/model_deployment.py` | Ray Serve deployment actor |
