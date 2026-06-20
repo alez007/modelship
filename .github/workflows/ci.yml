@@ -5,6 +5,22 @@ on:
     branches: [main]
 
 jobs:
+  # Detect whether this PR touches the Helm chart, so the heavy `chart` job (which
+  # spins up a kind cluster) only runs when it's relevant.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      chart: ${{ steps.filter.outputs.chart }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            chart:
+              - 'helm/**'
+              - '.github/workflows/ci.yml'
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +62,8 @@ jobs:
         run: uv run pytest tests/ -v -m "not integration"
 
   chart:
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
