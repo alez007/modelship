@@ -26,12 +26,26 @@ def base_request_id(raw_request: RawRequestProxy | None = None) -> str:
 
 
 def download(url: str, file_path: str, overwrite: bool = False):
-    if os.path.isfile(file_path) is False:
-        get_response = requests.get(url, stream=True)
-        with open(file_path, "wb") as f:
-            for chunk in get_response.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
+    """Download ``url`` to ``file_path``, skipping if it already exists.
+
+    Streams to a per-call unique temp file and atomically renames it into place
+    only on success
+    """
+    if not overwrite and os.path.isfile(file_path):
+        return
+
+    tmp_path = f"{file_path}.{random_uuid()}.tmp"
+    try:
+        with requests.get(url, stream=True) as response:
+            response.raise_for_status()
+            with open(tmp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+        os.replace(tmp_path, file_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def cache_dir() -> str:
