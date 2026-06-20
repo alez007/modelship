@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.1] - 2026-06-20
+
+### Fixed
+- make download atomic to avoid corrupt cached files
+
+### Changed
+- only run the chart job when the Helm chart changes
+
 ## [0.5.0] - 2026-06-19
 
 ### Added
