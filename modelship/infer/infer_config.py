@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import time
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -359,23 +361,69 @@ class ModelshipConfig(BaseModel):
         return self
 
 
+# How long a recorded disconnect lingers before the registry evicts it. The
+# gateway no longer clears entries on request teardown — that clear ran in the
+# same finally the disconnect itself triggered, racing (and usually beating) the
+# model deployment's cross-process is_disconnected() poll, so the signal was
+# dropped before it was read. This TTL is now what bounds the set. It only needs
+# to outlast the deployment's poll interval, not the whole generation: the entry
+# is added at disconnect time, by which point the deployment is already polling.
+_DISCONNECT_TTL_SECONDS = 300.0
+
+
+class _DisconnectStore:
+    """Plain (non-actor) TTL set of disconnected request ids, factored out of
+    DisconnectRegistry so the eviction logic is unit-testable without a Ray
+    cluster. ``now`` is injectable for deterministic tests."""
+
+    def __init__(self, ttl_seconds: float, now: Callable[[], float] = time.monotonic):
+        self._ttl = ttl_seconds
+        self._now = now
+        # request_id -> monotonic deadline after which the entry is evicted.
+        self._deadlines: dict[str, float] = {}
+
+    def set(self, request_id: str) -> None:
+        now = self._now()
+        self._evict_expired(now)
+        self._deadlines[request_id] = now + self._ttl
+
+    def is_set(self, request_id: str) -> bool:
+        deadline = self._deadlines.get(request_id)
+        if deadline is None:
+            return False
+        if deadline <= self._now():
+            del self._deadlines[request_id]
+            return False
+        return True
+
+    def clear(self, request_id: str) -> None:
+        self._deadlines.pop(request_id, None)
+
+    def _evict_expired(self, now: float) -> None:
+        for request_id in [rid for rid, deadline in self._deadlines.items() if deadline <= now]:
+            del self._deadlines[request_id]
+
+
 @ray.remote(num_cpus=0)
 class DisconnectRegistry:
     """One cluster-wide actor tracking client-disconnect per request id, replacing
     the previous per-request DisconnectEvent actor. Async so concurrent polls don't
-    head-of-line block on the single-threaded actor."""
+    head-of-line block on the single-threaded actor.
 
-    def __init__(self):
-        self._disconnected: set[str] = set()
+    Entries are TTL-evicted (``_DISCONNECT_TTL_SECONDS``) rather than cleared by the
+    gateway — see ``_DISCONNECT_TTL_SECONDS`` for why."""
+
+    def __init__(self, ttl_seconds: float = _DISCONNECT_TTL_SECONDS):
+        self._store = _DisconnectStore(ttl_seconds)
 
     async def set(self, request_id: str) -> None:
-        self._disconnected.add(request_id)
+        self._store.set(request_id)
 
     async def is_set(self, request_id: str) -> bool:
-        return request_id in self._disconnected
+        return self._store.is_set(request_id)
 
     async def clear(self, request_id: str) -> None:
-        self._disconnected.discard(request_id)
+        self._store.clear(request_id)
 
 
 _disconnect_registry = None
@@ -418,10 +466,11 @@ class RequestWatcher:
             await asyncio.sleep(0.1)
 
     def stop(self):
-        """Cancel the watch task and drop this request's registry entry — there's no
-        per-request actor to reap, so this clear is what bounds the registry's set."""
+        """Cancel the watch task. The disconnect entry (if any) is deliberately
+        left for the DisconnectRegistry to TTL-evict: clearing it here ran in the
+        same teardown the disconnect triggered and raced the model deployment's
+        is_disconnected() poll, dropping the signal before it was read."""
         self._task.cancel()
-        self._registry.clear.remote(self._request_id)  # type: ignore[attr-defined]
 
     @property
     def registry(self):

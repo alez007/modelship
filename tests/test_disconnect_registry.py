@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modelship.infer.infer_config import RawRequestProxy, RequestWatcher
+from modelship.infer.infer_config import RawRequestProxy, RequestWatcher, _DisconnectStore
 
 
 class _FakeRegistry:
@@ -55,7 +55,10 @@ async def test_proxies_keyed_independently_on_one_registry():
 
 
 @pytest.mark.asyncio
-async def test_watcher_sets_on_disconnect_and_clears_on_stop():
+async def test_watcher_sets_on_disconnect_and_stop_leaves_entry_for_ttl():
+    """stop() must NOT clear the entry: clearing it raced the model deployment's
+    cross-process poll and dropped the signal before it was read. The entry is
+    left for the registry to TTL-evict; stop() only cancels the watch task."""
     reg = _FakeRegistry()
     raw_request = MagicMock()
     raw_request.is_disconnected = AsyncMock(return_value=True)
@@ -67,5 +70,39 @@ async def test_watcher_sets_on_disconnect_and_clears_on_stop():
     assert "req-9" in reg.disconnected
 
     watcher.stop()
-    await asyncio.sleep(0)  # let the fire-and-forget clear run
-    assert "req-9" not in reg.disconnected
+    await asyncio.sleep(0)  # nothing fires, but give any stray task a tick
+    assert "req-9" in reg.disconnected  # survives stop() — deployment can still read it
+
+
+def test_disconnect_store_evicts_after_ttl():
+    clock = {"t": 1000.0}
+    store = _DisconnectStore(ttl_seconds=300.0, now=lambda: clock["t"])
+
+    store.set("req-1")
+    assert store.is_set("req-1") is True
+
+    clock["t"] += 299.0  # just inside the window
+    assert store.is_set("req-1") is True
+
+    clock["t"] += 2.0  # now past the 300s deadline
+    assert store.is_set("req-1") is False
+
+
+def test_disconnect_store_set_sweeps_expired_entries():
+    clock = {"t": 0.0}
+    store = _DisconnectStore(ttl_seconds=10.0, now=lambda: clock["t"])
+
+    store.set("stale")
+    clock["t"] += 11.0  # "stale" is now expired
+    store.set("fresh")  # set() sweeps expired entries
+
+    assert "stale" not in store._deadlines
+    assert store.is_set("fresh") is True
+
+
+def test_disconnect_store_clear_removes_entry():
+    store = _DisconnectStore(ttl_seconds=300.0)
+    store.set("req-1")
+    store.clear("req-1")
+    assert store.is_set("req-1") is False
+    store.clear("never-set")  # clearing an absent id is a no-op
