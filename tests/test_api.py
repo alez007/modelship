@@ -557,6 +557,41 @@ class TestHandleResponse:
             assert in_progress.set.call_args == reset
 
     @pytest.mark.asyncio
+    async def test_cancellation_during_first_chunk_stops_watcher(self, api):
+        """Regression: CancelledError (a BaseException, so it skips the except
+        clauses) raised while pulling the first chunk must still stop the watcher
+        in the outer finally — otherwise the DisconnectRegistry entry and the
+        watch task leak."""
+        import asyncio
+
+        async def mock_gen():
+            raise asyncio.CancelledError
+            yield  # unreachable; makes this an async generator
+
+        watcher = MagicMock()
+        with pytest.raises(asyncio.CancelledError):
+            await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+        watcher.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_streaming_stops_watcher_only_after_drain(self, api):
+        """The watcher for a streaming response is stopped in _stream()'s finally
+        after the stream drains, not when _handle_response returns."""
+        from fastapi.responses import StreamingResponse
+
+        async def mock_gen():
+            yield "data: chunk1\n\n"
+            yield "data: [DONE]\n\n"
+
+        watcher = MagicMock()
+        result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+        assert isinstance(result, StreamingResponse)
+        watcher.stop.assert_not_called()  # not stopped yet — stream hasn't been consumed
+
+        [chunk async for chunk in result.body_iterator]
+        watcher.stop.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_raytaskerror_with_value_error_cause_returns_400(self, api):
         import json
 

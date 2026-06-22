@@ -387,35 +387,29 @@ class ModelshipAPI:
                     )
                     REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
                     logger.info("Validation error for model=%s: %s", model, cause)
-                    watcher.stop()
                     return _error_response(_validation_error_from_cause(cause))
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
                 logger.exception("Initial response generation failed for model=%s", model)
-                watcher.stop()
                 return JSONResponse(status_code=500, content={"detail": str(e)})
             except Exception as e:
                 # Catch failures during initial generator creation or the very first yield
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
                 logger.exception("Initial response generation failed for model=%s", model)
-                watcher.stop()
                 return JSONResponse(status_code=500, content={"detail": str(e)})
 
             if isinstance(first, ErrorResponse):
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "inference_error"})
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
-                watcher.stop()
                 return _error_response(first)
 
             if isinstance(first, Response):
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})
-                watcher.stop()
                 return first
 
             if isinstance(first, RawSpeechResponse):
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})
-                watcher.stop()
                 return Response(content=first.audio, media_type=first.media_type)
 
             if isinstance(
@@ -428,7 +422,6 @@ class ModelshipAPI:
                 | ImageGenerationResponse,
             ):
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})
-                watcher.stop()
                 return JSONResponse(content=first.model_dump(mode="json"))
 
             # streaming — first chunk already consumed, chain it back
@@ -459,13 +452,14 @@ class ModelshipAPI:
             REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
             raise
         finally:
-            # Streaming paths complete inside _stream()'s finally (after the
-            # stream drains), which records duration + resets in-progress there.
-            # Non-streaming paths complete on return, so time them here.
+            # Non-streaming paths (including CancelledError — a BaseException that
+            # skips the except clauses above) finalize on return/raise here; the
+            # streaming path does it in _stream()'s finally after the stream drains.
             if not streaming:
                 duration = time.monotonic() - start
                 REQUEST_DURATION_SECONDS.observe(duration, tags={"model": model, "endpoint": endpoint})
                 REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
+                watcher.stop()
 
     @app.get("/health")
     async def health(self):
