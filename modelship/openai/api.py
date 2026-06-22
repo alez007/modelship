@@ -371,6 +371,7 @@ class ModelshipAPI:
         stream_media_type: str = "text/event-stream",
     ):
         start = time.monotonic()
+        streaming = False
         REQUEST_IN_PROGRESS.set(1, tags={"model": model, "endpoint": endpoint})
         try:
             try:
@@ -444,8 +445,13 @@ class ModelshipAPI:
                     REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
                     raise
                 finally:
+                    REQUEST_DURATION_SECONDS.observe(
+                        time.monotonic() - start, tags={"model": model, "endpoint": endpoint}
+                    )
+                    REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
                     watcher.stop()
 
+            streaming = True
             return StreamingResponse(content=_stream(), media_type=stream_media_type)
         except Exception:
             # Fallback for anything else not caught above
@@ -453,9 +459,13 @@ class ModelshipAPI:
             REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
             raise
         finally:
-            duration = time.monotonic() - start
-            REQUEST_DURATION_SECONDS.observe(duration, tags={"model": model, "endpoint": endpoint})
-            REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
+            # Streaming paths complete inside _stream()'s finally (after the
+            # stream drains), which records duration + resets in-progress there.
+            # Non-streaming paths complete on return, so time them here.
+            if not streaming:
+                duration = time.monotonic() - start
+                REQUEST_DURATION_SECONDS.observe(duration, tags={"model": model, "endpoint": endpoint})
+                REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
 
     @app.get("/health")
     async def health(self):
@@ -509,7 +519,7 @@ class ModelshipAPI:
         self._set_request_id(req_id)
         model = request.model or ""
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=model, endpoint="create_chat_completion")
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_chat_completion")
         headers = dict(raw_request.headers)
         # Materialize any lazy pydantic ValidatorIterators (from Iterable-typed fields
         # like tool_calls) in place — they can't be pickled across the Ray boundary.
@@ -528,7 +538,7 @@ class ModelshipAPI:
             request.max_tokens,
         )
         logger.debug("chat_completion full request: %s", request.model_dump_json())
-        response_gen = handle.generate.options(stream=True).remote(request, headers, watcher.event, req_id)
+        response_gen = handle.generate.options(stream=True).remote(request, headers, watcher.registry, req_id)
         return await self._handle_response(response_gen, watcher, model, "create_chat_completion")
 
     @app.post("/v1/responses")
@@ -554,7 +564,7 @@ class ModelshipAPI:
             chat_request.stream_options = StreamOptions(include_usage=True)
 
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=model, endpoint="create_response")
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_response")
         headers = dict(raw_request.headers)
         logger.info(
             "responses model=%s input_items=%s max_output_tokens=%s stream=%s",
@@ -568,7 +578,7 @@ class ModelshipAPI:
         # doesn't overload on the stream literal, so narrow it explicitly.
         response_gen = cast(
             "DeploymentResponseGenerator[Any]",
-            handle.generate.options(stream=True).remote(chat_request, headers, watcher.event, req_id),
+            handle.generate.options(stream=True).remote(chat_request, headers, watcher.registry, req_id),
         )
         adapted = (
             responses_stream_from_chat(response_gen, request)
@@ -583,12 +593,12 @@ class ModelshipAPI:
         self._set_request_id(req_id)
         model = request.model or ""
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=model, endpoint="create_embeddings")
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_embeddings")
         headers = dict(raw_request.headers)
         logger.info("embeddings model=%s", model)
         # EmbeddingRequest is a UnionType — force resolution before Ray pickle boundary.
         request = type(request).model_validate_json(request.model_dump_json())
-        response_gen = handle.embed.options(stream=True).remote(request, headers, watcher.event, req_id)
+        response_gen = handle.embed.options(stream=True).remote(request, headers, watcher.registry, req_id)
         return await self._handle_response(response_gen, watcher, model, "create_embeddings")
 
     @app.post("/v1/audio/transcriptions")
@@ -597,7 +607,7 @@ class ModelshipAPI:
         self._set_request_id(req_id)
         model = request.model or ""
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=model, endpoint="create_transcriptions")
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_transcriptions")
         headers = dict(raw_request.headers)
         logger.info("transcription model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
@@ -608,7 +618,7 @@ class ModelshipAPI:
             await request.file.close()
         request_no_file = TranscriptionRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.transcribe.options(stream=True).remote(
-            audio_data, request_no_file, headers, watcher.event, req_id
+            audio_data, request_no_file, headers, watcher.registry, req_id
         )
         return await self._handle_response(response_gen, watcher, model, "create_transcriptions")
 
@@ -618,7 +628,7 @@ class ModelshipAPI:
         self._set_request_id(req_id)
         model = request.model or ""
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=model, endpoint="create_translations")
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_translations")
         headers = dict(raw_request.headers)
         logger.info("translation model=%s", model)
         # Read audio bytes before crossing process boundary — UploadFile is not serializable.
@@ -629,7 +639,7 @@ class ModelshipAPI:
             await request.file.close()
         request_no_file = TranslationRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.translate.options(stream=True).remote(
-            audio_data, request_no_file, headers, watcher.event, req_id
+            audio_data, request_no_file, headers, watcher.registry, req_id
         )
         return await self._handle_response(response_gen, watcher, model, "create_translations")
 
@@ -640,9 +650,9 @@ class ModelshipAPI:
         logger.info("speech model=%s voice=%s format=%s", request.model, request.voice, request.response_format)
         logger.debug("speech full request: %s", request.model_dump_json())
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_speech")
+        watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_speech")
         headers = dict(raw_request.headers)
-        response_gen = handle.speak.options(stream=True).remote(request, headers, watcher.event, req_id)
+        response_gen = handle.speak.options(stream=True).remote(request, headers, watcher.registry, req_id)
         return await self._handle_response(response_gen, watcher, request.model, "create_speech")
 
     @app.post("/v1/images/generations")
@@ -653,9 +663,9 @@ class ModelshipAPI:
             "image_generation model=%s prompt=%r n=%d size=%s", request.model, request.prompt, request.n, request.size
         )
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image")
+        watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_image")
         headers = dict(raw_request.headers)
-        response_gen = handle.imagine.options(stream=True).remote(request, headers, watcher.event, req_id)
+        response_gen = handle.imagine.options(stream=True).remote(request, headers, watcher.registry, req_id)
         return await self._handle_response(response_gen, watcher, request.model, "create_image")
 
     @app.post("/v1/images/edits")
@@ -671,7 +681,7 @@ class ModelshipAPI:
             request.mask is not None,
         )
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_edit")
+        watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_image_edit")
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
         # The bytes are passed separately; the request is reconstructed without the file fields.
@@ -687,7 +697,7 @@ class ModelshipAPI:
                 await request.mask.close()
         request_no_file = ImageEditRequest.model_construct(**request.model_dump(exclude={"image", "mask"}))
         response_gen = handle.edit_image.options(stream=True).remote(
-            image_data, mask_data, request_no_file, headers, watcher.event, req_id
+            image_data, mask_data, request_no_file, headers, watcher.registry, req_id
         )
         return await self._handle_response(response_gen, watcher, request.model, "create_image_edit")
 
@@ -697,7 +707,7 @@ class ModelshipAPI:
         self._set_request_id(req_id)
         logger.info("image_variation model=%s n=%d size=%s", request.model, request.n, request.size)
         handle = self._get_handle(request.model)
-        watcher = RequestWatcher(raw_request, model=request.model, endpoint="create_image_variation")
+        watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_image_variation")
         headers = dict(raw_request.headers)
         # Read image bytes before crossing the process boundary — UploadFile is not serializable.
         # `image` is Optional on the model (to accept the `image[]` alias) but the validator
@@ -709,6 +719,6 @@ class ModelshipAPI:
             await request.image.close()
         request_no_file = ImageVariationRequest.model_construct(**request.model_dump(exclude={"image"}))
         response_gen = handle.vary_image.options(stream=True).remote(
-            image_data, request_no_file, headers, watcher.event, req_id
+            image_data, request_no_file, headers, watcher.registry, req_id
         )
         return await self._handle_response(response_gen, watcher, request.model, "create_image_variation")

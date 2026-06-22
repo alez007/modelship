@@ -1,7 +1,7 @@
 """Tests for ModelshipAPI model discovery and routing."""
 
 from contextlib import ExitStack
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -9,6 +9,15 @@ from modelship.openai.api import ModelshipAPI
 
 # Access the underlying class, bypassing the @serve.deployment wrapper.
 _ModelshipAPI = ModelshipAPI.func_or_class
+
+
+def _patch_api_metrics(api, **mocks):
+    """Patch module-level metric objects referenced by ModelshipAPI methods.
+
+    `@serve.deployment` cloudpickles the class, so `func_or_class`'s methods carry
+    a reconstructed globals dict — patching `modelship.openai.api.<NAME>` would not
+    reach them. Patch the function's own globals instead."""
+    return patch.dict(type(api)._handle_response.__globals__, mocks)
 
 
 @pytest.fixture
@@ -487,6 +496,65 @@ class TestHandleResponse:
         result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
 
         assert isinstance(result, StreamingResponse)
+
+    @pytest.mark.asyncio
+    async def test_streaming_duration_observed_after_stream_drains(self, api):
+        """Streaming requests must record REQUEST_DURATION_SECONDS and reset
+        REQUEST_IN_PROGRESS only after the stream is fully consumed — not when
+        _handle_response returns the StreamingResponse."""
+        import asyncio
+
+        from fastapi.responses import StreamingResponse
+
+        delay = 0.02
+
+        async def mock_gen():
+            for i in range(3):
+                await asyncio.sleep(delay)
+                yield f"data: chunk{i}\n\n"
+
+        watcher = MagicMock()
+        dur, in_progress = MagicMock(), MagicMock()
+        with _patch_api_metrics(api, REQUEST_DURATION_SECONDS=dur, REQUEST_IN_PROGRESS=in_progress):
+            result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+            assert isinstance(result, StreamingResponse)
+
+            # Returning the StreamingResponse must not have timed the request yet.
+            dur.observe.assert_not_called()
+            assert (
+                call(0, tags={"model": "test-model", "endpoint": "test-endpoint"}) not in in_progress.set.call_args_list
+            )
+
+            # Drain the stream the way Starlette would.
+            chunks = [chunk async for chunk in result.body_iterator]
+            assert len(chunks) == 3
+
+        # Now duration is observed exactly once, with at least the summed delay,
+        # and in-progress has been reset to 0 exactly once.
+        dur.observe.assert_called_once()
+        observed = dur.observe.call_args.args[0]
+        assert observed >= delay * 3
+        reset = call(0, tags={"model": "test-model", "endpoint": "test-endpoint"})
+        assert in_progress.set.call_args_list.count(reset) == 1
+        assert in_progress.set.call_args == reset  # the reset is the final set
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_duration_observed_on_return(self, api):
+        """Regression: non-streaming paths still time the request on return."""
+        from fastapi.responses import JSONResponse
+
+        async def mock_gen():
+            yield JSONResponse(content={"data": "test"})
+
+        watcher = MagicMock()
+        dur, in_progress = MagicMock(), MagicMock()
+        with _patch_api_metrics(api, REQUEST_DURATION_SECONDS=dur, REQUEST_IN_PROGRESS=in_progress):
+            result = await api._handle_response(mock_gen(), watcher, "test-model", "test-endpoint")
+            assert isinstance(result, JSONResponse)
+            dur.observe.assert_called_once()
+            reset = call(0, tags={"model": "test-model", "endpoint": "test-endpoint"})
+            assert in_progress.set.call_args_list.count(reset) == 1
+            assert in_progress.set.call_args == reset
 
     @pytest.mark.asyncio
     async def test_raytaskerror_with_value_error_cause_returns_400(self, api):

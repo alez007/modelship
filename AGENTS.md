@@ -66,9 +66,9 @@ The Docker image's `CMD` is `uv run --no-sync mship_deploy.py` (against the venv
 ## Architecture quick map
 
 - `mship_deploy.py` — Ray init + deploy loop. `build_deployment_options` (in `modelship/deploy/actor_options.py`) handles GPU allocation: multi-slot vLLM deploys (`tp*pp > 1`) always build a Ray Serve placement group (one whole-GPU bundle per slot, STRICT_PACK) that vLLM's ray executor inherits via `get_current_placement_group()`. Single-slot deploys use a scalar `num_gpus` on the outer actor. Fractional `num_gpus` (`<1`) is single-GPU only — combining it with TP/PP is rejected at config time (Ray packs fractional PG bundles onto the same physical GPU).
-- `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + `DisconnectEvent` Ray actor to propagate client disconnects across process boundaries.
+- `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + a single shared `DisconnectRegistry` Ray actor (keyed by request id) to propagate client disconnects across process boundaries.
 - `modelship/infer/model_deployment.py` — the single `@serve.deployment` actor class; lazily imports the right backend based on `config.loader`.
-- `modelship/infer/infer_config.py` — pydantic config schemas **and** `RawRequestProxy` / `DisconnectEvent`. `RawRequestProxy` exists because FastAPI `Request` cannot cross Ray process boundaries; any new attribute vLLM reads from `raw_request` must be added there.
+- `modelship/infer/infer_config.py` — pydantic config schemas **and** `RawRequestProxy` / `DisconnectRegistry`. `RawRequestProxy` exists because FastAPI `Request` cannot cross Ray process boundaries; any new attribute vLLM reads from `raw_request` must be added there.
 - `modelship/infer/{vllm,transformers,diffusers,llama_cpp,custom}/` — one subdir per loader. Each has an `*_infer.py` and (for non-custom) an `openai/` adapter subpackage.
 - `modelship/plugins/base_plugin.py` — `BasePlugin` ABC that plugin packages subclass as `ModelPlugin`.
 - `plugins/*` — workspace packages, each opt-in via a root extra. The plugin module name and the extra name must match (`ensure_plugin()` calls `importlib.import_module(config.plugin)` and the error message says `uv sync --extra <plugin>`).

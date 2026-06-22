@@ -360,25 +360,49 @@ class ModelshipConfig(BaseModel):
 
 
 @ray.remote(num_cpus=0)
-class DisconnectEvent:
-    """Ray actor that holds a disconnect flag — shareable across process boundaries."""
+class DisconnectRegistry:
+    """One cluster-wide actor tracking client-disconnect per request id, replacing
+    the previous per-request DisconnectEvent actor. Async so concurrent polls don't
+    head-of-line block on the single-threaded actor."""
 
     def __init__(self):
-        self._set = False
+        self._disconnected: set[str] = set()
 
-    def set(self):
-        self._set = True
+    async def set(self, request_id: str) -> None:
+        self._disconnected.add(request_id)
 
-    def is_set(self) -> bool:
-        return self._set
+    async def is_set(self, request_id: str) -> bool:
+        return request_id in self._disconnected
+
+    async def clear(self, request_id: str) -> None:
+        self._disconnected.discard(request_id)
+
+
+_disconnect_registry = None
+
+
+def get_disconnect_registry():
+    """Get-or-create the single detached, named DisconnectRegistry shared by every
+    gateway replica and model deployment. Cached to keep the lookup off the hot path."""
+    global _disconnect_registry
+    if _disconnect_registry is None:
+        _disconnect_registry = DisconnectRegistry.options(
+            name="modelship_disconnect_registry",
+            get_if_exists=True,
+            lifetime="detached",
+            namespace="modelship",
+        ).remote()
+    return _disconnect_registry
 
 
 class RequestWatcher:
-    """Watches a FastAPI Request for client disconnect and signals via a Ray actor event."""
+    """Watches a FastAPI Request for client disconnect and records it in the shared
+    DisconnectRegistry, keyed by request id."""
 
-    def __init__(self, raw_request: Request, model: str = "", endpoint: str = ""):
+    def __init__(self, raw_request: Request, request_id: str, model: str = "", endpoint: str = ""):
         self._request = raw_request
-        self._event = DisconnectEvent.remote()
+        self._registry = get_disconnect_registry()
+        self._request_id = request_id
         self._model = model
         self._endpoint = endpoint
         self._task = asyncio.create_task(self._watch())
@@ -389,18 +413,19 @@ class RequestWatcher:
         while True:
             if await self._request.is_disconnected():
                 CLIENT_DISCONNECTS_TOTAL.inc(tags={"model": self._model, "endpoint": self._endpoint})
-                await self._event.set.remote()  # type: ignore[attr-defined]
+                await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
                 break
             await asyncio.sleep(0.1)
 
     def stop(self):
-        """Cancel the watch task and kill the Ray actor. Call when the request is fully handled."""
+        """Cancel the watch task and drop this request's registry entry — there's no
+        per-request actor to reap, so this clear is what bounds the registry's set."""
         self._task.cancel()
-        ray.kill(self._event)
+        self._registry.clear.remote(self._request_id)  # type: ignore[attr-defined]
 
     @property
-    def event(self):
-        return self._event
+    def registry(self):
+        return self._registry
 
 
 class RawRequestProxy:
@@ -410,20 +435,20 @@ class RawRequestProxy:
     The real FastAPI Request cannot cross Ray process boundaries — it holds a live
     TCP socket and ASGI callables that are not serializable. Instead, the gateway
     extracts the serializable parts (headers as a plain dict, disconnect signal via
-    DisconnectEvent Ray actor) and passes those to the model deployment. RawRequestProxy
-    reconstructs them into the interface that vllm expects from a raw_request:
+    the shared DisconnectRegistry actor) and passes those to the model deployment.
+    RawRequestProxy reconstructs them into the interface that vllm expects:
 
       - raw_request.headers.get(...)     → Starlette Headers built from the dict
-      - await raw_request.is_disconnected() → polls the DisconnectEvent Ray actor
+      - await raw_request.is_disconnected() → polls the DisconnectRegistry by id
 
     Any additional attributes vllm reads from raw_request in future should be added here.
     """
 
-    def __init__(self, event, headers: dict, request_id: str | None = None):
-        self._event = event
+    def __init__(self, registry, headers: dict, request_id: str | None = None):
+        self._registry = registry
         self.headers = Headers(headers=headers)
-        self.state = State()  # vllm writes per-request state here; initialized empty, lives in the actor process
+        self.state = State()  # vllm writes per-request state here; lives in the actor process
         self.request_id = request_id
 
     async def is_disconnected(self) -> bool:
-        return await self._event.is_set.remote()
+        return await self._registry.is_set.remote(self.request_id)

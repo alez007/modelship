@@ -228,29 +228,35 @@ class ModelDeployment:
         self,
         request: ChatCompletionRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_chat_completion(request, proxy)
-        GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
         if isinstance(result, AsyncGenerator):
-            async for chunk in result:
-                yield chunk
+            # Streaming: tokens are produced lazily while we iterate, so observe
+            # after the generator drains (try/finally also captures a mid-stream
+            # client disconnect / cancellation).
+            try:
+                async for chunk in result:
+                    yield chunk
+            finally:
+                GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
         else:
+            GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
             yield result
 
     async def embed(
         self,
         request: EmbeddingRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_embedding(request, proxy)
         EMBEDDING_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -265,11 +271,11 @@ class ModelDeployment:
         audio_data: bytes,
         request: TranscriptionRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_transcription(audio_data, request, proxy)
         TRANSCRIPTION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -284,11 +290,11 @@ class ModelDeployment:
         audio_data: bytes,
         request: TranslationRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_translation(audio_data, request, proxy)
         TRANSCRIPTION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -302,11 +308,11 @@ class ModelDeployment:
         self,
         request: SpeechRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_speech(request, proxy)
         TTS_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -320,11 +326,11 @@ class ModelDeployment:
         self,
         request: ImageGenerationRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_generation(request, proxy)
         IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -340,11 +346,11 @@ class ModelDeployment:
         mask_data: bytes | None,
         request: ImageEditRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_edit(image_data, mask_data, request, proxy)
         IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
@@ -359,11 +365,11 @@ class ModelDeployment:
         image_data: bytes,
         request: ImageVariationRequest,
         request_headers: dict[str, str],
-        disconnect_event: Any,
+        disconnect_registry: Any,
         request_id: str | None = None,
     ):
         self._set_request_id(request_id)
-        proxy = RawRequestProxy(disconnect_event, request_headers, request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_variation(image_data, request, proxy)
         IMAGE_GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
