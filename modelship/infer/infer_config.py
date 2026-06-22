@@ -1,11 +1,14 @@
 import asyncio
 import hashlib
+import time
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, Literal
 
 import ray
 from fastapi import Request
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from ray.exceptions import RayActorError
 from starlette.datastructures import Headers, State
 
 from modelship.logging import get_logger
@@ -359,26 +362,105 @@ class ModelshipConfig(BaseModel):
         return self
 
 
+# How long a recorded disconnect lingers before the registry evicts it. The
+# gateway no longer clears entries on request teardown — that clear ran in the
+# same finally the disconnect itself triggered, racing (and usually beating) the
+# model deployment's cross-process is_disconnected() poll, so the signal was
+# dropped before it was read. This TTL is now what bounds the set. It only needs
+# to outlast the deployment's poll interval, not the whole generation: the entry
+# is added at disconnect time, by which point the deployment is already polling.
+_DISCONNECT_TTL_SECONDS = 300.0
+
+
+class _DisconnectStore:
+    """Plain (non-actor) TTL set of disconnected request ids, factored out of
+    DisconnectRegistry so the eviction logic is unit-testable without a Ray
+    cluster. ``now`` is injectable for deterministic tests."""
+
+    def __init__(self, ttl_seconds: float, now: Callable[[], float] = time.monotonic):
+        self._ttl = ttl_seconds
+        self._now = now
+        # request_id -> monotonic deadline after which the entry is evicted.
+        self._deadlines: dict[str, float] = {}
+
+    def set(self, request_id: str) -> None:
+        now = self._now()
+        self._evict_expired(now)
+        self._deadlines[request_id] = now + self._ttl
+
+    def is_set(self, request_id: str) -> bool:
+        deadline = self._deadlines.get(request_id)
+        if deadline is None:
+            return False
+        if deadline <= self._now():
+            del self._deadlines[request_id]
+            return False
+        return True
+
+    def clear(self, request_id: str) -> None:
+        self._deadlines.pop(request_id, None)
+
+    def _evict_expired(self, now: float) -> None:
+        for request_id in [rid for rid, deadline in self._deadlines.items() if deadline <= now]:
+            del self._deadlines[request_id]
+
+
 @ray.remote(num_cpus=0)
-class DisconnectEvent:
-    """Ray actor that holds a disconnect flag — shareable across process boundaries."""
+class DisconnectRegistry:
+    """One cluster-wide actor tracking client-disconnect per request id, replacing
+    the previous per-request DisconnectEvent actor. Async so concurrent polls don't
+    head-of-line block on the single-threaded actor.
 
-    def __init__(self):
-        self._set = False
+    Entries are TTL-evicted (``_DISCONNECT_TTL_SECONDS``) rather than cleared by the
+    gateway — see ``_DISCONNECT_TTL_SECONDS`` for why."""
 
-    def set(self):
-        self._set = True
+    def __init__(self, ttl_seconds: float = _DISCONNECT_TTL_SECONDS):
+        self._store = _DisconnectStore(ttl_seconds)
 
-    def is_set(self) -> bool:
-        return self._set
+    async def set(self, request_id: str) -> None:
+        self._store.set(request_id)
+
+    async def is_set(self, request_id: str) -> bool:
+        return self._store.is_set(request_id)
+
+    async def clear(self, request_id: str) -> None:
+        self._store.clear(request_id)
+
+
+_disconnect_registry = None
+
+
+def get_disconnect_registry():
+    """Get-or-create the single detached, named DisconnectRegistry shared by every
+    gateway replica and model deployment. Cached to keep the lookup off the hot path."""
+    global _disconnect_registry
+    if _disconnect_registry is None:
+        _disconnect_registry = DisconnectRegistry.options(
+            name="modelship_disconnect_registry",
+            get_if_exists=True,
+            lifetime="detached",
+            namespace="modelship",
+        ).remote()
+    return _disconnect_registry
+
+
+def reset_disconnect_registry() -> None:
+    """Drop the cached handle so the next get_disconnect_registry() re-resolves the
+    named actor. Called after a RayActorError: the detached actor died (node
+    preemption, GCS restart) and the cached handle is now stale. get_if_exists makes
+    every process that re-resolves converge on the same recreated actor."""
+    global _disconnect_registry
+    _disconnect_registry = None
 
 
 class RequestWatcher:
-    """Watches a FastAPI Request for client disconnect and signals via a Ray actor event."""
+    """Watches a FastAPI Request for client disconnect and records it in the shared
+    DisconnectRegistry, keyed by request id."""
 
-    def __init__(self, raw_request: Request, model: str = "", endpoint: str = ""):
+    def __init__(self, raw_request: Request, request_id: str, model: str = "", endpoint: str = ""):
         self._request = raw_request
-        self._event = DisconnectEvent.remote()
+        self._registry = get_disconnect_registry()
+        self._request_id = request_id
         self._model = model
         self._endpoint = endpoint
         self._task = asyncio.create_task(self._watch())
@@ -389,18 +471,34 @@ class RequestWatcher:
         while True:
             if await self._request.is_disconnected():
                 CLIENT_DISCONNECTS_TOTAL.inc(tags={"model": self._model, "endpoint": self._endpoint})
-                await self._event.set.remote()  # type: ignore[attr-defined]
+                await self._record_disconnect()
                 break
             await asyncio.sleep(0.1)
 
+    async def _record_disconnect(self) -> None:
+        """Record the disconnect in the shared registry, re-resolving the actor and
+        retrying once if it has died — otherwise a registry blip silently loses the
+        signal and the deployment runs to completion."""
+        try:
+            await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
+        except RayActorError:
+            reset_disconnect_registry()
+            self._registry = get_disconnect_registry()
+            try:
+                await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
+            except RayActorError:
+                _logger.warning("Disconnect registry unavailable; lost disconnect for %s", self._request_id)
+
     def stop(self):
-        """Cancel the watch task and kill the Ray actor. Call when the request is fully handled."""
+        """Cancel the watch task. The disconnect entry (if any) is deliberately
+        left for the DisconnectRegistry to TTL-evict: clearing it here ran in the
+        same teardown the disconnect triggered and raced the model deployment's
+        is_disconnected() poll, dropping the signal before it was read."""
         self._task.cancel()
-        ray.kill(self._event)
 
     @property
-    def event(self):
-        return self._event
+    def registry(self):
+        return self._registry
 
 
 class RawRequestProxy:
@@ -410,20 +508,30 @@ class RawRequestProxy:
     The real FastAPI Request cannot cross Ray process boundaries — it holds a live
     TCP socket and ASGI callables that are not serializable. Instead, the gateway
     extracts the serializable parts (headers as a plain dict, disconnect signal via
-    DisconnectEvent Ray actor) and passes those to the model deployment. RawRequestProxy
-    reconstructs them into the interface that vllm expects from a raw_request:
+    the shared DisconnectRegistry actor) and passes those to the model deployment.
+    RawRequestProxy reconstructs them into the interface that vllm expects:
 
       - raw_request.headers.get(...)     → Starlette Headers built from the dict
-      - await raw_request.is_disconnected() → polls the DisconnectEvent Ray actor
+      - await raw_request.is_disconnected() → polls the DisconnectRegistry by id
 
     Any additional attributes vllm reads from raw_request in future should be added here.
     """
 
-    def __init__(self, event, headers: dict, request_id: str | None = None):
-        self._event = event
+    def __init__(self, registry, headers: dict, request_id: str | None = None):
+        self._registry = registry
         self.headers = Headers(headers=headers)
-        self.state = State()  # vllm writes per-request state here; initialized empty, lives in the actor process
+        self.state = State()  # vllm writes per-request state here; lives in the actor process
         self.request_id = request_id
 
     async def is_disconnected(self) -> bool:
-        return await self._event.is_set.remote()
+        try:
+            return await self._registry.is_set.remote(self.request_id)
+        except RayActorError:
+            # The shared registry actor died (node preemption, GCS restart). Disconnect
+            # propagation is best-effort, so degrade to "still connected" rather than
+            # failing a healthy in-flight request, and re-resolve the (recreated, via
+            # get_if_exists) actor so later polls in this request reconnect.
+            _logger.warning("Disconnect registry unavailable; assuming client connected")
+            reset_disconnect_registry()
+            self._registry = get_disconnect_registry()
+            return False

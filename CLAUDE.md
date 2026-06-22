@@ -46,9 +46,9 @@ Docker's `CMD` is `uv run --no-sync mship_deploy.py` (auto-detecting CPUs/GPUs u
 ## Architecture map
 
 - `mship_deploy.py` — Ray init + deploy loop. `build_deployment_options` (in `modelship/deploy/actor_options.py`) handles GPU allocation: multi-slot vLLM deploys (`tp*pp > 1`) always build a Ray Serve placement group (one whole-GPU bundle per slot, STRICT_PACK) that vLLM's ray executor inherits via `get_current_placement_group()`. Single-slot deploys use a scalar `num_gpus` on the outer actor (fractional sharing supported). Fractional `num_gpus` with `tp*pp > 1` is rejected at config time — Ray packs fractional PG bundles onto the same physical GPU. `llama_cpp` loader is CPU-only — `num_gpus > 0` is silently forced to 0.
-- `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + `DisconnectEvent` Ray actor to propagate client disconnects across process boundaries and cancel in-flight inference.
+- `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + a single shared `DisconnectRegistry` Ray actor (keyed by request id) to propagate client disconnects across process boundaries and cancel in-flight inference.
 - `modelship/infer/model_deployment.py` — the single `@serve.deployment` actor class; lazily imports the right backend from `config.loader`.
-- `modelship/infer/infer_config.py` — pydantic config schemas plus `RawRequestProxy` / `DisconnectEvent`. `RawRequestProxy` exists because FastAPI `Request` can't cross Ray process boundaries. **Any new attribute vLLM reads from `raw_request` must be added there.**
+- `modelship/infer/infer_config.py` — pydantic config schemas plus `RawRequestProxy` / `DisconnectRegistry`. `RawRequestProxy` exists because FastAPI `Request` can't cross Ray process boundaries. **Any new attribute vLLM reads from `raw_request` must be added there.**
 - `modelship/infer/{vllm,transformers,diffusers,llama_cpp,custom}/` — one subdir per loader, each with an `*_infer.py` and (for non-custom) an `openai/` adapter subpackage.
 - `modelship/plugins/base_plugin.py` — `BasePlugin` ABC that each plugin package subclasses as `ModelPlugin`.
 - `plugins/*` — workspace packages, each opt-in via a matching root extra. The plugin module name and extra name **must match** (`ensure_plugin()` does `importlib.import_module(config.plugin)`).
