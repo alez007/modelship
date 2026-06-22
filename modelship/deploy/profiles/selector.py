@@ -102,7 +102,10 @@ def select_stack(profile: str, budget: DeployBudget) -> list[ModelSpec]:
     best_key = (float("-inf"), 0)
     for combo in itertools.product(*groups):
         cpu_sum = sum(c.req.cpu for c in combo)
-        ram_sum = sum(c.req.ram_bytes for c in combo if not c.spec.draws_from_vram)
+        # Every model burns host RAM (GPU models too — vLLM/diffusers hold weights,
+        # KV, and CUDA context in system RAM); VRAM is an *extra* gate below, not a
+        # substitute for the host-RAM budget.
+        ram_sum = sum(c.req.ram_bytes for c in combo)
         if cpu_sum > cpu_cap or ram_sum > ram_cap:
             continue
         if not _vram_fits([c.spec for c in combo], budget.gpu_count, vram_cap):
@@ -138,13 +141,14 @@ def _modes(spec: ModelSpec) -> Iterator[_Candidate]:
 
 
 def _admits(cand: _Candidate, cpu_cap: float, ram_cap: int, vram_cap: int) -> bool:
-    """True if this single candidate's own demand fits the host caps. GPU models are
-    gated on VRAM (their coarse footprint); CPU models on RAM. cpu applies to both."""
-    if cand.req.cpu > cpu_cap:
+    """True if this single candidate's own demand fits the host caps. cpu + host RAM
+    apply to every model; GPU models must additionally fit a card's VRAM (their coarse
+    footprint)."""
+    if cand.req.cpu > cpu_cap or cand.req.ram_bytes > ram_cap:
         return False
     if cand.spec.draws_from_vram:
         return cand.spec.footprint_bytes <= vram_cap
-    return cand.req.ram_bytes <= ram_cap
+    return True
 
 
 def _vram_fits(specs: list[ModelSpec], gpu_count: int, vram_cap: int) -> bool:
@@ -205,18 +209,21 @@ def _does_not_fit_message(
     reports the lightest possible combined demand against the caps."""
     lighter = ", ".join(p for p in PROFILES if p != profile)
     cpu_need = sum(min(c.req.cpu for c in g) for g in groups)
+    # Every model draws host RAM (GPU models too), so the lightest combined host-RAM
+    # need sums each group's smallest req.ram_bytes regardless of accelerator.
+    ram_need = sum(min(c.req.ram_bytes for c in g) for g in groups)
+    ram_avail = budget.available_ram_bytes or budget.ram_bytes
     if accel == Accelerator.gpu:
         gpu_lightest = [min((c.spec.footprint_bytes for c in g if c.spec.draws_from_vram), default=0) for g in groups]
         gpu_lightest = [x for x in gpu_lightest if x]
         vram_need = max(gpu_lightest, default=0) if budget.gpu_count >= len(gpu_lightest) else sum(gpu_lightest)
         return (
-            f"profile {profile!r} does not fit: its lightest stack needs ~{vram_need / 1024**3:.0f} GiB VRAM "
-            f"and {cpu_need:.0f} cores, but only {budget.vram_bytes_per_gpu / 1024**3:.0f} GiB/GPU and "
-            f"{budget.cpu_units:.0f} cores are free. Choose a lighter profile ({lighter}), add VRAM, or write "
-            f"config/models.yaml by hand."
+            f"profile {profile!r} does not fit: its lightest stack needs ~{vram_need / 1024**3:.0f} GiB VRAM, "
+            f"~{ram_need / 1024**3:.0f} GiB host RAM and {cpu_need:.0f} cores, but only "
+            f"{budget.vram_bytes_per_gpu / 1024**3:.0f} GiB/GPU, {ram_avail / 1024**3 * _UTILIZATION:.0f} GiB usable "
+            f"RAM and {budget.cpu_units:.0f} cores are free. Choose a lighter profile ({lighter}), add VRAM/RAM, or "
+            f"write config/models.yaml by hand."
         )
-    ram_need = sum(min((c.req.ram_bytes for c in g if not c.spec.draws_from_vram), default=0) for g in groups)
-    ram_avail = budget.available_ram_bytes or budget.ram_bytes
     return (
         f"profile {profile!r} does not fit: its lightest stack needs ~{ram_need / 1024**3:.0f} GiB RAM and "
         f"{cpu_need:.0f} cores, but only {ram_avail / 1024**3 * _UTILIZATION:.0f} GiB usable RAM and "

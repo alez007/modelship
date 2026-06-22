@@ -180,6 +180,18 @@ def test_multi_gpu_fit_checks_largest_model_not_sum():
     assert "14B" in _gen(specs).model
 
 
+def test_gpu_models_host_ram_counts_against_the_ram_cap():
+    # Ample VRAM but a starved host: studio's GPU generate + image each need a few
+    # GiB of *host* RAM (weights/KV/CUDA ctx), which must count. With only ~4 GiB
+    # free the stack can't fit even though every model fits VRAM — the old code
+    # excluded GPU host RAM and would have wrongly accepted it.
+    starved = DeployBudget(
+        cpu_units=16.0, gpu_count=2, ram_bytes=64 * _GiB, vram_bytes_per_gpu=24 * _GiB, available_ram_bytes=4 * _GiB
+    )
+    with pytest.raises(ProfileDoesNotFitError):
+        select_stack("studio", starved)
+
+
 def test_utilization_headroom_is_applied():
     assert _UTILIZATION == 0.8
     with pytest.raises(ProfileDoesNotFitError):
