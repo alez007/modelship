@@ -230,25 +230,28 @@ def _read_first_int(paths: tuple[str, ...]) -> int | None:
 
 
 def _cgroup_reclaimable_cache_bytes(stat_paths: tuple[str, ...]) -> int | None:
-    """Sum the evictable file-cache lines from memory.stat (v2 `inactive_file` +
-    `active_file`; v1 `total_inactive_file` + `total_active_file`). None if no
-    memory.stat is readable; 0 if it's readable but lists no cache keys."""
-    keys = ("inactive_file", "active_file", "total_inactive_file", "total_active_file")
+    """Sum the evictable file-cache from memory.stat. None if no memory.stat is
+    readable; 0 if it's readable but lists no cache keys.
+
+    cgroup v1 lists BOTH the hierarchical `total_*_file` and the per-cgroup
+    `*_file` lines, so summing all keys double-counts. We prefer the `total_*`
+    pair when present (v1, hierarchical — the right figure under a cap) and fall
+    back to the plain `inactive_file`/`active_file` pair (v2 has only those)."""
     for path in stat_paths:
         try:
             with open(path) as f:
                 raw = f.read()
         except OSError:
             continue
-        total = 0
+        values: dict[str, int] = {}
         for line in raw.splitlines():
             parts = line.split()
-            if len(parts) == 2 and parts[0] in keys:
-                try:
-                    total += int(parts[1])
-                except ValueError:
-                    continue
-        return total
+            if len(parts) == 2:
+                with contextlib.suppress(ValueError):
+                    values[parts[0]] = int(parts[1])
+        if "total_inactive_file" in values:  # cgroup v1 — use the hierarchical pair only
+            return values.get("total_inactive_file", 0) + values.get("total_active_file", 0)
+        return values.get("inactive_file", 0) + values.get("active_file", 0)
     return None
 
 

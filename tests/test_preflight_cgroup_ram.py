@@ -128,13 +128,20 @@ def test_cgroup_v2_available_adds_back_reclaimable_cache(tmp_path):
         assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=(stat,)) == 4 * _GiB
 
 
-def test_cgroup_v1_available_uses_total_file_keys(tmp_path):
+def test_cgroup_v1_available_uses_total_file_keys_without_double_counting(tmp_path):
+    # A real v1 memory.stat lists BOTH the per-cgroup (`*_file`) and hierarchical
+    # (`total_*_file`) lines. We must count the `total_*` pair ONLY — summing all
+    # four would double-count the reclaimable cache and overstate headroom → OOM.
     limit = 8 * _GiB
     current = 5 * _GiB
     usage = _write(tmp_path, "memory.usage_in_bytes", str(current))
-    stat = _write(tmp_path, "memory.stat", f"total_inactive_file {1 * _GiB}\ntotal_active_file {2 * _GiB}\n")
+    body = (
+        f"inactive_file {1 * _GiB}\nactive_file {2 * _GiB}\n"
+        f"total_inactive_file {1 * _GiB}\ntotal_active_file {2 * _GiB}\n"
+    )
+    stat = _write(tmp_path, "memory.stat", body)
     with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=limit):
-        # headroom = 8 - 5 + (1 + 2) = 6 GiB
+        # headroom = 8 - 5 + (1 + 2) = 6 GiB — NOT 8 - 5 + 6 = 9 (which would exceed the limit).
         assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=(stat,)) == 6 * _GiB
 
 
