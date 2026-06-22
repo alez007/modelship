@@ -1,156 +1,108 @@
-"""Tests for the profile catalog + tier classifier.
+"""Tests for the profile catalog.
 
-Pure data/functions — no cluster, no model downloads. Source strings are
-verified live against HF separately; here we assert structure and tiering."""
+Pure data/functions — no cluster, no model downloads. Source strings are verified
+live against HF separately; here we assert structure, resource sets, and weights."""
 
 from __future__ import annotations
 
 import pytest
 
-from modelship.deploy.profiles.budget import DeployBudget
 from modelship.deploy.profiles.catalog import (
-    LADDER_USECASES,
     PROFILES,
-    generate_ladder,
-    image_ladder,
-    satellite,
+    ModelSpec,
+    candidates,
 )
-from modelship.deploy.profiles.tiers import Accelerator, Tier, classify
+from modelship.deploy.profiles.tiers import Accelerator
 from modelship.infer.infer_config import ModelLoader, ModelUsecase
 
-_GiB = 1024**3
+_ALL_USECASES = sorted({uc for caps in PROFILES.values() for uc in caps}, key=lambda u: u.value)
 
 
-# --- tier classifier ----------------------------------------------------------
+def _every_spec() -> list[ModelSpec]:
+    specs: list[ModelSpec] = []
+    for uc in _ALL_USECASES:
+        for accel in (Accelerator.cpu, Accelerator.gpu):
+            specs.extend(candidates(uc, accel))
+    return specs
 
 
-def _cpu_budget(ram_gib: float) -> DeployBudget:
-    return DeployBudget(cpu_units=8.0, gpu_count=0, ram_bytes=int(ram_gib * _GiB), vram_bytes_per_gpu=0)
-
-
-def _gpu_budget(vram_gib: float) -> DeployBudget:
-    return DeployBudget(cpu_units=16.0, gpu_count=1, ram_bytes=64 * _GiB, vram_bytes_per_gpu=int(vram_gib * _GiB))
-
-
-@pytest.mark.parametrize(
-    "ram_gib,expected",
-    [
-        (4, Tier.small),
-        (8, Tier.small),
-        (15.9, Tier.small),
-        (16, Tier.medium),
-        (31, Tier.medium),
-        (32, Tier.large),
-        (128, Tier.large),
-    ],
-)
-def test_cpu_tiers(ram_gib, expected):
-    accel, tier = classify(_cpu_budget(ram_gib))
-    assert accel == Accelerator.cpu
-    assert tier == expected
-
-
-@pytest.mark.parametrize(
-    "vram_gib,expected",
-    [
-        # Thresholds sit 1 GiB below nominal card size (we measure free VRAM):
-        # < 15 small, 15-22 medium, >= 23 large — so 8/16/24 GiB cards land S/M/L.
-        (8, Tier.small),
-        (14, Tier.small),
-        (14.9, Tier.small),
-        (15, Tier.medium),
-        (15.3, Tier.medium),  # a real "16 GiB" card's free VRAM
-        (16, Tier.medium),
-        (22.9, Tier.medium),
-        (23, Tier.large),
-        (24, Tier.large),
-        (80, Tier.large),
-    ],
-)
-def test_gpu_tiers(vram_gib, expected):
-    accel, tier = classify(_gpu_budget(vram_gib))
-    assert accel == Accelerator.gpu
-    assert tier == expected
-
-
-@pytest.mark.parametrize(
-    "cores,ram_gib,expected",
-    [
-        (4, 64, Tier.small),  # cores cap a roomy box down to S
-        (6, 64, Tier.medium),
-        (8, 64, Tier.large),
-        (16, 64, Tier.large),
-        (8, 8, Tier.small),  # RAM is the binding constraint here
-        (4, 32, Tier.small),  # the user's box: 4 cores caps 32 GiB to S
-    ],
-)
-def test_cpu_tier_is_min_of_ram_and_cores(cores, ram_gib, expected):
-    b = DeployBudget(cpu_units=cores, gpu_count=0, ram_bytes=int(ram_gib * _GiB), vram_bytes_per_gpu=0)
-    accel, tier = classify(b)
-    assert accel == Accelerator.cpu
-    assert tier == expected
-
-
-def test_gpu_tier_ignores_host_cores():
-    # Few host cores must NOT cap the GPU tier — the GPU does the compute.
-    b = DeployBudget(cpu_units=4, gpu_count=1, ram_bytes=64 * _GiB, vram_bytes_per_gpu=24 * _GiB)
-    accel, tier = classify(b)
-    assert accel == Accelerator.gpu and tier == Tier.large
-
-
-def test_gpu_presence_beats_ram_for_accelerator_choice():
-    # Lots of RAM but a GPU is present → GPU bundle.
-    b = DeployBudget(cpu_units=16.0, gpu_count=1, ram_bytes=256 * _GiB, vram_bytes_per_gpu=24 * _GiB)
-    accel, tier = classify(b)
-    assert accel == Accelerator.gpu and tier == Tier.large
-
-
-# --- catalog structure --------------------------------------------------------
+# --- profiles -----------------------------------------------------------------
 
 
 def test_profiles_are_the_locked_four():
     assert set(PROFILES) == {"chat", "assistant", "studio", "everything"}
 
 
-def test_ladders_have_three_rungs_ascending_footprint():
-    for accel in (Accelerator.cpu, Accelerator.gpu):
-        for ladder in (generate_ladder(accel), image_ladder(accel)):
-            assert len(ladder) == 3
-            assert [s.footprint_bytes for s in ladder] == sorted(s.footprint_bytes for s in ladder)
+# --- candidate pools ----------------------------------------------------------
 
 
-def test_cpu_ladders_use_cpu_loaders_gpu_ladders_use_gpu_loaders():
-    for s in generate_ladder(Accelerator.cpu) + image_ladder(Accelerator.cpu):
+@pytest.mark.parametrize("uc", _ALL_USECASES)
+def test_every_required_usecase_has_candidates_on_both_accelerators(uc):
+    assert candidates(uc, Accelerator.cpu), f"{uc} has no CPU candidates"
+    assert candidates(uc, Accelerator.gpu), f"{uc} has no GPU candidates"
+
+
+def test_generate_and_image_split_loaders_by_accelerator():
+    for s in candidates(ModelUsecase.generate, Accelerator.cpu) + candidates(ModelUsecase.image, Accelerator.cpu):
         assert s.draws_from_vram is False
-    for s in generate_ladder(Accelerator.gpu):
+    for s in candidates(ModelUsecase.generate, Accelerator.gpu):
         assert s.loader == ModelLoader.vllm and s.draws_from_vram is True
-    for s in image_ladder(Accelerator.gpu):
+    for s in candidates(ModelUsecase.image, Accelerator.gpu):
         assert s.loader == ModelLoader.diffusers and s.draws_from_vram is True
 
 
-def test_satellites_are_constant_and_cpu_pinned():
-    # embed + tts identical regardless of tier; both CPU loaders (RAM-drawing).
-    for tier in Tier:
-        assert satellite(ModelUsecase.embed, tier).model == "nomic-ai/nomic-embed-text-v1.5-GGUF:*f16.gguf"
-        assert satellite(ModelUsecase.tts, tier).plugin == "kokoroonnx"
-        assert satellite(ModelUsecase.embed, tier).draws_from_vram is False
-        assert satellite(ModelUsecase.tts, tier).draws_from_vram is False
+def test_satellites_are_the_same_cpu_pinned_pool_on_both_accelerators():
+    for uc in (ModelUsecase.embed, ModelUsecase.tts, ModelUsecase.transcription):
+        cpu_pool = candidates(uc, Accelerator.cpu)
+        assert candidates(uc, Accelerator.gpu) == cpu_pool  # identical tuple
+        assert all(s.draws_from_vram is False for s in cpu_pool)
 
 
-def test_transcription_steps_base_on_smallest_cpu_tier_else_small():
-    assert satellite(ModelUsecase.transcription, Tier.small).model == "base"
-    assert satellite(ModelUsecase.transcription, Tier.medium).model == "small"
-    assert satellite(ModelUsecase.transcription, Tier.large).model == "small"
+def test_transcription_pool_offers_tiny_base_and_small():
+    models = {s.model for s in candidates(ModelUsecase.transcription, Accelerator.cpu)}
+    assert models == {"tiny", "base", "small"}
 
 
-def test_satellite_rejects_ladder_usecases():
-    for uc in LADDER_USECASES:
-        with pytest.raises(ValueError):
-            satellite(uc, Tier.small)
+def test_unknown_usecase_returns_empty_pool():
+    # ModelUsecase has members not in any profile (e.g. rerank); pool is empty, not an error.
+    missing = [uc for uc in ModelUsecase if uc not in _ALL_USECASES]
+    for uc in missing:
+        assert candidates(uc, Accelerator.cpu) == ()
+
+
+# --- resource sets + weights --------------------------------------------------
+
+
+def test_every_spec_has_coherent_min_and_rec_reqs():
+    for s in _every_spec():
+        assert s.req_min.cpu <= s.req_rec.cpu, s.model
+        assert s.req_min.ram_bytes <= s.req_rec.ram_bytes, s.model
+        # A comfortable run is worth at least as much as the same model starved.
+        assert s.req_min.weight <= s.req_rec.weight, s.model
+        assert s.req_min.weight > 0, s.model
+
+
+@pytest.mark.parametrize("accel", [Accelerator.cpu, Accelerator.gpu])
+def test_generate_and_image_pools_ascend_in_footprint_and_weight(accel):
+    for uc in (ModelUsecase.generate, ModelUsecase.image):
+        pool = candidates(uc, accel)
+        assert [s.footprint_bytes for s in pool] == sorted(s.footprint_bytes for s in pool)
+        # Bigger rungs are worth more at the same (recommended) mode.
+        assert [s.req_rec.weight for s in pool] == sorted(s.req_rec.weight for s in pool)
+
+
+def test_recommended_of_a_rung_outscores_minimum_of_the_next():
+    # The tuning lever: a smaller model running comfortably should beat the next
+    # rung up running starved, so the selector prefers the comfortable fit.
+    from itertools import pairwise
+
+    gen = candidates(ModelUsecase.generate, Accelerator.cpu)
+    for smaller, bigger in pairwise(gen):
+        assert smaller.req_rec.weight > bigger.req_min.weight
 
 
 def test_image_turbo_rungs_use_few_steps():
-    cpu_img = image_ladder(Accelerator.cpu)
+    cpu_img = candidates(ModelUsecase.image, Accelerator.cpu)
     # SD-Turbo / SDXL-Turbo: ~4 steps; SDXL-base: ~30.
     assert cpu_img[0].loader_config["sample_steps"] == 4
     assert cpu_img[1].loader_config["sample_steps"] == 4

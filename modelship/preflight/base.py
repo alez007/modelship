@@ -24,7 +24,16 @@ class HardwareProfile:
 
     gpus: list[GPUInfo] = field(default_factory=list)
     ram_bytes: int = 0
+    available_ram_bytes: int = 0
     cpu_count: int = 0
+
+    @property
+    def sizing_ram_bytes(self) -> int:
+        """RAM a loader should size itself against: free RAM when known, else total.
+        Free reflects what's left after co-resident models, so a model deployed last
+        doesn't oversize and OOM its neighbours; total is the fallback when the
+        available probe read nothing."""
+        return self.available_ram_bytes or self.ram_bytes
 
 
 class BasePreflight(Protocol):
@@ -58,7 +67,12 @@ def discover_hardware() -> HardwareProfile:
     """
     import os
 
-    return HardwareProfile(gpus=detect_gpus(), ram_bytes=detect_ram_bytes(), cpu_count=os.cpu_count() or 0)
+    return HardwareProfile(
+        gpus=detect_gpus(),
+        ram_bytes=detect_ram_bytes(),
+        available_ram_bytes=detect_available_ram_bytes(),
+        cpu_count=os.cpu_count() or 0,
+    )
 
 
 def detect_gpus() -> list[GPUInfo]:
@@ -87,35 +101,55 @@ def detect_ram_bytes() -> int:
     container — so inside a memory-capped container it reports the HOST's RAM,
     not the cgroup limit. Sizing a model against host RAM would OOM-kill a capped
     container. The real ceiling lives in the cgroup pseudo-files; we take the
-    tighter of psutil and the cgroup limit. Returns 0 if RAM can't be read.
-
-    """
-    ram_bytes = 0
+    tighter of psutil and the cgroup limit. Returns 0 if RAM can't be read."""
+    host_total = 0
     try:
         import psutil
 
-        ram_bytes = int(psutil.virtual_memory().total)
+        host_total = int(psutil.virtual_memory().total)
     except Exception:
-        logger.debug("preflight: psutil probe failed; ram_bytes=0", exc_info=True)
+        logger.debug("preflight: psutil total-RAM probe failed", exc_info=True)
+    return _tighter_ram(host_total, _cgroup_memory_limit_bytes(), what="memory limit")
 
-    cgroup_limit = _cgroup_memory_limit_bytes()
-    if cgroup_limit is not None:
-        if ram_bytes > 0:
-            capped = min(ram_bytes, cgroup_limit)
-            if capped < ram_bytes:
-                logger.debug(
-                    "preflight: applying cgroup memory limit %.2f GiB (host reports %.2f GiB)",
-                    capped / 1024**3,
-                    ram_bytes / 1024**3,
-                )
-            ram_bytes = capped
-        else:
-            # psutil failed but the cgroup limit is readable — use it rather than
-            # returning 0 (which would fail sizing / refuse the deploy).
-            logger.debug("preflight: psutil unavailable; using cgroup memory limit %.2f GiB", cgroup_limit / 1024**3)
-            ram_bytes = cgroup_limit
 
-    return ram_bytes
+def detect_available_ram_bytes() -> int:
+    """RAM currently *free* for new allocations, honoring a container memory cap.
+
+    Same host-vs-cgroup reconciliation as `detect_ram_bytes`, but for headroom
+    rather than the ceiling — lets a model size against what's left after
+    co-resident models, not the whole box. `psutil.virtual_memory().available`
+    is cache-aware (counts reclaimable page cache as free) but NOT
+    cgroup-namespaced, so inside a cap it reads the host's headroom and
+    overestimates; we take the tighter of it and the cgroup's own headroom.
+    Returns 0 only if neither signal is readable."""
+    host_available = 0
+    try:
+        import psutil
+
+        host_available = int(psutil.virtual_memory().available)
+    except Exception:
+        logger.debug("preflight: psutil available-RAM probe failed", exc_info=True)
+    return _tighter_ram(host_available, _cgroup_memory_available_bytes(), what="memory headroom")
+
+
+def _tighter_ram(host_bytes: int, cgroup_bytes: int | None, *, what: str) -> int:
+    """Reconcile a host psutil reading with the cgroup's: take the tighter when
+    both are present, fall back to whichever is readable, 0 if neither is. Shared
+    by the total and available probes (only the two inputs differ)."""
+    if cgroup_bytes is None:
+        return host_bytes  # uncapped or unreadable cgroup — trust the host value
+    if host_bytes <= 0:
+        # psutil failed but the cgroup value is readable — use it rather than 0.
+        logger.debug("preflight: psutil unavailable; using cgroup %s %.2f GiB", what, cgroup_bytes / 1024**3)
+        return cgroup_bytes
+    if cgroup_bytes < host_bytes:
+        logger.debug(
+            "preflight: cgroup %s %.2f GiB binds (host reports %.2f GiB)",
+            what,
+            cgroup_bytes / 1024**3,
+            host_bytes / 1024**3,
+        )
+    return min(host_bytes, cgroup_bytes)
 
 
 # cgroup v1 reports "unlimited" as a near-INT64_MAX sentinel: PAGE_COUNTER_MAX
@@ -153,6 +187,71 @@ def _cgroup_memory_limit_bytes(
         if value <= 0 or value >= _CGROUP_V1_UNLIMITED:  # cgroup v1 "unlimited" / nonsensical
             return None
         return value
+    return None
+
+
+def _cgroup_memory_available_bytes(
+    usage_paths: tuple[str, ...] = (
+        "/sys/fs/cgroup/memory.current",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",  # cgroup v1
+    ),
+    stat_paths: tuple[str, ...] = (
+        "/sys/fs/cgroup/memory.stat",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.stat",  # cgroup v1
+    ),
+) -> int | None:
+    """Free RAM inside the container's memory cgroup, or None when uncapped/unreadable.
+
+    `limit - current + reclaimable`: current usage counts page cache, but the kernel
+    will evict reclaimable file cache under pressure so it isn't really "used". We
+    add back `inactive_file + active_file` (v2; `total_*_file` v1) from memory.stat.
+    If memory.stat is unreadable we treat reclaimable as 0 — conservative (smaller
+    headroom). Each pseudo-file read is isolated; a parse failure skips that signal
+    rather than raising. `*_paths` are parameters only so tests can use temp files."""
+    limit = _cgroup_memory_limit_bytes()
+    if limit is None:  # uncapped — defer to the host (psutil) reading
+        return None
+    current = _read_first_int(usage_paths)
+    if current is None:
+        return None
+    reclaimable = _cgroup_reclaimable_cache_bytes(stat_paths) or 0
+    return max(0, limit - current + reclaimable)
+
+
+def _read_first_int(paths: tuple[str, ...]) -> int | None:
+    """Read the first readable path as a single integer, else None."""
+    for path in paths:
+        try:
+            with open(path) as f:
+                return int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _cgroup_reclaimable_cache_bytes(stat_paths: tuple[str, ...]) -> int | None:
+    """Sum the evictable file-cache from memory.stat. None if no memory.stat is
+    readable; 0 if it's readable but lists no cache keys.
+
+    cgroup v1 lists BOTH the hierarchical `total_*_file` and the per-cgroup
+    `*_file` lines, so summing all keys double-counts. We prefer the `total_*`
+    pair when present (v1, hierarchical — the right figure under a cap) and fall
+    back to the plain `inactive_file`/`active_file` pair (v2 has only those)."""
+    for path in stat_paths:
+        try:
+            with open(path) as f:
+                raw = f.read()
+        except OSError:
+            continue
+        values: dict[str, int] = {}
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                with contextlib.suppress(ValueError):
+                    values[parts[0]] = int(parts[1])
+        if "total_inactive_file" in values:  # cgroup v1 — use the hierarchical pair only
+            return values.get("total_inactive_file", 0) + values.get("total_active_file", 0)
+        return values.get("inactive_file", 0) + values.get("active_file", 0)
     return None
 
 

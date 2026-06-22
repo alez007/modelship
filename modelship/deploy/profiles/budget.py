@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from modelship.logging import get_logger
-from modelship.preflight import detect_gpus, detect_ram_bytes
+from modelship.preflight import detect_available_ram_bytes, detect_gpus, detect_ram_bytes
 
 logger = get_logger("deploy.profiles.budget")
 
@@ -34,13 +34,16 @@ class DeployBudget:
     """What the generator may allocate on this box.
 
     `cpu_units` / `gpu_count` are Ray-ledger counts (schedulable). `ram_bytes` is
-    the container-aware physical RAM. `vram_bytes_per_gpu` is the conservative
-    per-GPU VRAM across the pool (0 when no usable GPU)."""
+    the container-aware *total* physical RAM (the box's stable size — used for the
+    human-facing header). `available_ram_bytes` is the container-aware *free* RAM at
+    deploy time — what the selector actually sizes against. `vram_bytes_per_gpu` is
+    the conservative per-GPU VRAM across the pool (0 when no usable GPU)."""
 
     cpu_units: float
     gpu_count: int
     ram_bytes: int
     vram_bytes_per_gpu: int
+    available_ram_bytes: int = 0
 
     @property
     def has_gpu(self) -> bool:
@@ -61,6 +64,7 @@ def read_deploy_budget() -> DeployBudget:
     gpu_count = int(ledger.get("GPU", 0))
 
     ram_bytes = detect_ram_bytes()
+    available_ram_bytes = detect_available_ram_bytes()
 
     # Per-GPU VRAM for tiering: take the smallest across the pool so a
     # homogeneous fleet sizes to its real per-card budget and a (mis)matched one
@@ -84,13 +88,15 @@ def read_deploy_budget() -> DeployBudget:
         cpu_units=cpu_units,
         gpu_count=gpu_count,
         ram_bytes=ram_bytes,
+        available_ram_bytes=available_ram_bytes,
         vram_bytes_per_gpu=vram_per_gpu,
     )
     logger.info(
-        "profiles: deploy budget — cpu_units=%.1f gpu_count=%d ram=%.1f GiB vram/gpu=%.1f GiB (has_gpu=%s)",
+        "profiles: deploy budget — cpu_units=%.1f gpu_count=%d ram=%.1f GiB (%.1f free) vram/gpu=%.1f GiB (has_gpu=%s)",
         budget.cpu_units,
         budget.gpu_count,
         budget.ram_bytes / 1024**3,
+        budget.available_ram_bytes / 1024**3,
         budget.vram_bytes_per_gpu / 1024**3,
         budget.has_gpu,
     )

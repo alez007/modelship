@@ -69,14 +69,16 @@ class LlamaCppPreflight:
 
         weight_bytes = _weight_bytes(model_path)
 
-        ram_total = hw.ram_bytes
-        budget = ram_total * _RAM_UTILIZATION - weight_bytes - _OVERHEAD_FIXED_BYTES
+        ram_basis = hw.sizing_ram_bytes
+        fallback = " [total fallback]" if not hw.available_ram_bytes else ""
+        budget = ram_basis * _RAM_UTILIZATION - weight_bytes - _OVERHEAD_FIXED_BYTES
         if budget <= 0:
             logger.warning(
-                "preflight '%s': no n_ctx budget (ram=%.2f GiB, util=%.2f, weights=%.2f GiB, "
+                "preflight '%s': no n_ctx budget (ram_avail=%.2f GiB%s, util=%.2f, weights=%.2f GiB, "
                 "overhead=%.2f GiB). Model likely won't fit; deploy will be attempted anyway.",
                 config.name,
-                ram_total / 1024**3,
+                ram_basis / 1024**3,
+                fallback,
                 _RAM_UTILIZATION,
                 weight_bytes / 1024**3,
                 _OVERHEAD_FIXED_BYTES / 1024**3,
@@ -107,9 +109,11 @@ class LlamaCppPreflight:
             return {}
 
         logger.info(
-            "preflight llama_cpp '%s': ram=%.2f GiB util=%.2f weights=%.2f GiB kv/token=%d B → suggested n_ctx=%d",
+            "preflight llama_cpp '%s': ram_avail=%.2f GiB%s util=%.2f weights=%.2f GiB kv/token=%d B "
+            "→ suggested n_ctx=%d",
             config.name,
-            ram_total / 1024**3,
+            ram_basis / 1024**3,
+            fallback,
             _RAM_UTILIZATION,
             weight_bytes / 1024**3,
             int(kv_per_token),

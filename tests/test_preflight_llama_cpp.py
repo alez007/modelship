@@ -129,6 +129,39 @@ class TestLlamaCppPreflightRecommends:
 
         assert rec == {"n_ctx": 32768}
 
+    def test_sizes_against_available_ram_not_total(self, tmp_path):
+        # Same total RAM, different *free* RAM → the box with more free RAM gets a
+        # larger n_ctx. This is the multi-model fix: the generate model sizes against
+        # what's left after the satellites, not the box's total.
+        cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)))
+        big_meta = _GGUFMeta(
+            block_count=_LLAMA_META.block_count,
+            head_count_kv=_LLAMA_META.head_count_kv,
+            head_dim=_LLAMA_META.head_dim,
+            context_length=131072,  # giant so the budget, not the cap, decides
+        )
+        tight = HardwareProfile(ram_bytes=64 * 1024**3, available_ram_bytes=6 * 1024**3)
+        roomy = HardwareProfile(ram_bytes=64 * 1024**3, available_ram_bytes=24 * 1024**3)
+        with (
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=big_meta),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=int(1.5 * 1024**3)),
+        ):
+            rec_tight = LlamaCppPreflight().recommend(cfg, tight)
+            rec_roomy = LlamaCppPreflight().recommend(cfg, roomy)
+        assert rec_roomy["n_ctx"] > rec_tight["n_ctx"]
+
+    def test_zero_available_falls_back_to_total(self, tmp_path):
+        # available_ram_bytes == 0 (probe read nothing) → size against total, matching
+        # the pre-change behaviour (no regression for single-model deploys).
+        cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)))
+        only_total = HardwareProfile(ram_bytes=64 * 1024**3, available_ram_bytes=0)
+        with (
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=1 * 1024**3),
+        ):
+            rec = LlamaCppPreflight().recommend(cfg, only_total)
+        assert rec == {"n_ctx": 8192}  # caps at the model's context_length, as with total
+
     def test_oversubscribed_budget_returns_empty(self, tmp_path):
         # Weights >> available RAM → no budget left; skip recommendation
         # rather than ship something the user can't actually run.
