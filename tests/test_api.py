@@ -318,10 +318,7 @@ class TestImageEditRoutes:
         raw_request = MagicMock()
         raw_request.headers = {}
 
-        with (
-            patch("modelship.openai.api.RequestWatcher"),
-            patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")) as handle_response,
-        ):
+        with patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")) as handle_response:
             result = await api.create_image_edit(request, raw_request)
 
         assert result == "OK"
@@ -359,10 +356,7 @@ class TestImageEditRoutes:
         raw_request = MagicMock()
         raw_request.headers = {}
 
-        with (
-            patch("modelship.openai.api.RequestWatcher"),
-            patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")),
-        ):
+        with patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")):
             await api.create_image_variation(request, raw_request)
 
         args, _ = remote.call_args

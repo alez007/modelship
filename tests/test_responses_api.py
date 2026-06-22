@@ -48,10 +48,7 @@ class TestResponsesRoute:
 
         request = ResponsesRequest(model="m", input="hi", instructions="be terse")
 
-        with (
-            patch("modelship.openai.api.RequestWatcher"),
-            patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")) as hr,
-        ):
+        with patch.object(api, "_handle_response", new=AsyncMock(return_value="OK")) as hr:
             result = await api.create_response(request, _raw_request())
 
         assert result == "OK"
@@ -91,8 +88,7 @@ class TestResponsesRoute:
         api._round_robin = {"m": 0}
 
         request = ResponsesRequest(model="m", input="hi", stream=True)
-        with patch("modelship.openai.api.RequestWatcher"):
-            result = await api.create_response(request, _raw_request())
+        result = await api.create_response(request, _raw_request())
 
         assert result.media_type == "text/event-stream"
         # The chat request handed to the loader must be streaming with usage on.
@@ -148,8 +144,7 @@ class TestResponsesRoute:
         api._round_robin = {"m": 0}
 
         request = ResponsesRequest(model="m", input="hi")
-        with patch("modelship.openai.api.RequestWatcher"):
-            result = await api.create_response(request, _raw_request())
+        result = await api.create_response(request, _raw_request())
 
         body = json.loads(bytes(result.body))
         assert body["object"] == "response"
