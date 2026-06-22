@@ -9,7 +9,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from modelship.preflight.base import _cgroup_memory_limit_bytes, detect_ram_bytes
+from modelship.preflight.base import (
+    _cgroup_memory_available_bytes,
+    _cgroup_memory_limit_bytes,
+    detect_available_ram_bytes,
+    detect_ram_bytes,
+)
 
 _GiB = 1024**3
 # cgroup v1's "unlimited" sentinel (PAGE_COUNTER_MAX rounded to the page size).
@@ -102,3 +107,81 @@ def test_detect_ram_zero_only_when_both_unavailable():
         patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=None),
     ):
         assert detect_ram_bytes() == 0
+
+
+# --- _cgroup_memory_available_bytes: headroom = limit - current + reclaimable ---
+
+
+def _v2_stat(tmp_path, inactive_file: int, active_file: int) -> str:
+    body = f"anon 12345\ninactive_file {inactive_file}\nactive_file {active_file}\nslab 999\n"
+    return _write(tmp_path, "memory.stat", body)
+
+
+def test_cgroup_v2_available_adds_back_reclaimable_cache(tmp_path):
+    limit = 8 * _GiB
+    current = 6 * _GiB
+    inactive, active = 1 * _GiB, 1 * _GiB  # 2 GiB of evictable page cache
+    usage = _write(tmp_path, "memory.current", str(current))
+    stat = _v2_stat(tmp_path, inactive, active)
+    with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=limit):
+        # headroom = 8 - 6 + (1 + 1) = 4 GiB
+        assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=(stat,)) == 4 * _GiB
+
+
+def test_cgroup_v1_available_uses_total_file_keys(tmp_path):
+    limit = 8 * _GiB
+    current = 5 * _GiB
+    usage = _write(tmp_path, "memory.usage_in_bytes", str(current))
+    stat = _write(tmp_path, "memory.stat", f"total_inactive_file {1 * _GiB}\ntotal_active_file {2 * _GiB}\n")
+    with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=limit):
+        # headroom = 8 - 5 + (1 + 2) = 6 GiB
+        assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=(stat,)) == 6 * _GiB
+
+
+def test_cgroup_available_is_none_when_uncapped(tmp_path):
+    # No limit (memory.max == "max") → defer to host psutil, not a cgroup figure.
+    usage = _write(tmp_path, "memory.current", str(3 * _GiB))
+    with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=None):
+        assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=()) is None
+
+
+def test_cgroup_available_treats_missing_stat_as_zero_reclaimable(tmp_path):
+    limit = 8 * _GiB
+    usage = _write(tmp_path, "memory.current", str(6 * _GiB))
+    with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=limit):
+        # memory.stat unreadable → reclaimable 0 → headroom = 8 - 6 = 2 GiB (conservative)
+        missing_stat = str(tmp_path / "nope.stat")
+        assert _cgroup_memory_available_bytes(usage_paths=(usage,), stat_paths=(missing_stat,)) == 2 * _GiB
+
+
+def test_cgroup_available_is_none_when_usage_unreadable(tmp_path):
+    with patch("modelship.preflight.base._cgroup_memory_limit_bytes", return_value=8 * _GiB):
+        assert _cgroup_memory_available_bytes(usage_paths=(str(tmp_path / "nope"),), stat_paths=()) is None
+
+
+# --- detect_available_ram_bytes: psutil + cgroup interplay --------------------
+
+
+def test_detect_available_takes_min_of_psutil_and_cgroup():
+    with (
+        patch("psutil.virtual_memory", return_value=SimpleNamespace(available=10 * _GiB)),
+        patch("modelship.preflight.base._cgroup_memory_available_bytes", return_value=3 * _GiB),
+    ):
+        assert detect_available_ram_bytes() == 3 * _GiB
+
+
+def test_detect_available_falls_back_to_host_when_uncapped():
+    # memory.max == "max" → cgroup headroom None → use host psutil available.
+    with (
+        patch("psutil.virtual_memory", return_value=SimpleNamespace(available=10 * _GiB)),
+        patch("modelship.preflight.base._cgroup_memory_available_bytes", return_value=None),
+    ):
+        assert detect_available_ram_bytes() == 10 * _GiB
+
+
+def test_detect_available_falls_back_to_cgroup_when_psutil_fails():
+    with (
+        patch("psutil.virtual_memory", side_effect=RuntimeError("boom")),
+        patch("modelship.preflight.base._cgroup_memory_available_bytes", return_value=3 * _GiB),
+    ):
+        assert detect_available_ram_bytes() == 3 * _GiB

@@ -1,7 +1,9 @@
-"""Tests for the profile selector — tier-exact, fail-fast.
+"""Tests for the profile selector — weighted knapsack, fail-fast.
 
-Asserts the full capability set is always delivered (never partial), the highest
-fitting tier is chosen, and too-small hardware errors rather than degrading."""
+Asserts the full capability set is always delivered (never partial), that sizing
+runs against FREE RAM, that the weight lever prefers a comfortable smaller model
+over a starved larger one, that generate/image deploy last, and that too-small
+hardware errors rather than degrading."""
 
 from __future__ import annotations
 
@@ -10,6 +12,7 @@ import pytest
 from modelship.deploy.profiles.budget import DeployBudget
 from modelship.deploy.profiles.catalog import PROFILES
 from modelship.deploy.profiles.selector import (
+    _DEPLOY_LAST,
     _UTILIZATION,
     ProfileDoesNotFitError,
     select_stack,
@@ -19,13 +22,24 @@ from modelship.infer.infer_config import ModelLoader, ModelUsecase
 _GiB = 1024**3
 
 
-def _cpu(ram_gib: float, cores: float = 8.0) -> DeployBudget:
-    return DeployBudget(cpu_units=cores, gpu_count=0, ram_bytes=int(ram_gib * _GiB), vram_bytes_per_gpu=0)
-
-
-def _gpu(vram_gib: float, ram_gib: float = 64.0) -> DeployBudget:
+def _cpu(ram_gib: float, cores: float = 8.0, avail_gib: float | None = None) -> DeployBudget:
+    avail = ram_gib if avail_gib is None else avail_gib
     return DeployBudget(
-        cpu_units=16.0, gpu_count=1, ram_bytes=int(ram_gib * _GiB), vram_bytes_per_gpu=int(vram_gib * _GiB)
+        cpu_units=cores,
+        gpu_count=0,
+        ram_bytes=int(ram_gib * _GiB),
+        vram_bytes_per_gpu=0,
+        available_ram_bytes=int(avail * _GiB),
+    )
+
+
+def _gpu(vram_gib: float, ram_gib: float = 64.0, gpus: int = 1, cores: float = 16.0) -> DeployBudget:
+    return DeployBudget(
+        cpu_units=cores,
+        gpu_count=gpus,
+        ram_bytes=int(ram_gib * _GiB),
+        vram_bytes_per_gpu=int(vram_gib * _GiB),
+        available_ram_bytes=int(ram_gib * _GiB),
     )
 
 
@@ -33,56 +47,92 @@ def _usecases(specs) -> set[ModelUsecase]:
     return {s.usecase for s in specs}
 
 
+def _gen(specs):
+    return next(s for s in specs if s.usecase == ModelUsecase.generate)
+
+
 # --- full capability set is always delivered ----------------------------------
 
 
 @pytest.mark.parametrize("profile", list(PROFILES))
 def test_roomy_box_delivers_every_capability(profile):
-    specs = select_stack(profile, _cpu(64))  # generous CPU box
+    specs = select_stack(profile, _cpu(64, cores=16))
     assert _usecases(specs) == set(PROFILES[profile])
 
 
 @pytest.mark.parametrize("profile", list(PROFILES))
 def test_never_partial_when_it_fits(profile):
-    # Whatever tier is chosen, the capability set is complete (never a subset).
-    specs = select_stack(profile, _cpu(32))
+    specs = select_stack(profile, _cpu(32, cores=16))
     assert _usecases(specs) == set(PROFILES[profile])
 
 
-# --- highest fitting tier is chosen, stepping down coherently -----------------
+# --- deploy order: satellites first, generate/image last ----------------------
 
 
-def test_chat_picks_larger_generate_on_bigger_box():
-    small = select_stack("chat", _cpu(8))
-    big = select_stack("chat", _cpu(64))
-    gen_small = next(s for s in small if s.usecase == ModelUsecase.generate)
-    gen_big = next(s for s in big if s.usecase == ModelUsecase.generate)
-    assert gen_big.footprint_bytes > gen_small.footprint_bytes
+@pytest.mark.parametrize("profile", list(PROFILES))
+def test_generate_and_image_deploy_last(profile):
+    specs = select_stack(profile, _cpu(64, cores=16))
+    adaptive_seen = False
+    for s in specs:
+        if s.usecase in _DEPLOY_LAST:
+            adaptive_seen = True
+        else:
+            # No satellite may appear after a generate/image model.
+            assert not adaptive_seen, f"{s.usecase} deployed after a generate/image model"
+    # The very last model is always an adaptive one (every profile has generate).
+    assert specs[-1].usecase in _DEPLOY_LAST
 
 
-def test_everything_steps_down_a_tier_rather_than_dropping_capabilities():
-    # 16 GiB can't fit everything's tier-M stack, but CAN fit tier-S — and still
-    # ships all five capabilities (the whole point: no dropping).
-    specs = select_stack("everything", _cpu(16))
-    assert _usecases(specs) == set(PROFILES["everything"])
-    gen = next(s for s in specs if s.usecase == ModelUsecase.generate)
-    # tier-S CPU generate is the 3B (smallest rung), proving the step-down.
-    assert "3B" in gen.model
+# --- weighted picks: bigger box, comfortable-over-starved lever ----------------
+
+
+def test_bigger_box_picks_a_larger_generate():
+    small = _gen(select_stack("chat", _cpu(8)))
+    big = _gen(select_stack("chat", _cpu(64, cores=16)))
+    assert big.footprint_bytes > small.footprint_bytes
+
+
+def test_prefers_comfortable_smaller_over_starved_larger():
+    # ~14 GiB free + plenty of cores: the 14B's *minimum* fits (≈10.5 GiB) and so
+    # does the 7B's *recommended* (≈8 GiB). The weights make 7B@rec outscore
+    # 14B@min, so the selector takes the comfortable 7B rather than a starved 14B.
+    specs = select_stack("chat", _cpu(64, cores=16, avail_gib=14))
+    assert "7B" in _gen(specs).model
+
+
+# --- sizing runs against FREE RAM, not total ----------------------------------
+
+
+def test_available_ram_caps_the_stack_below_total():
+    # Huge total RAM but only 8 GiB free → must size like an 8 GiB box (3B), not
+    # like a 64 GiB one. This is the core fix: co-resident models ate the RAM.
+    roomy = _gen(select_stack("chat", _cpu(64, cores=16)))
+    busy = _gen(select_stack("chat", _cpu(64, cores=16, avail_gib=8)))
+    assert "3B" in busy.model
+    assert busy.footprint_bytes < roomy.footprint_bytes
+
+
+def test_zero_available_falls_back_to_total():
+    # available_ram_bytes == 0 (probe read nothing) must behave like the old total
+    # basis, not refuse everything.
+    budget = DeployBudget(cpu_units=16.0, gpu_count=0, ram_bytes=64 * _GiB, vram_bytes_per_gpu=0, available_ram_bytes=0)
+    specs = select_stack("chat", budget)
+    assert _usecases(specs) == set(PROFILES["chat"])
 
 
 # --- fail-fast, never partial -------------------------------------------------
 
 
-def test_everything_on_8gb_is_refused_not_partially_deployed():
+def test_everything_on_tiny_box_is_refused_not_partially_deployed():
     with pytest.raises(ProfileDoesNotFitError) as exc:
-        select_stack("everything", _cpu(8))
+        select_stack("everything", _cpu(6))
     assert "everything" in str(exc.value)
-    assert "GiB RAM" in str(exc.value)
+    assert "RAM" in str(exc.value)
 
 
 def test_below_core_floor_is_refused():
     with pytest.raises(ProfileDoesNotFitError):
-        select_stack("chat", _cpu(32, cores=2))
+        select_stack("chat", _cpu(32, cores=1))
 
 
 def test_unknown_profile_raises_valueerror():
@@ -90,13 +140,13 @@ def test_unknown_profile_raises_valueerror():
         select_stack("nonexistent", _cpu(32))
 
 
-# --- accelerator routing ------------------------------------------------------
+# --- accelerator routing + VRAM placement -------------------------------------
 
 
-def test_gpu_box_uses_gpu_loaders_for_ladders_cpu_for_satellites():
+def test_gpu_box_uses_gpu_loaders_for_generate_image_cpu_for_satellites():
     specs = select_stack("studio", _gpu(24))
     assert _usecases(specs) == set(PROFILES["studio"])
-    gen = next(s for s in specs if s.usecase == ModelUsecase.generate)
+    gen = _gen(specs)
     img = next(s for s in specs if s.usecase == ModelUsecase.image)
     emb = next(s for s in specs if s.usecase == ModelUsecase.embed)
     assert gen.loader == ModelLoader.vllm
@@ -105,36 +155,21 @@ def test_gpu_box_uses_gpu_loaders_for_ladders_cpu_for_satellites():
 
 
 def test_studio_on_tiny_gpu_is_refused_on_vram():
-    # 8 GiB VRAM can't co-host a 7B LLM + a diffusion model.
+    # 8 GiB VRAM can't co-host even the smallest LLM + image model on one card.
     with pytest.raises(ProfileDoesNotFitError) as exc:
         select_stack("studio", _gpu(8))
     assert "VRAM" in str(exc.value)
 
 
 def test_multi_gpu_fit_checks_largest_model_not_sum():
-    # 2x 16 GiB: studio's medium pairing (14B + SDXL-Turbo) sums to 18 GiB but
-    # each model gets its own GPU, so the binding constraint is the largest single
-    # model (14B ≈ 11 ≤ 12.8). The selector must reach medium, not fall to small.
-    budget = DeployBudget(cpu_units=16.0, gpu_count=2, ram_bytes=64 * _GiB, vram_bytes_per_gpu=16 * _GiB)
-    specs = select_stack("studio", budget)
-    gen = next(s for s in specs if s.usecase == ModelUsecase.generate)
-    assert "14B" in gen.model  # would be 7B (small) if the check summed footprints
-
-
-def test_studio_fits_a_16gb_gpu():
-    # The canonical "studio" box: a 16 GiB card reports ~15.3 GiB free. With the
-    # -1 GiB tier thresholds it classifies medium, steps down to the small pairing
-    # (7B + SD-Turbo, the light co-located image), and deploys all of studio.
-    specs = select_stack("studio", _gpu(15.3))
-    assert _usecases(specs) == set(PROFILES["studio"])
-    img = next(s for s in specs if s.usecase == ModelUsecase.image)
-    gen = next(s for s in specs if s.usecase == ModelUsecase.generate)
-    assert img.model == "stabilityai/sd-turbo"  # the light rung, not SDXL
-    assert "7B" in gen.model
+    # 2x 16 GiB: a 14B (11) + an image model (≤8) sum to >16 but each gets its own
+    # card, so the binding constraint is the largest single model (11 ≤ 16). The
+    # selector must reach the 14B, not fall back to the 7B as a summed check would.
+    specs = select_stack("studio", _gpu(16, gpus=2))
+    assert "14B" in _gen(specs).model
 
 
 def test_utilization_headroom_is_applied():
-    # A stack whose raw footprint equals total RAM must NOT fit (0.8 headroom).
-    specs_s = select_stack("chat", _cpu(8))
-    assert _usecases(specs_s) == {ModelUsecase.generate, ModelUsecase.embed}
     assert _UTILIZATION == 0.8
+    with pytest.raises(ProfileDoesNotFitError):
+        select_stack("chat", _cpu(2.5, cores=8))

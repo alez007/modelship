@@ -12,12 +12,19 @@ import pytest
 import yaml
 
 from modelship.deploy.profiles.budget import DeployBudget
-from modelship.deploy.profiles.catalog import ModelSpec
+from modelship.deploy.profiles.catalog import ModelSpec, ModeReq
 from modelship.deploy.profiles.generator import _cpu_allocation, generate_models_yaml
 from modelship.deploy.profiles.selector import ProfileDoesNotFitError
 from modelship.infer.infer_config import ModelLoader, ModelUsecase
 
 _GiB = 1024**3
+
+# _cpu_allocation only reads `usecase`, so the resource sets are placeholders here.
+_REQ = ModeReq(cpu=1, ram_bytes=0, weight=1)
+
+
+def _spec(name: str, loader: ModelLoader, usecase: ModelUsecase) -> ModelSpec:
+    return ModelSpec(name, loader, usecase, 0, req_min=_REQ, req_rec=_REQ)
 
 
 def _cpu(ram_gib: float, cores: float = 8.0) -> DeployBudget:
@@ -88,13 +95,15 @@ def test_gpu_studio_shares_one_gpu_fractionally(tmp_path):
     assert emb["num_gpus"] == 0
 
 
-def test_gpu_studio_small_split_is_footprint_weighted(tmp_path):
-    # studio-small on a 16 GiB card: 7B (6 GiB) + SD-Turbo (4 GiB) -> 0.6 / 0.4.
+def test_gpu_studio_small_split_covers_the_whole_gpu(tmp_path):
+    # Two GPU models sharing one ~16 GiB card split it fractionally by footprint;
+    # the shares are each < 1 and cover the whole GPU. (Which exact pair the weighted
+    # selector picks is asserted elsewhere; here we pin the allocation invariant.)
     models = _generate("studio", _gpu(15.3), tmp_path)["doc"]["models"]
     gen = next(m for m in models if m["usecase"] == "generate")
     img = next(m for m in models if m["usecase"] == "image")
-    assert gen["num_gpus"] == 0.6
-    assert img["num_gpus"] == 0.4
+    assert 0 < gen["num_gpus"] < 1 and 0 < img["num_gpus"] < 1
+    assert abs(gen["num_gpus"] + img["num_gpus"] - 1.0) < 1e-6
 
 
 def test_multi_gpu_studio_allocates_whole_integer_gpus(tmp_path):
@@ -147,9 +156,9 @@ def test_refuse_path_writes_nothing(tmp_path):
 def test_cpu_allocation_never_exceeds_budget_when_scaling_down():
     # Adversarial tiny budget: naive per-term rounding would sum to 0.05 > 0.04.
     specs = [
-        ModelSpec("g", ModelLoader.llama_cpp, ModelUsecase.generate, 0),
-        ModelSpec("i", ModelLoader.stable_diffusion_cpp, ModelUsecase.image, 0),
-        ModelSpec("e", ModelLoader.llama_cpp, ModelUsecase.embed, 0),
+        _spec("g", ModelLoader.llama_cpp, ModelUsecase.generate),
+        _spec("i", ModelLoader.stable_diffusion_cpp, ModelUsecase.image),
+        _spec("e", ModelLoader.llama_cpp, ModelUsecase.embed),
     ]
     allocs = _cpu_allocation(specs, 0.04)
     assert round(sum(allocs), 2) <= 0.04
@@ -160,9 +169,9 @@ def test_cpu_allocation_leftover_goes_to_a_single_anchor():
     # Two generate models: the leftover must land on only one, not both, or the
     # sum would exceed the budget.
     specs = [
-        ModelSpec("g1", ModelLoader.vllm, ModelUsecase.generate, 0),
-        ModelSpec("g2", ModelLoader.vllm, ModelUsecase.generate, 0),
-        ModelSpec("e", ModelLoader.llama_cpp, ModelUsecase.embed, 0),
+        _spec("g1", ModelLoader.vllm, ModelUsecase.generate),
+        _spec("g2", ModelLoader.vllm, ModelUsecase.generate),
+        _spec("e", ModelLoader.llama_cpp, ModelUsecase.embed),
     ]
     allocs = _cpu_allocation(specs, 16.0)
     assert sum(allocs) <= 16.0 + 1e-9
@@ -171,11 +180,26 @@ def test_cpu_allocation_leftover_goes_to_a_single_anchor():
     assert gen[1] > 2.0  # the anchor absorbed the leftover
 
 
-def test_everything_cpu_cores_fit_a_tight_box(tmp_path):
-    # everything's base reservations (7 cores) exceed a 4-core box -> scale-down
-    # path; the rounded sum must still fit the ledger.
-    total = sum(m["num_cpus"] for m in _generate("everything", _cpu(32, cores=4), tmp_path)["doc"]["models"])
-    assert total <= 4.0 + 1e-9
+def test_everything_refused_when_cores_below_per_model_minimum(tmp_path):
+    # everything is five models; even at their minimums their cores sum past 4, so a
+    # 4-core box can't give each model its floor — the selector refuses rather than
+    # cram five models into four cores (writing nothing).
+    p = str(tmp_path / "models.yaml")
+    with (
+        patch("modelship.deploy.profiles.generator.read_deploy_budget", return_value=_cpu(32, cores=4)),
+        pytest.raises(ProfileDoesNotFitError),
+    ):
+        generate_models_yaml("everything", p)
+    import os
+
+    assert not os.path.exists(p)
+
+
+def test_cpu_cores_sum_within_ledger_on_a_tight_fit(tmp_path):
+    # everything just fits an 8-core box; the generator's per-role split must still
+    # sum within the ledger (the scale-down path is unit-tested separately).
+    total = sum(m["num_cpus"] for m in _generate("everything", _cpu(32, cores=8), tmp_path)["doc"]["models"])
+    assert total <= 8.0 + 1e-9
 
 
 def test_generate_creates_missing_parent_dir(tmp_path):
