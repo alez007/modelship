@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.2] - 2026-06-22
+
+### Fixed
+- recover disconnect registry from actor death
+- TTL-evict disconnect entries instead of clearing on teardown
+- stop request watcher on cancellation during initial response
+- time streaming generation/request duration after the stream drains
+- count GPU models' host RAM against the RAM budget
+- avoid double-counting reclaimable cache on cgroup v1
+- refuse cleanly when a capability has no catalog models
+- size stacks against free RAM with a weighted knapsack selector
+
+### Changed
+- keep gateway route tests off a real Ray cluster
+- build and push CPU image before GPU
+- add integration tests deploying profiles at cpu/gpu stages
+
 ## [0.5.1] - 2026-06-20
 
 ### Fixed
