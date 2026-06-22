@@ -39,23 +39,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push (GPU)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          target: prod
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            CUDA_VERSION=12.8.1
-            PYTHON_VERSION=3.12.10
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+      # CPU image builds and pushes first so the lightweight variant is available
+      # in the registry before the slower GPU build runs.
       - name: Build and push (CPU)
         uses: docker/build-push-action@v6
         with:
@@ -70,6 +55,23 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-cpu
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-cpu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push (GPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: prod
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            CUDA_VERSION=12.8.1
+            PYTHON_VERSION=3.12.10
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
