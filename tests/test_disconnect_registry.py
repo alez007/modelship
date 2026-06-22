@@ -9,8 +9,16 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from ray.exceptions import RayActorError
 
 from modelship.infer.infer_config import RawRequestProxy, RequestWatcher, _DisconnectStore
+
+
+@pytest.fixture(autouse=True)
+def neutralize_request_watcher():
+    """Override the conftest stub: this module exercises the real RequestWatcher
+    watch loop and DisconnectRegistry interaction directly."""
+    yield
 
 
 class _FakeRegistry:
@@ -37,6 +45,22 @@ class _FakeRegistry:
 
         def remote(self, *args):
             return asyncio.ensure_future(self._fn(*args))
+
+
+class _DeadRegistry:
+    """A registry handle whose every method raises RayActorError on await, as a
+    dead Ray actor's methods do."""
+
+    def __init__(self):
+        self.set = self._Method()
+        self.is_set = self._Method()
+        self.clear = self._Method()
+
+    class _Method:
+        def remote(self, *args):
+            fut: asyncio.Future = asyncio.Future()
+            fut.set_exception(RayActorError())
+            return fut
 
 
 @pytest.mark.asyncio
@@ -106,3 +130,32 @@ def test_disconnect_store_clear_removes_entry():
     store.clear("req-1")
     assert store.is_set("req-1") is False
     store.clear("never-set")  # clearing an absent id is a no-op
+
+
+@pytest.mark.asyncio
+async def test_is_disconnected_degrades_and_reresolves_on_actor_death():
+    """A dead registry actor must not fail a healthy in-flight request: the proxy
+    degrades to 'still connected' and re-resolves the recreated actor for later polls."""
+    healthy = _FakeRegistry()
+    proxy = RawRequestProxy(_DeadRegistry(), {}, "req-1")
+
+    with patch("modelship.infer.infer_config.get_disconnect_registry", return_value=healthy):
+        assert await proxy.is_disconnected() is False  # degraded, not raised
+
+    assert proxy._registry is healthy  # re-resolved to the live actor for later polls
+
+
+@pytest.mark.asyncio
+async def test_watch_reresolves_and_retries_set_on_actor_death():
+    """When the registry actor dies, the watcher re-resolves and retries the set so
+    the disconnect still lands on the recreated actor."""
+    healthy = _FakeRegistry()
+    raw_request = MagicMock()
+    raw_request.is_disconnected = AsyncMock(return_value=True)
+
+    # First resolve (in __init__) hands back the dead actor; the retry re-resolves to a live one.
+    with patch("modelship.infer.infer_config.get_disconnect_registry", side_effect=[_DeadRegistry(), healthy]):
+        watcher = RequestWatcher(raw_request, "req-2", model="m", endpoint="e")
+        await watcher._task
+
+    assert "req-2" in healthy.disconnected

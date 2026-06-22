@@ -8,6 +8,7 @@ from typing import Any, Literal
 import ray
 from fastapi import Request
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from ray.exceptions import RayActorError
 from starlette.datastructures import Headers, State
 
 from modelship.logging import get_logger
@@ -443,6 +444,15 @@ def get_disconnect_registry():
     return _disconnect_registry
 
 
+def reset_disconnect_registry() -> None:
+    """Drop the cached handle so the next get_disconnect_registry() re-resolves the
+    named actor. Called after a RayActorError: the detached actor died (node
+    preemption, GCS restart) and the cached handle is now stale. get_if_exists makes
+    every process that re-resolves converge on the same recreated actor."""
+    global _disconnect_registry
+    _disconnect_registry = None
+
+
 class RequestWatcher:
     """Watches a FastAPI Request for client disconnect and records it in the shared
     DisconnectRegistry, keyed by request id."""
@@ -461,9 +471,23 @@ class RequestWatcher:
         while True:
             if await self._request.is_disconnected():
                 CLIENT_DISCONNECTS_TOTAL.inc(tags={"model": self._model, "endpoint": self._endpoint})
-                await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
+                await self._record_disconnect()
                 break
             await asyncio.sleep(0.1)
+
+    async def _record_disconnect(self) -> None:
+        """Record the disconnect in the shared registry, re-resolving the actor and
+        retrying once if it has died — otherwise a registry blip silently loses the
+        signal and the deployment runs to completion."""
+        try:
+            await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
+        except RayActorError:
+            reset_disconnect_registry()
+            self._registry = get_disconnect_registry()
+            try:
+                await self._registry.set.remote(self._request_id)  # type: ignore[attr-defined]
+            except RayActorError:
+                _logger.warning("Disconnect registry unavailable; lost disconnect for %s", self._request_id)
 
     def stop(self):
         """Cancel the watch task. The disconnect entry (if any) is deliberately
@@ -500,4 +524,14 @@ class RawRequestProxy:
         self.request_id = request_id
 
     async def is_disconnected(self) -> bool:
-        return await self._registry.is_set.remote(self.request_id)
+        try:
+            return await self._registry.is_set.remote(self.request_id)
+        except RayActorError:
+            # The shared registry actor died (node preemption, GCS restart). Disconnect
+            # propagation is best-effort, so degrade to "still connected" rather than
+            # failing a healthy in-flight request, and re-resolve the (recreated, via
+            # get_if_exists) actor so later polls in this request reconnect.
+            _logger.warning("Disconnect registry unavailable; assuming client connected")
+            reset_disconnect_registry()
+            self._registry = get_disconnect_registry()
+            return False
