@@ -140,6 +140,17 @@ def test_unknown_profile_raises_valueerror():
         select_stack("nonexistent", _cpu(32))
 
 
+def test_capability_with_no_catalog_models_refuses_cleanly(monkeypatch):
+    # A profile naming a usecase the catalog has no models for must raise a clean
+    # ProfileDoesNotFitError, not crash on min() over an empty pool.
+    from modelship.deploy.profiles import selector as sel
+
+    monkeypatch.setitem(sel.PROFILES, "translate-only", (ModelUsecase.translation,))
+    with pytest.raises(ProfileDoesNotFitError) as exc:
+        select_stack("translate-only", _cpu(32))
+    assert "translation" in str(exc.value)
+
+
 # --- accelerator routing + VRAM placement -------------------------------------
 
 

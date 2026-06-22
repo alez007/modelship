@@ -172,6 +172,14 @@ def _no_candidate_message(profile: str, uc: ModelUsecase, accel: Accelerator, bu
     is too big for a single host dimension."""
     pool = candidates(uc, accel)
     lighter = ", ".join(p for p in PROFILES if p != profile)
+    if not pool:
+        # The catalog has no model for this capability on this accelerator (e.g. an
+        # unsupported/custom usecase). Bail with a clean message rather than letting
+        # the `min()` calls below blow up on an empty sequence.
+        return (
+            f"profile {profile!r} requires a {uc.value} model but the catalog has none for "
+            f"{accel.value}. Choose a lighter profile ({lighter}) or write config/models.yaml by hand."
+        )
     if accel == Accelerator.gpu and any(s.draws_from_vram for s in pool):
         smallest = min(s.footprint_bytes for s in pool if s.draws_from_vram)
         return (
