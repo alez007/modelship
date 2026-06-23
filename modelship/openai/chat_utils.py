@@ -32,13 +32,19 @@ def _tool_name_by_call_id(messages: list[dict]) -> dict[str, str]:
     """
     mapping: dict[str, str] = {}
     for msg in messages:
-        if msg.get("role") != "assistant":
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
-        for call in msg.get("tool_calls") or []:
+        calls = msg.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function")
             call_id = call.get("id")
-            fn = (call.get("function") or {}).get("name")
-            if call_id and fn:
-                mapping[call_id] = fn
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if call_id and name:
+                mapping[call_id] = name
     return mapping
 
 
@@ -79,7 +85,8 @@ def normalize_chat_messages(
     for idx, msg in enumerate(messages):
         out = dict(msg)
         if out.get("role") == "tool" and not out.get("name"):
-            name = tool_names.get(out.get("tool_call_id") or "")
+            call_id = out.get("tool_call_id")
+            name = tool_names.get(call_id) if isinstance(call_id, str) else None
             if name:
                 out["name"] = name
         content = msg.get("content")
