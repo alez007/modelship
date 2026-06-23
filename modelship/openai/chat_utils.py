@@ -43,7 +43,7 @@ def _tool_name_by_call_id(messages: list[dict]) -> dict[str, str]:
             fn = call.get("function")
             call_id = call.get("id")
             name = fn.get("name") if isinstance(fn, dict) else None
-            if call_id and name:
+            if isinstance(call_id, str) and isinstance(name, str):
                 mapping[call_id] = name
     return mapping
 

@@ -53,6 +53,7 @@ def test_malformed_tool_calls_do_not_raise():
             "tool_calls": [
                 "not-a-dict",
                 {"id": "x", "function": "not-a-dict"},
+                {"id": ["unhashable"], "function": {"name": "Skipped"}},
                 {"id": "y", "function": {"name": "Real"}},
             ],
         },
