@@ -12,7 +12,7 @@ from modelship.infer.infer_config import RawRequestProxy
 from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.structured import build_llama_grammar
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
-from modelship.logging import get_logger
+from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
 from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
 from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
@@ -81,6 +81,14 @@ class OpenAIServingChat(OpenAIServing):
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
         request_id = f"{self.request_id_prefix}-{base_request_id(raw_request)}"
         logger.info("chat completion request %s: stream=%s", request_id, request.stream)
+        logger.log(
+            TRACE,
+            "chat request %s: messages=%s tools=%s tool_choice=%s",
+            request_id,
+            request.messages,
+            request.tools,
+            request.tool_choice,
+        )
 
         # llama.cpp can produce token logprobs, but the modelship wrapper does
         # not yet thread them into the OpenAI `choices[].logprobs` response.
@@ -248,6 +256,7 @@ class OpenAIServingChat(OpenAIServing):
                 return create_error_response(e)
 
         completion_text = result["choices"][0]["text"] if result.get("choices") else ""
+        logger.log(TRACE, "chat response %s: %r", request_id, completion_text)
         usage = result.get("usage") or {}
         completion_tokens = int(usage.get("completion_tokens") or renderer.count_tokens(completion_text))
 
@@ -276,22 +285,28 @@ class OpenAIServingChat(OpenAIServing):
     ) -> AsyncGenerator[str, None]:
         assert self._renderer is not None
         renderer = self._renderer
+        # Buffer the raw model text so we can emit it once at end-of-stream
+        # (in a finally, so a client disconnect still logs what was produced).
+        buffered: list[str] = []
         async with self._lock:
-            async for chunk in stream_chat_completion(
-                request_id=request_id,
-                model_name=self.model_name,
-                text_chunks=self._raw_text_chunks(completion_kwargs),
-                parser_name=tool_parser_name,
-                reasoning_parser_name=reasoning_parser_name,
-                count_tokens=renderer.count_tokens,
-                prompt_tokens=prompt_tokens,
-                max_tokens=max_tokens,
-                include_usage=include_usage,
-                created=int(time.time()),
-            ):
-                yield chunk
+            try:
+                async for chunk in stream_chat_completion(
+                    request_id=request_id,
+                    model_name=self.model_name,
+                    text_chunks=self._raw_text_chunks(completion_kwargs, buffered),
+                    parser_name=tool_parser_name,
+                    reasoning_parser_name=reasoning_parser_name,
+                    count_tokens=renderer.count_tokens,
+                    prompt_tokens=prompt_tokens,
+                    max_tokens=max_tokens,
+                    include_usage=include_usage,
+                    created=int(time.time()),
+                ):
+                    yield chunk
+            finally:
+                logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
 
-    async def _raw_text_chunks(self, completion_kwargs: dict) -> AsyncIterator[str]:
+    async def _raw_text_chunks(self, completion_kwargs: dict, buffer: list[str] | None = None) -> AsyncIterator[str]:
         """Drive ``llama.create_completion(stream=True)`` and yield text pieces."""
         loop = asyncio.get_event_loop()
         llama = self._llama
@@ -306,6 +321,8 @@ class OpenAIServingChat(OpenAIServing):
                 return
             text = (chunk.get("choices") or [{}])[0].get("text") or ""
             if text:
+                if buffer is not None:
+                    buffer.append(text)
                 yield text
 
     def _build_kwargs(self, request: ChatCompletionRequest, messages: list[dict]) -> dict:
