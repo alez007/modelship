@@ -22,6 +22,26 @@ _IMAGE_TYPES = frozenset({"image_url", "input_image"})
 _AUDIO_TYPES = frozenset({"input_audio", "audio_url"})
 
 
+def _tool_name_by_call_id(messages: list[dict]) -> dict[str, str]:
+    """Map tool_call_id -> function name from assistant tool_calls.
+
+    Strict chat templates (FunctionGemma, Mistral) require ``role: tool``
+    messages to carry ``name``, but the OpenAI API makes it optional and clients
+    like Home Assistant omit it. Recover it from the assistant turn that issued
+    the matching call.
+    """
+    mapping: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            call_id = call.get("id")
+            fn = (call.get("function") or {}).get("name")
+            if call_id and fn:
+                mapping[call_id] = fn
+    return mapping
+
+
 def normalize_chat_messages(
     messages: list[dict],
     *,
@@ -51,10 +71,17 @@ def normalize_chat_messages(
     - List content that ends up text-only is collapsed to a single string
       joined with ``"\\n"`` so loaders whose Jinja templates only accept string
       content keep working.
+    - ``role: tool`` messages missing ``name`` get it backfilled from the
+      matching assistant ``tool_calls`` entry — strict templates require it.
     """
+    tool_names = _tool_name_by_call_id(messages)
     normalized: list[dict] = []
     for idx, msg in enumerate(messages):
         out = dict(msg)
+        if out.get("role") == "tool" and not out.get("name"):
+            name = tool_names.get(out.get("tool_call_id") or "")
+            if name:
+                out["name"] = name
         content = msg.get("content")
         if not isinstance(content, list):
             normalized.append(out)
