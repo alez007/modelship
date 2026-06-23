@@ -28,6 +28,13 @@ _PASSTHROUGH_ENV_VARS = (
 )
 
 
+def build_passthrough_env_vars() -> dict[str, str]:
+    """Driver→replica env vars (logging, gateway name, metrics) read off the
+    driver's environment. Shared by model and gateway deployments so both
+    replicas inherit the same logging/metrics config."""
+    return {var: os.environ[var] for var in _PASSTHROUGH_ENV_VARS if os.environ.get(var) is not None}
+
+
 def build_cache_env_vars() -> dict[str, str]:
     """Resolve HF / vLLM / FlashInfer cache dirs, all rooted at MSHIP_CACHE_DIR."""
     base_cache = os.environ.get("MSHIP_CACHE_DIR", "/.cache")
@@ -101,10 +108,7 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
     forwarded as the per-replica Ray Serve concurrency cap.
     """
     env_vars = build_cache_env_vars()
-    for passthrough_var in _PASSTHROUGH_ENV_VARS:
-        val = os.environ.get(passthrough_var)
-        if val is not None:
-            env_vars[passthrough_var] = val
+    env_vars.update(build_passthrough_env_vars())
 
     runtime_env: dict = {"env_vars": env_vars}
     if plugin_wheel is not None:

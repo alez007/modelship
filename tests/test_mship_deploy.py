@@ -8,7 +8,9 @@ import mship_deploy
 import pytest
 
 from modelship.deploy.actor_options import (
+    build_cache_env_vars,
     build_deployment_options,
+    build_passthrough_env_vars,
     resolve_plugin_wheel,
     total_cpu_reservation,
     total_gpu_reservation,
@@ -201,6 +203,26 @@ class TestBuildDeploymentOptions:
         env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
         assert "MSHIP_METRICS" not in env_vars
 
+    def test_log_level_in_passthrough_and_deployment_env(self):
+        # The gateway-replica bug: MSHIP_LOG_LEVEL must flow through the shared
+        # passthrough helper and into a model deployment's runtime_env alongside
+        # the cache vars (which the gateway path omits but the model path keeps).
+        with patch.dict(os.environ, {"MSHIP_LOG_LEVEL": "TRACE"}, clear=True):
+            assert build_passthrough_env_vars()["MSHIP_LOG_LEVEL"] == "TRACE"
+
+            config = ModelshipModelConfig(
+                name="test-model",
+                model="some-model",
+                usecase=ModelUsecase.generate,
+                loader=ModelLoader.vllm,
+                num_gpus=1,
+            )
+            env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
+            assert env_vars["MSHIP_LOG_LEVEL"] == "TRACE"
+            # Cache vars still present (the model path keeps them).
+            for key in build_cache_env_vars():
+                assert key in env_vars
+
     def test_pipeline_parallel_uses_placement_group(self):
         # num_gpus=2 + pp=2 satisfies the world_size==num_gpus invariant; the
         # outer actor sits in bundle 0 with no GPU and vLLM workers claim the
@@ -382,6 +404,37 @@ class TestStartGateway:
         _, kwargs = options.call_args
         assert kwargs["num_replicas"] == 3
         assert kwargs["max_ongoing_requests"] == 256
+
+    def test_forwards_log_level_to_gateway_replica(self):
+        # The gateway replica must inherit MSHIP_LOG_LEVEL (and the gateway name)
+        # via runtime_env, else it can't configure logging at the driver's level.
+        options, _ = self._run(
+            {
+                "MSHIP_GATEWAY_REPLICAS": "1",
+                "MSHIP_GATEWAY_MAX_ONGOING": "1024",
+                "MSHIP_LOG_LEVEL": "TRACE",
+            }
+        )
+        _, kwargs = options.call_args
+        env_vars = kwargs["ray_actor_options"]["runtime_env"]["env_vars"]
+        assert env_vars["MSHIP_LOG_LEVEL"] == "TRACE"
+
+    def test_gateway_name_pinned_from_arg(self):
+        # MSHIP_GATEWAY_NAME is forwarded from the gateway_name arg even when absent
+        # from os.environ, so metrics stamping stays correct on isolated environments.
+        from modelship.deploy import serve_utils
+
+        bound = MagicMock()
+        options = MagicMock()
+        options.return_value.bind.return_value = bound
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(serve_utils.ModelshipAPI, "options", options),
+            patch.object(serve_utils.serve, "run"),
+        ):
+            serve_utils.start_gateway("edge", MagicMock())
+        _, kwargs = options.call_args
+        assert kwargs["ray_actor_options"]["runtime_env"]["env_vars"]["MSHIP_GATEWAY_NAME"] == "edge"
 
     @pytest.mark.parametrize(
         "name, value",

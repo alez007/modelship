@@ -19,7 +19,7 @@ from starlette.types import ASGIApp
 
 from modelship.infer import deploy_coordinator
 from modelship.infer.infer_config import RequestWatcher
-from modelship.logging import get_logger
+from modelship.logging import configure_logging, get_logger
 from modelship.metrics import (
     GATEWAY_RECONCILES_TOTAL,
     GATEWAY_ROUTING_GENERATION,
@@ -158,6 +158,9 @@ def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
 @serve.ingress(app)
 class ModelshipAPI:
     def __init__(self, gateway_name: str):
+        # Set up modelship-formatted application loggers at the driver's level;
+        # MSHIP_LOG_* are forwarded to this replica via runtime_env (see serve_utils).
+        configure_logging()
         # model_name -> (app_name -> handle). The inner dict is keyed by app_name
         # so a specific deployment can be dropped by name in remove_deployments.
         self.models: dict[str, dict[str, DeploymentHandle]] = {}
