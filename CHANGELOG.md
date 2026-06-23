@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.3] - 2026-06-23
+
+### Added
+- log chat request/response payloads at TRACE
+
+### Fixed
+- forward passthrough env vars and configure logging in gateway replica
+
+### Changed
+- cover streaming TRACE response logging
+
 ## [0.5.2] - 2026-06-22
 
 ### Fixed
