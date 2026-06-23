@@ -23,7 +23,12 @@ _ModelshipAPI = ModelshipAPI.func_or_class
 
 @pytest.fixture
 def api():
-    with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
+    with (
+        patch("modelship.openai.api.serve.get_replica_context") as mock_ctx,
+        # See test_api.py's api fixture: stub configure_logging (via the cloudpickled
+        # class's globals) so gateway instantiation doesn't leak global logging state.
+        patch.dict(_ModelshipAPI._handle_response.__globals__, {"configure_logging": lambda: None}),
+    ):
         mock_ctx.return_value.app_name = "test-gateway"
         inst = _ModelshipAPI("test-gateway")
         # Tests set api.models directly; mark the watch loop started so the routing

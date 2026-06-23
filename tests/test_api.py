@@ -25,7 +25,15 @@ def api():
     """Create a ModelshipAPI instance with mocked Ray Serve context. The watch
     loop is marked started so `_ensure_watching` is a no-op — tests drive routing
     directly via `_apply` / `_apply_snapshot`; watch-specific tests reset it."""
-    with patch("modelship.openai.api.serve.get_replica_context") as mock_ctx:
+    with (
+        patch("modelship.openai.api.serve.get_replica_context") as mock_ctx,
+        # configure_logging() mutates the global "modelship" logger (propagate=False,
+        # guarded by a module-level flag) — stub it so instantiating the gateway here
+        # doesn't leak that state into other tests' caplog assertions. The cloudpickled
+        # class carries a reconstructed globals dict (see above), so patch through a
+        # method's __globals__ rather than the live module attribute.
+        patch.dict(_ModelshipAPI._handle_response.__globals__, {"configure_logging": lambda: None}),
+    ):
         mock_ctx.return_value.app_name = "test-gateway"
         inst = _ModelshipAPI("test-gateway")
         inst._watch_task = MagicMock()
