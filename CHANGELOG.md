@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.4] - 2026-06-24
+
+### Added
+- grammar-constrained tool calling (constrain_tool_calls)
+- TRACE-log parsed tool calls handed to client
+
+### Fixed
+- allow conversational text around grammar-constrained tool calls
+- finalize tool calls in ChatOutputStreamer.finalize()
+- fall back to default voice for unknown voice names
+- require string call_id and name when building tool-name map
+- guard tool-name backfill against malformed messages
+- backfill tool-message name for strict chat templates
+
+### Changed
+- skip tool-call summary build when TRACE disabled
+
 ## [0.5.3] - 2026-06-23
 
 ### Added
