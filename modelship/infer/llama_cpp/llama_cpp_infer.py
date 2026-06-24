@@ -19,6 +19,7 @@ from modelship.openai.protocol import (
     ErrorResponse,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
+from modelship.utils import drop_reserved_kwargs
 
 logger = get_logger("infer.llama_cpp")
 
@@ -121,9 +122,34 @@ class LlamaCppInfer(BaseInfer):
             #   - no chat template was resolvable (we'd have nothing to
             #     render with).
             if self.config.chat_format is None and template is not None:
-                renderer = build_tool_call_renderer(self.llamacpp, template)
+                # Strip keys render_jinja_template already receives positionally —
+                # a collision is a duplicate-keyword TypeError at render time.
+                template_kwargs = drop_reserved_kwargs(
+                    self.model_config.chat_template_kwargs,
+                    # `messages` is the conversation in the template context; the rest
+                    # are render_jinja_template's own positional args.
+                    {
+                        "messages",
+                        "conversations",
+                        "tools",
+                        "chat_template",
+                        "add_generation_prompt",
+                        "bos_token",
+                        "eos_token",
+                    },
+                    logger=logger,
+                    context=f"model '{self.model_config.name}'",
+                )
+                renderer = build_tool_call_renderer(self.llamacpp, template, template_kwargs)
             else:
                 renderer = None
+                if self.model_config.chat_template_kwargs:
+                    logger.warning(
+                        "model '%s' sets chat_template_kwargs but `chat_format` is set or no chat "
+                        "template is available; falling back to llama-cpp's native chat handler and "
+                        "the kwargs will not be honored.",
+                        self.model_config.name,
+                    )
                 if parser_name is not None or reasoning_name is not None:
                     logger.warning(
                         "model '%s' has parsers resolved (tool=%s, reasoning=%s) but `chat_format` is set "

@@ -82,6 +82,7 @@ def _make_infer(*, supports_image: bool) -> VllmInfer:
     chat-completion path reads are populated."""
     infer = VllmInfer.__new__(VllmInfer)
     infer._caps = VllmCapabilities(supports_image=supports_image)  # type: ignore[attr-defined]
+    infer.model_config = MagicMock(chat_template_kwargs={})
     infer.serving_chat = MagicMock()
     infer.serving_chat.create_chat_completion = AsyncMock(return_value=MagicMock())
     return infer
@@ -127,3 +128,17 @@ async def test_text_only_request_reaches_serving_chat_on_vlm():
     await infer.create_chat_completion(request, raw_request=MagicMock())
 
     infer.serving_chat.create_chat_completion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_model_chat_template_kwargs_merged_into_vllm_request():
+    """The model's chat_template_kwargs default reaches the vLLM request that
+    serving_chat renders from."""
+    infer = _make_infer(supports_image=False)
+    infer.model_config.chat_template_kwargs = {"enable_thinking": False}
+    request = ChatCompletionRequest(model="llm", messages=[{"role": "user", "content": "hi"}])
+
+    await infer.create_chat_completion(request, raw_request=MagicMock())
+
+    vllm_request = infer.serving_chat.create_chat_completion.await_args.args[0]
+    assert vllm_request.chat_template_kwargs == {"enable_thinking": False}

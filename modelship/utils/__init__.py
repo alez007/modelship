@@ -1,13 +1,33 @@
+import logging
 import os
 import random
 import string
 import uuid
+from collections.abc import Iterable
+from typing import Any
 
 import requests
 
 from modelship.infer.infer_config import RawRequestProxy
 
 _RAND_CHARS = string.ascii_lowercase + string.digits
+
+
+def drop_reserved_kwargs(
+    kwargs: dict[str, Any], reserved: Iterable[str], *, logger: logging.Logger, context: str
+) -> dict[str, Any]:
+    """Strip keys the caller passes to ``apply_chat_template`` itself.
+
+    User-supplied ``chat_template_kwargs`` are splatted alongside explicit
+    arguments (``tokenize``, ``tools``, ``add_generation_prompt``, …); a collision
+    is a duplicate-keyword ``TypeError`` (or silently flips an explicit value).
+    Drop the offenders with a warning so misconfiguration surfaces instead.
+    """
+    reserved = set(reserved)
+    dropped = sorted(k for k in kwargs if k in reserved)
+    if dropped:
+        logger.warning("%s: ignoring reserved chat_template_kwargs %s", context, dropped)
+    return {k: v for k, v in kwargs.items() if k not in reserved}
 
 
 def random_uuid() -> str:
