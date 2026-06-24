@@ -23,8 +23,10 @@ class _FakeTokenizer:
 
     def apply_chat_template(self, messages: list[dict], **kwargs: Any) -> Any:
         prompt = "\n".join(f"{m['role']}: {m.get('content', '')}" for m in messages)
-        if "tools" in kwargs:
+        if kwargs.get("tools"):
             prompt = f"[TOOLS:{len(kwargs['tools'])}]\n" + prompt
+        if kwargs.get("enable_thinking") is False:  # template branching on a chat_template_kwarg
+            prompt = "[NOTHINK]\n" + prompt
         if kwargs.get("tokenize"):
             return [0] * len(prompt.split())
         return prompt
@@ -46,7 +48,11 @@ class _FakePipeline:
         return [{"generated_text": self.generated_text}]
 
 
-def _make_serving(generated: str, tool_call_parser: str | None = "hermes") -> tuple[OpenAIServingChat, _FakePipeline]:
+def _make_serving(
+    generated: str,
+    tool_call_parser: str | None = "hermes",
+    chat_template_kwargs: dict[str, Any] | None = None,
+) -> tuple[OpenAIServingChat, _FakePipeline]:
     pipe = _FakePipeline(generated)
     serving = OpenAIServingChat(
         pipeline=pipe,  # type: ignore[arg-type]
@@ -54,6 +60,7 @@ def _make_serving(generated: str, tool_call_parser: str | None = "hermes") -> tu
         config=TransformersConfig(),
         capabilities=TransformersCapabilities(supports_image=False, supports_audio=False),
         tool_call_parser=tool_call_parser,
+        chat_template_kwargs=chat_template_kwargs,
     )
     return serving, pipe
 
@@ -150,6 +157,26 @@ async def test_tool_call_with_trailing_text_preserves_content():
     msg = resp.choices[0].message
     assert msg.content == "Calling now.\n"
     assert len(msg.tool_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_template_kwargs_forwarded_on_no_tools_path():
+    # The no-tools path renders the prompt ourselves when kwargs are set, so the
+    # pipeline receives a string carrying the template's branched-on marker.
+    serving, pipe = _make_serving("hi back", tool_call_parser=None, chat_template_kwargs={"enable_thinking": False})
+    req = ChatCompletionRequest(messages=[{"role": "user", "content": "hi"}], stream=False)
+    await serving.create_chat_completion(req, _raw_request())
+    assert isinstance(pipe.last_input, str)
+    assert pipe.last_input.startswith("[NOTHINK]")
+
+
+@pytest.mark.asyncio
+async def test_no_chat_template_kwargs_leaves_no_tools_path_on_message_list():
+    # Without kwargs (or tools) the pipeline still gets the raw message list.
+    serving, pipe = _make_serving("hi back", tool_call_parser=None)
+    req = ChatCompletionRequest(messages=[{"role": "user", "content": "hi"}], stream=False)
+    await serving.create_chat_completion(req, _raw_request())
+    assert isinstance(pipe.last_input, list)
 
 
 @pytest.mark.asyncio

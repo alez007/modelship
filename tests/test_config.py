@@ -63,6 +63,19 @@ class TestModelshipModelConfig:
         assert config.loader == ModelLoader.vllm
         assert config.num_gpus == 0
         assert config.num_cpus == 0.1
+        assert config.chat_template_kwargs == {}
+
+    def test_chat_template_kwargs_round_trips(self):
+        config = ModelshipModelConfig.model_validate(
+            {
+                "name": "qwen3",
+                "model": "some-org/qwen3",
+                "usecase": ModelUsecase.generate,
+                "loader": ModelLoader.llama_cpp,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        )
+        assert config.chat_template_kwargs == {"enable_thinking": False}
 
     def test_custom_loader_requires_plugin(self):
         with pytest.raises(ValidationError, match="loader='custom' requires plugin"):

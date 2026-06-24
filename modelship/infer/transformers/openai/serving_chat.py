@@ -37,6 +37,7 @@ class OpenAIServingChat(OpenAIServing):
         tool_call_parser: str | None = None,
         reasoning_parser: str | None = None,
         skip_special_tokens: bool | None = None,
+        chat_template_kwargs: dict[str, Any] | None = None,
     ):
         self.pipeline = pipeline
         self.model_name = model_name
@@ -44,6 +45,7 @@ class OpenAIServingChat(OpenAIServing):
         self.capabilities = capabilities
         self.tool_call_parser = tool_call_parser
         self.reasoning_parser = reasoning_parser
+        self.chat_template_kwargs = chat_template_kwargs or {}
         assert pipeline.tokenizer is not None, "text-generation pipeline must have a tokenizer"
         self.tokenizer: PreTrainedTokenizerBase = pipeline.tokenizer
         self._lock = asyncio.Lock()
@@ -203,18 +205,19 @@ class OpenAIServingChat(OpenAIServing):
 
     def _count_prompt_tokens(self, messages: list[dict], tools: list[dict[str, Any]] | None) -> int:
         # apply_chat_template returns a string by default (character count!) — force tokenize=True.
-        kwargs: dict[str, Any] = {"tokenize": True}
+        kwargs: dict[str, Any] = {"tokenize": True, **self.chat_template_kwargs}
         if tools:
             kwargs["tools"] = tools
         token_ids = self.tokenizer.apply_chat_template(messages, **kwargs)
         return len(token_ids)
 
-    def _render_prompt(self, messages: list[dict], tools: list[dict[str, Any]]) -> str:
+    def _render_prompt(self, messages: list[dict], tools: list[dict[str, Any]] | None = None) -> str:
         rendered = self.tokenizer.apply_chat_template(
             messages,
             tools=tools,  # type: ignore[arg-type]
             tokenize=False,
             add_generation_prompt=True,
+            **self.chat_template_kwargs,
         )
         assert isinstance(rendered, str), "apply_chat_template(tokenize=False) must return str"
         return rendered
@@ -228,10 +231,11 @@ class OpenAIServingChat(OpenAIServing):
         # marker (the pipeline defaults ``skip_special_tokens=True``).
         if not self._skip_special_tokens:
             kwargs["skip_special_tokens"] = False
-        if tools:
-            # The standard text-generation pipeline does not forward `tools` to
-            # `apply_chat_template`, so we render the prompt ourselves and feed
-            # it as a plain string.
+        # The pipeline applies the chat template internally and forwards neither
+        # `tools` nor our `chat_template_kwargs`. Render ourselves whenever either
+        # is in play so both reach `apply_chat_template`; otherwise let the
+        # pipeline handle the plain message list.
+        if tools or self.chat_template_kwargs:
             prompt = self._render_prompt(messages, tools)
             return self.pipeline(prompt, return_full_text=False, **kwargs)  # type: ignore[return-value]
         return self.pipeline(messages, return_full_text=False, **kwargs)  # type: ignore[return-value]

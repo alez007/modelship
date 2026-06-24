@@ -82,6 +82,7 @@ def _make_infer(*, supports_image: bool) -> VllmInfer:
     chat-completion path reads are populated."""
     infer = VllmInfer.__new__(VllmInfer)
     infer._caps = VllmCapabilities(supports_image=supports_image)  # type: ignore[attr-defined]
+    infer.model_config = MagicMock(chat_template_kwargs={})
     infer.serving_chat = MagicMock()
     infer.serving_chat.create_chat_completion = AsyncMock(return_value=MagicMock())
     return infer

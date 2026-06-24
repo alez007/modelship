@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from modelship.logging import get_logger
 
@@ -34,6 +34,7 @@ class LlamaCppToolCallRenderer:
     bos_token: str
     eos_token: str
     _llama: Llama
+    template_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def render(self, messages: list[dict], tools: list[dict] | None) -> str:
         from transformers.utils.chat_template_utils import render_jinja_template
@@ -51,6 +52,7 @@ class LlamaCppToolCallRenderer:
             add_generation_prompt=True,
             bos_token=self.bos_token,
             eos_token=self.eos_token,
+            **self.template_kwargs,
         )
         return rendered[0]
 
@@ -63,13 +65,16 @@ class LlamaCppToolCallRenderer:
             return 0
 
 
-def build_tool_call_renderer(llama: Llama, chat_template: str) -> LlamaCppToolCallRenderer:
+def build_tool_call_renderer(
+    llama: Llama, chat_template: str, template_kwargs: dict[str, Any] | None = None
+) -> LlamaCppToolCallRenderer:
     """Build a renderer from a loaded ``Llama`` and the pre-resolved template."""
     return LlamaCppToolCallRenderer(
         chat_template=chat_template,
         bos_token=_detokenize_special(llama, llama.token_bos()),
         eos_token=_detokenize_special(llama, llama.token_eos()),
         _llama=llama,
+        template_kwargs=template_kwargs or {},
     )
 
 

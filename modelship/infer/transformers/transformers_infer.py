@@ -98,6 +98,7 @@ class TransformersInfer(BaseInfer):
                 tool_call_parser=tool_call_parser,
                 reasoning_parser=reasoning_parser,
                 skip_special_tokens=skip_special_tokens,
+                chat_template_kwargs=self.model_config.chat_template_kwargs,
             )
             self._serving.append(self.serving_chat)
 

@@ -125,6 +125,7 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `llama_cpp_config` | object | llama.cpp loader options (see below) |
 | `stable_diffusion_cpp_config` | object | stable-diffusion.cpp loader options (see below) |
 | `plugin_config` | object | Plugin-specific options passed through to the plugin |
+| `chat_template_kwargs` | object | Extra variables forwarded into the chat-template render on text loaders (`vllm`, `transformers`, `llama_cpp`) — e.g. `enable_thinking: false` for Qwen3. Only has an effect if the model's template branches on the key; ignored on paths that bypass the template (llama.cpp's native chat-handler fallback when `chat_format` is set or no template resolves). A per-request `chat_template_kwargs` overrides the model default on `vllm`. |
 
 ## Model source
 

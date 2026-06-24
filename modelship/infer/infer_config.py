@@ -205,6 +205,11 @@ class ModelshipModelConfig(BaseModel):
     llama_cpp_config: LlamaCppConfig | None = None
     stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
+    # Extra variables forwarded verbatim into the chat-template Jinja render on
+    # every text loader (e.g. `enable_thinking: false` for Qwen3). Only does
+    # something if the model's template branches on the key; ignored on paths
+    # that bypass the template (llama_cpp's native chat-handler fallback).
+    chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     _resolved_path: str | None = PrivateAttr(default=None)
     _resolved_tool_call_parser: str | None = PrivateAttr(default=None)

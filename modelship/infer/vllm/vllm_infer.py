@@ -364,6 +364,13 @@ class VllmInfer(BaseInfer):
         except UnsupportedContentError as exc:
             return create_error_response(exc)
         vllm_request = VllmChatCompletionRequest(**request.model_dump())
+        # vLLM renders the chat template internally; merge the model's default
+        # kwargs under any per-request values (request wins).
+        if self.model_config.chat_template_kwargs:
+            vllm_request.chat_template_kwargs = {
+                **self.model_config.chat_template_kwargs,
+                **(vllm_request.chat_template_kwargs or {}),
+            }
         try:
             result = await self.serving_chat.create_chat_completion(vllm_request, cast("Request", raw_request))
         except VLLMValidationError as exc:

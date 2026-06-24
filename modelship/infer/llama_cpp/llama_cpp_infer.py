@@ -121,9 +121,16 @@ class LlamaCppInfer(BaseInfer):
             #   - no chat template was resolvable (we'd have nothing to
             #     render with).
             if self.config.chat_format is None and template is not None:
-                renderer = build_tool_call_renderer(self.llamacpp, template)
+                renderer = build_tool_call_renderer(self.llamacpp, template, self.model_config.chat_template_kwargs)
             else:
                 renderer = None
+                if self.model_config.chat_template_kwargs:
+                    logger.warning(
+                        "model '%s' sets chat_template_kwargs but `chat_format` is set or no chat "
+                        "template is available; falling back to llama-cpp's native chat handler and "
+                        "the kwargs will not be honored.",
+                        self.model_config.name,
+                    )
                 if parser_name is not None or reasoning_name is not None:
                     logger.warning(
                         "model '%s' has parsers resolved (tool=%s, reasoning=%s) but `chat_format` is set "
