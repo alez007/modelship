@@ -8,6 +8,7 @@ from typing import ClassVar
 import pytest
 
 from modelship.openai.parsers.output import ChatOutputStreamer
+from modelship.openai.parsers.streaming import _parse_full
 from modelship.openai.parsers.tool_calling import (
     available_parsers,
     get_parser,
@@ -262,6 +263,81 @@ class TestChatOutputStreamer:
         )
         streamer, _ = self._feed([text])
         assert [tc.function.name for tc in streamer.result.tool_calls] == ["valid"]
+
+
+class TestParseFullFinalization:
+    """Non-streaming one-shot parsing via ``_parse_full``.
+
+    Tool-call finalization happens on ``finalize()``, so a single
+    ``extract_streaming`` + ``finalize`` pass over the full text must
+    yield the same result the incremental streaming drive does.
+    """
+
+    def test_single_complete_call_one_shot(self):
+        # Closing marker at the very end of the text: the one-shot pass
+        # must still finalize the call (this is the reported llama_cpp bug).
+
+        text = '<tool_call>\n{"name": "HassTurnOff", "arguments": {"area": "Living Room"}}\n</tool_call>'
+        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        assert parsed.content is None
+        assert len(parsed.tool_calls) == 1
+        assert parsed.tool_calls[0].function.name == "HassTurnOff"
+        assert parsed.tool_calls[0].function.arguments == '{"area": "Living Room"}'
+
+    def test_one_shot_matches_incremental_drive(self):
+        text = '<tool_call>\n{"name": "HassTurnOff", "arguments": {"area": "Living Room"}}\n</tool_call>'
+        one_shot = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+
+        streamer = ChatOutputStreamer(HermesToolCallParser())
+        cumulative = ""
+        for ch in text:
+            cumulative += ch
+            streamer.extract_streaming(cumulative)
+        streamer.finalize()
+        incremental = streamer.result
+
+        assert one_shot.content == incremental.content
+        assert [tc.function.name for tc in one_shot.tool_calls] == [tc.function.name for tc in incremental.tool_calls]
+        assert [tc.function.arguments for tc in one_shot.tool_calls] == [
+            tc.function.arguments for tc in incremental.tool_calls
+        ]
+
+    def test_content_only_text_unchanged(self):
+        text = "Just a plain answer, no tools here."
+        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        assert parsed.content == text
+        assert parsed.tool_calls == []
+
+    def test_two_calls_one_shot_both_finalized(self):
+        text = (
+            '<tool_call>\n{"name": "a", "arguments": {"x": 1}}\n</tool_call>'
+            '<tool_call>\n{"name": "b", "arguments": {"y": 2}}\n</tool_call>'
+        )
+        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        assert [tc.function.name for tc in parsed.tool_calls] == ["a", "b"]
+        assert parsed.tool_calls[0].id != parsed.tool_calls[1].id
+
+    def test_finalize_does_not_double_emit_after_streaming(self):
+        # The whole call is streamed and finalized during extract_streaming;
+        # finalize() re-runs tool extraction but must stay idempotent — no
+        # duplicate name/args deltas and no duplicate finalized call.
+        text = '<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>'
+        streamer = ChatOutputStreamer(HermesToolCallParser())
+        cumulative = ""
+        stream_deltas = []
+        for ch in text:
+            cumulative += ch
+            d = streamer.extract_streaming(cumulative)
+            if d is not None:
+                stream_deltas.append(d)
+
+        final = streamer.finalize()
+        # Nothing new to emit on finalize — the call already streamed fully.
+        assert final is None or not final.tool_calls
+
+        name_deltas = [tc for d in stream_deltas for tc in d.tool_calls if tc.function and tc.function.name]
+        assert [d.function.name for d in name_deltas] == ["get_weather"]
+        assert len(streamer.result.tool_calls) == 1
 
 
 class TestResolveToolsForRequest:

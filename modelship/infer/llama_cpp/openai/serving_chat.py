@@ -11,6 +11,7 @@ from modelship.infer.base_serving import OpenAIServing
 from modelship.infer.infer_config import RawRequestProxy
 from modelship.infer.llama_cpp.capabilities import LlamaCppCapabilities
 from modelship.infer.llama_cpp.structured import build_llama_grammar
+from modelship.infer.llama_cpp.tool_grammar import build_tool_call_grammar
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
 from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
@@ -39,6 +40,7 @@ class OpenAIServingChat(OpenAIServing):
         tool_call_parser: str | None = None,
         reasoning_parser: str | None = None,
         renderer: LlamaCppToolCallRenderer | None = None,
+        constrain_tool_calls: bool = False,
     ):
         self._llama = llama
         self.model_name = model_name
@@ -49,6 +51,7 @@ class OpenAIServingChat(OpenAIServing):
         self.tool_call_parser = tool_call_parser
         self.reasoning_parser = reasoning_parser
         self._renderer = renderer
+        self._constrain_tool_calls = constrain_tool_calls
         # The renderer's presence is the sole switch between paths:
         #  - renderer set → drive `create_completion` raw, route every
         #    response through `ChatOutputStreamer`. Reasoning + tool-call
@@ -228,6 +231,16 @@ class OpenAIServingChat(OpenAIServing):
             max_tokens = request.max_completion_tokens
 
         completion_kwargs = self._build_completion_kwargs(request, prompt)
+        if self._constrain_tool_calls and tool_parser_name and tools:
+            grammar = build_tool_call_grammar(get_parser(tool_parser_name), tools)
+            if grammar is not None:
+                if completion_kwargs.get("grammar") is not None:
+                    logger.warning(
+                        "chat request %s: response_format grammar overridden by the tool-call grammar "
+                        "(constrain_tool_calls); the two cannot be combined",
+                        request_id,
+                    )
+                completion_kwargs["grammar"] = grammar
         prompt_tokens = renderer.count_tokens(prompt)
         loop = asyncio.get_event_loop()
         llama = self._llama
