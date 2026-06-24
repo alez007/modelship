@@ -134,13 +134,22 @@ class ChatOutputStreamer:
         return DeltaMessage(content=content_delta, reasoning=reasoning_delta, tool_calls=tool_call_deltas)
 
     def finalize(self) -> DeltaMessage | None:
-        """Flush any held-back tails once no more text is coming."""
+        """Flush any held-back tails once no more text is coming.
+
+        The mid-stream holdback can leave a tool call's closing marker
+        unscanned until this final pass — so we re-run tool-call
+        extraction here too, finalizing any call whose terminator only
+        now resolves. This is idempotent: ``_finalized_indices`` blocks
+        re-finalizing and ``_sent_name`` / ``_sent_args`` block
+        re-emitting deltas for calls already streamed.
+        """
         regions = self._scan(self._last_text, hold_marker_tail=False)
         content_delta = self._diff_content(regions)
         reasoning_delta = self._diff_reasoning(regions)
-        if content_delta is None and reasoning_delta is None:
+        tool_call_deltas = self._emit_new_tool_call_fragments(regions)
+        if content_delta is None and reasoning_delta is None and not tool_call_deltas:
             return None
-        return DeltaMessage(content=content_delta, reasoning=reasoning_delta)
+        return DeltaMessage(content=content_delta, reasoning=reasoning_delta, tool_calls=tool_call_deltas)
 
     @property
     def result(self) -> ParsedChatOutput:
