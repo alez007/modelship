@@ -204,7 +204,7 @@ async def test_reserved_chat_template_kwargs_are_dropped():
     serving, _ = _make_serving(
         "hi back",
         tool_call_parser=None,
-        chat_template_kwargs={"enable_thinking": False, "tokenize": False, "tools": []},
+        chat_template_kwargs={"enable_thinking": False, "tokenize": False, "tools": [], "messages": []},
     )
     assert serving.chat_template_kwargs == {"enable_thinking": False}
 

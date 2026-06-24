@@ -126,7 +126,17 @@ class LlamaCppInfer(BaseInfer):
                 # a collision is a duplicate-keyword TypeError at render time.
                 template_kwargs = drop_reserved_kwargs(
                     self.model_config.chat_template_kwargs,
-                    {"conversations", "tools", "chat_template", "add_generation_prompt", "bos_token", "eos_token"},
+                    # `messages` is the conversation in the template context; the rest
+                    # are render_jinja_template's own positional args.
+                    {
+                        "messages",
+                        "conversations",
+                        "tools",
+                        "chat_template",
+                        "add_generation_prompt",
+                        "bos_token",
+                        "eos_token",
+                    },
                     logger=logger,
                     context=f"model '{self.model_config.name}'",
                 )

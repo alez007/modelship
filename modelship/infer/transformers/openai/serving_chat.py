@@ -49,7 +49,7 @@ class OpenAIServingChat(OpenAIServing):
         # crash _render_prompt (duplicate kwarg) or flip tokenize in the counter.
         self.chat_template_kwargs = drop_reserved_kwargs(
             chat_template_kwargs or {},
-            {"tokenize", "tools", "add_generation_prompt"},
+            {"messages", "tokenize", "tools", "add_generation_prompt"},
             logger=logger,
             context=f"model '{model_name}'",
         )
