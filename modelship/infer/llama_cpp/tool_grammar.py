@@ -4,8 +4,9 @@ Compiled from a request's ``tools`` and passed to
 ``llama.create_completion(grammar=...)`` — the same ``grammar`` kwarg
 :mod:`structured` uses for ``response_format``. Unlike a ``response_format``
 grammar (which forces the whole response to be one JSON value), this grammar's
-root permits *either* free text *or* a bounded sequence of enveloped tool
-calls, so a non-tool answer is still reachable.
+root permits a free-text answer *or* a bounded sequence of enveloped tool
+calls wrapped in optional conversational text, so a non-tool answer and a
+chatty preamble before a tool call are both reachable.
 
 JSON-family parsers (Hermes) wrap each call's ``{"name", "arguments"}`` JSON in
 literal marker tags, so the body is built by reusing llama.cpp's own
@@ -61,21 +62,29 @@ def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) ->
 
     # One anyOf branch per tool: ``name`` pinned to the tool's name via ``const``,
     # ``arguments`` constrained to its parameter schema. ``additionalProperties:
-    # false`` forbids keys outside the envelope.
-    meta_schema = {
-        "anyOf": [
+    # false`` forbids keys outside the envelope. Entries lacking a function name
+    # are skipped — a ``None`` const yields an unsatisfiable branch.
+    tool_schemas = []
+    for t in tools:
+        func = t.get("function")
+        if not func or not func.get("name"):
+            continue
+        tool_schemas.append(
             {
                 "type": "object",
                 "properties": {
-                    "name": {"const": (t.get("function") or {}).get("name")},
-                    "arguments": (t.get("function") or {}).get("parameters") or {"type": "object"},
+                    "name": {"const": func["name"]},
+                    "arguments": func.get("parameters") or {"type": "object"},
                 },
                 "required": ["name", "arguments"],
                 "additionalProperties": False,
             }
-            for t in tools
-        ]
-    }
+        )
+
+    if not tool_schemas:
+        return None
+
+    meta_schema = {"anyOf": tool_schemas}
 
     try:
         inner = json_schema_to_gbnf(json.dumps(meta_schema))
@@ -85,18 +94,25 @@ def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) ->
 
     # The converter's entry rule is ``root``; rename only its LHS so our own
     # ``root`` can wrap it. Nothing references it, so a line-anchored sub suffices.
-    inner = re.sub(r"^root ::=", "tc-json ::=", inner, flags=re.M)
+    inner = re.sub(r"^\s*root\s*::=", "tc-json ::=", inner, flags=re.M)
 
     start = json.dumps(parser.start_marker)
     end = json.dumps(parser.end_marker)
-    # `tool-calls` caps at two calls so decoding can't loop indefinitely. The
-    # `content` branch ([^<]+) preserves a free-text answer but cannot contain a
-    # literal `<`.
+
+    # Exclude the start marker's first char from `content` so free text yields to a
+    # tool call when the marker begins. Escape it if it's special inside a GBNF class.
+    start_char = parser.start_marker[0] if parser.start_marker else "<"
+    escaped_char = f"\\{start_char}" if start_char in "]-^\\" else start_char
+
+    # Allow optional leading/trailing conversational text and optional whitespace
+    # around the JSON envelope, so a chatty prefix can't strand the model in the
+    # content branch. `tool-calls` caps at two calls so decoding can't loop forever.
     prefix = (
-        "root ::= tool-calls | content\n"
-        'tool-calls ::= tool-call ( "\\n" tool-call )?\n'
-        f'tool-call ::= {start} "\\n" tc-json "\\n" {end}\n'
-        "content ::= [^<]+\n"
+        "root ::= ( content )? tool-calls ( content )? | content\n"
+        "tool-calls ::= tool-call ( tc-ws tool-call )?\n"
+        f"tool-call ::= {start} tc-ws tc-json tc-ws {end}\n"
+        f"content ::= [^{escaped_char}]+\n"
+        "tc-ws ::= [ \\t\\n\\r]*\n"
     )
     return prefix + inner
 

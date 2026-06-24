@@ -38,8 +38,10 @@ class TestBuildToolCallGrammar:
         parser = HermesToolCallParser()
         text = build_tool_call_gbnf(parser, TOOLS)
         assert text is not None
-        # Top-level rules and the renamed inner entry rule.
-        assert "root ::= tool-calls | content" in text
+        # Top-level rules and the renamed inner entry rule. The root allows
+        # optional conversational text around the tool calls.
+        assert "root ::= ( content )? tool-calls ( content )? | content" in text
+        assert "tc-ws ::= [ \\t\\n\\r]*" in text
         assert "tc-json ::=" in text
         assert "root ::= alternative" not in text  # inner root was renamed
         # Envelope markers and the tool names appear as GBNF string literals
@@ -71,6 +73,32 @@ class TestBuildToolCallGrammar:
         tools = [{"type": "function", "function": {"name": "Now"}}]
         g = build_tool_call_grammar(HermesToolCallParser(), tools)
         assert isinstance(g, LlamaGrammar)
+
+    def test_malformed_tools_are_filtered(self):
+        # Entries without a usable function name are dropped, but valid ones
+        # still build (a None const would be unsatisfiable).
+        tools = [
+            {"type": "function", "function": {}},  # no name
+            {"type": "function"},  # no function body
+            {"type": "function", "function": {"name": "HassTurnOn"}},
+        ]
+        text = build_tool_call_gbnf(HermesToolCallParser(), tools)
+        assert text is not None
+        assert "HassTurnOn" in text
+        g = build_tool_call_grammar(HermesToolCallParser(), tools)
+        assert isinstance(g, LlamaGrammar)
+
+    def test_all_malformed_tools_returns_none(self):
+        tools = [{"type": "function", "function": {}}, {"type": "function"}]
+        assert build_tool_call_gbnf(HermesToolCallParser(), tools) is None
+        assert build_tool_call_grammar(HermesToolCallParser(), tools) is None
+
+    def test_content_rule_excludes_start_marker_first_char(self):
+        # The content exclusion is derived from the marker's first char so a
+        # free-text answer yields to the tool call once the marker begins.
+        text = build_tool_call_gbnf(HermesToolCallParser(), TOOLS)
+        assert text is not None
+        assert "content ::= [^<]+" in text  # hermes start marker is "<tool_call>"
 
 
 class TestGrammarShapedOutputRoundTrips:
