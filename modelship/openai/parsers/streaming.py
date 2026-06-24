@@ -26,6 +26,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 
+from modelship.logging import TRACE, get_logger
 from modelship.openai.parsers.output import ChatOutputStreamer, ParsedChatOutput
 from modelship.openai.parsers.reasoning.registry import get_parser as get_reasoning_parser
 from modelship.openai.parsers.tool_calling.registry import get_parser as get_tool_call_parser
@@ -38,6 +39,30 @@ from modelship.openai.protocol import (
     DeltaMessage,
     UsageInfo,
 )
+
+logger = get_logger("openai.parsers.streaming")
+
+
+def _log_tool_calls(request_id: str, parsed: ParsedChatOutput, finish_reason: str, completion_tokens: int) -> None:
+    """Log the structured tool calls handed to the client.
+
+    Loaders already TRACE-log the model's raw text; this logs the *parsed*
+    OpenAI tool calls so it's visible exactly what a downstream client (e.g.
+    Home Assistant) receives and tries to execute — the key diagnostic when a
+    client rejects an otherwise-200 response.
+    """
+    if not parsed.tool_calls or not logger.isEnabledFor(TRACE):
+        return
+    summary = "; ".join(f"{tc.function.name}({tc.function.arguments})" for tc in parsed.tool_calls)
+    logger.log(
+        TRACE,
+        "chat %s -> client: %d tool call(s) [finish_reason=%s, completion_tokens=%s]: %s",
+        request_id,
+        len(parsed.tool_calls),
+        finish_reason,
+        completion_tokens,
+        summary,
+    )
 
 
 def finish_reason_for(parsed: ParsedChatOutput, completion_tokens: int, max_tokens: int | None) -> str:
@@ -78,6 +103,7 @@ def build_chat_completion_response(
         noise_specials=noise_specials,
     )
     finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
+    _log_tool_calls(request_id, parsed, finish_reason, completion_tokens)
     return ChatCompletionResponse(
         id=request_id,
         model=model_name,
@@ -162,6 +188,7 @@ async def stream_chat_completion(
 
     completion_tokens = count_tokens(accumulated)
     finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
+    _log_tool_calls(request_id, parsed, finish_reason, completion_tokens)
 
     yield _encode_chunk(
         ChatCompletionStreamResponse(
