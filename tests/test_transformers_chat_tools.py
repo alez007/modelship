@@ -180,6 +180,18 @@ async def test_no_chat_template_kwargs_leaves_no_tools_path_on_message_list():
 
 
 @pytest.mark.asyncio
+async def test_reserved_chat_template_kwargs_are_dropped():
+    # `tokenize` would corrupt the token counter and `tools` collide with our
+    # own argument — both must be stripped, leaving only the safe key.
+    serving, _ = _make_serving(
+        "hi back",
+        tool_call_parser=None,
+        chat_template_kwargs={"enable_thinking": False, "tokenize": False, "tools": []},
+    )
+    assert serving.chat_template_kwargs == {"enable_thinking": False}
+
+
+@pytest.mark.asyncio
 async def test_unknown_parser_at_init_raises():
     pipe = _FakePipeline("anything")
     with pytest.raises(ValueError, match="unknown tool_call_parser"):

@@ -20,7 +20,7 @@ from modelship.openai.protocol import (
     ErrorResponse,
     create_error_response,
 )
-from modelship.utils import base_request_id
+from modelship.utils import base_request_id, drop_reserved_kwargs
 
 logger = get_logger("infer.transformers.chat")
 
@@ -45,7 +45,14 @@ class OpenAIServingChat(OpenAIServing):
         self.capabilities = capabilities
         self.tool_call_parser = tool_call_parser
         self.reasoning_parser = reasoning_parser
-        self.chat_template_kwargs = chat_template_kwargs or {}
+        # Drop keys we pass to apply_chat_template ourselves — a collision would
+        # crash _render_prompt (duplicate kwarg) or flip tokenize in the counter.
+        self.chat_template_kwargs = drop_reserved_kwargs(
+            chat_template_kwargs or {},
+            {"tokenize", "tools", "add_generation_prompt"},
+            logger=logger,
+            context=f"model '{model_name}'",
+        )
         assert pipeline.tokenizer is not None, "text-generation pipeline must have a tokenizer"
         self.tokenizer: PreTrainedTokenizerBase = pipeline.tokenizer
         self._lock = asyncio.Lock()

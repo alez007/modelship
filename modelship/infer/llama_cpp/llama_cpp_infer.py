@@ -19,6 +19,7 @@ from modelship.openai.protocol import (
     ErrorResponse,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
+from modelship.utils import drop_reserved_kwargs
 
 logger = get_logger("infer.llama_cpp")
 
@@ -121,7 +122,15 @@ class LlamaCppInfer(BaseInfer):
             #   - no chat template was resolvable (we'd have nothing to
             #     render with).
             if self.config.chat_format is None and template is not None:
-                renderer = build_tool_call_renderer(self.llamacpp, template, self.model_config.chat_template_kwargs)
+                # Strip keys render_jinja_template already receives positionally —
+                # a collision is a duplicate-keyword TypeError at render time.
+                template_kwargs = drop_reserved_kwargs(
+                    self.model_config.chat_template_kwargs,
+                    {"conversations", "tools", "chat_template", "add_generation_prompt", "bos_token", "eos_token"},
+                    logger=logger,
+                    context=f"model '{self.model_config.name}'",
+                )
+                renderer = build_tool_call_renderer(self.llamacpp, template, template_kwargs)
             else:
                 renderer = None
                 if self.model_config.chat_template_kwargs:
