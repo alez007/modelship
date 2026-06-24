@@ -38,8 +38,14 @@ class LlamaCppToolCallRenderer:
     def render(self, messages: list[dict], tools: list[dict] | None) -> str:
         from transformers.utils.chat_template_utils import render_jinja_template
 
+        # Reasoning chat templates (e.g. Qwen3) test `'</think>' in message.content`,
+        # which raises "argument of type 'NoneType' is not iterable" on assistant
+        # tool-call messages that legitimately carry content=None (replayed multi-turn
+        # tool calls). Coerce None to "" so the membership test is a safe no-op.
+        safe_messages = [{**m, "content": ""} if m.get("content") is None else m for m in messages]
+
         rendered, _ = render_jinja_template(
-            conversations=[messages],
+            conversations=[safe_messages],
             tools=tools,  # type: ignore[arg-type]  # HF types it as list[dict | Callable]; we only pass dicts
             chat_template=self.chat_template,
             add_generation_prompt=True,
