@@ -51,7 +51,7 @@ def _log_tool_calls(request_id: str, parsed: ParsedChatOutput, finish_reason: st
     Home Assistant) receives and tries to execute — the key diagnostic when a
     client rejects an otherwise-200 response.
     """
-    if not parsed.tool_calls:
+    if not parsed.tool_calls or not logger.isEnabledFor(TRACE):
         return
     summary = "; ".join(f"{tc.function.name}({tc.function.arguments})" for tc in parsed.tool_calls)
     logger.log(
