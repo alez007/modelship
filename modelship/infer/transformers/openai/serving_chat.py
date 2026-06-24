@@ -291,7 +291,9 @@ class OpenAIServingChat(OpenAIServing):
         if max_tokens is not None:
             kwargs["max_new_tokens"] = max_tokens
 
-        if tools:
+        # Mirror _run: render ourselves whenever tools or chat_template_kwargs are
+        # set, since the pipeline forwards neither to apply_chat_template.
+        if tools or self.chat_template_kwargs:
             prompt: Any = self._render_prompt(messages, tools)
         else:
             prompt = messages
