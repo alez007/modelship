@@ -47,9 +47,12 @@ class OpenAIServingChat(OpenAIServing):
         self.reasoning_parser = reasoning_parser
         # Drop keys we pass to apply_chat_template ourselves — a collision would
         # crash _render_prompt (duplicate kwarg) or flip tokenize in the counter.
+        # `conversation` is apply_chat_template's first positional arg (passed
+        # positionally here); `messages` is the same data inside the template
+        # context. The rest are keyword args we set ourselves.
         self.chat_template_kwargs = drop_reserved_kwargs(
             chat_template_kwargs or {},
-            {"messages", "tokenize", "tools", "add_generation_prompt"},
+            {"conversation", "messages", "tokenize", "tools", "add_generation_prompt"},
             logger=logger,
             context=f"model '{model_name}'",
         )
