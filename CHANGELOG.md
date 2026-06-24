@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.5] - 2026-06-24
+
+### Added
+- add generic chat_template_kwargs for text loaders
+
+### Fixed
+- reserve "conversation" key on transformers chat_template_kwargs
+- reserve "messages" key in chat_template_kwargs
+- honor chat_template_kwargs on transformers streaming path
+- drop reserved keys from chat_template_kwargs
+- skip tool-call grammar on reasoning deployments
+- tolerate null assistant content in prompt rendering
+
+### Changed
+- merge chat_template_kwargs before building vllm request
+
 ## [0.5.4] - 2026-06-24
 
 ### Added
