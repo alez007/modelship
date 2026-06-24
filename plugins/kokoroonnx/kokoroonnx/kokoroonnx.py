@@ -127,6 +127,12 @@ class ModelPlugin(BasePlugin):
         request_id: str | None = None,
     ) -> RawSpeechResponse | AsyncGenerator[tuple[bytes, int], None] | ErrorResponse:
         voice = voice or "af_heart"
+        # Callers (e.g. the OpenAI-compatible Home Assistant integration) may request
+        # OpenAI voice names like "alloy" that Kokoro doesn't have. Rather than let
+        # kokoro-onnx assert, fall back to the default voice.
+        if voice not in self.kokoro.voices:  # type: ignore[union-attr]
+            logger.warning("voice %r not available in Kokoro; falling back to af_heart", voice)
+            voice = "af_heart"
         speed = speed or 1.0
         logger.info("started generation: %s with voice: %s", input, voice)
 
