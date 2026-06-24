@@ -391,8 +391,20 @@ The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-
 | `n_gpu_layers` | int | `0` | Currently ignored — forced to `0` (CPU-only) |
 | `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor |
+| `constrain_tool_calls` | bool | `false` | Constrain tool-call decoding with a GBNF grammar built from the request's `tools` (see below) |
 
 > **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` will enable `verbose` mode in the underlying llama.cpp engine.
+
+#### Constrained tool calling (`constrain_tool_calls`)
+
+When enabled, requests that carry `tools` are decoded under a [GBNF](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md) grammar compiled from those tool schemas. The grammar's top level allows **either** a free-text answer **or** a bounded sequence (max two) of tool calls, each forced into the parser's envelope with `name` pinned to a real tool name and `arguments` constrained to that tool's JSON schema. This prevents malformed envelopes, invented fields, and runaway repetition while still letting the model answer in plain text.
+
+Caveats:
+
+- It enforces *structure*, not *choice* — the grammar cannot make the model pick the correct field or value, only that whatever it emits is well-typed and well-formed.
+- JSON-schema numeric bounds (e.g. `minimum`/`maximum`) are not expressible as ranges in GBNF; numbers are constrained to digit shape only.
+- The free-text branch cannot contain a literal `<`.
+- Only the parser-driven path honors this. It requires a resolvable `tool_call_parser` from a JSON family (currently `hermes`); other families are left unconstrained (logged once). It also takes precedence over a `response_format` grammar on the same request — the two cannot be combined.
 
 GGUF variants in a HuggingFace repo are picked via the `:filename` syntax on the
 `model:` field (see [Model source](#model-source)). The selector is a glob and

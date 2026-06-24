@@ -23,6 +23,7 @@ class TestLlamaCppConfig:
         assert config.n_batch == 512
         assert config.chat_format is None
         assert config.model_kwargs == {}
+        assert config.constrain_tool_calls is False
 
     def test_custom_values(self):
         config = LlamaCppConfig(

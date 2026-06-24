@@ -102,6 +102,10 @@ class LlamaCppConfig(BaseModel):
     chat_format: str | None = None
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
     tool_calls_enabled: bool | None = None
+    # Constrain tool-call decoding with a GBNF grammar built from the request's
+    # tools (enforces the envelope, per-tool JSON schema, and a call-count cap).
+    # Free-text answers stay reachable. Only the parser path honors this.
+    constrain_tool_calls: bool = False
 
 
 class StableDiffusionCppConfig(BaseModel):
