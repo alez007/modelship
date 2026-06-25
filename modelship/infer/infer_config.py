@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import re
 import time
 from collections.abc import Callable
 from enum import StrEnum
@@ -7,7 +8,7 @@ from typing import Any, Literal
 
 import ray
 from fastapi import Request
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from ray.exceptions import RayActorError
 from starlette.datastructures import Headers, State
 
@@ -95,6 +96,64 @@ class DiffusersConfig(BaseModel):
     guidance_scale: float = 7.5
 
 
+_SIZE_UNITS = {
+    "b": 1,
+    "kb": 1000,
+    "mb": 1000**2,
+    "gb": 1000**3,
+    "tb": 1000**4,
+    "kib": 1 << 10,
+    "mib": 1 << 20,
+    "gib": 1 << 30,
+    "tib": 1 << 40,
+}
+_SIZE_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-z]*)\s*$", re.IGNORECASE)
+
+
+def parse_size(value: str | int) -> int:
+    """Parse a human-readable byte size ('2GiB', '512MB', '1.5gb') into bytes.
+    A bare number (or int) is taken as bytes. Decimal units (KB/MB/GB/TB) are
+    powers of 1000; binary units (KiB/MiB/GiB/TiB) powers of 1024."""
+    if isinstance(value, int):
+        size = value
+    else:
+        match = _SIZE_RE.match(value)
+        if not match:
+            raise ValueError(f"invalid size '{value}'; use e.g. '2GiB', '512MB', or a byte count")
+        number, unit = match.groups()
+        multiplier = _SIZE_UNITS.get((unit or "b").lower())
+        if multiplier is None:
+            raise ValueError(f"invalid size unit in '{value}'; expected one of B/KB/MB/GB/TB or KiB/MiB/GiB/TiB")
+        size = int(float(number) * multiplier)
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {size} bytes")
+    return size
+
+
+class LlamaCppCacheConfig(BaseModel):
+    """llama.cpp's native prompt-state cache (via `Llama.set_cache`). Stores the
+    evaluated KV state keyed by prompt prefix, so a later request sharing a prefix
+    skips re-evaluating it. `ram` keeps states in process memory; `disk` persists
+    them under `cache_dir` (survives replica restarts at the cost of disk I/O)."""
+
+    type: Literal["ram", "disk"] = "ram"
+    # Eviction ceiling for cached states, as a human-readable size ('2GiB',
+    # '512MB') or a bare byte count. Default 2 GiB matches llama-cpp-python.
+    capacity: str | int = "2GiB"
+    # Only used when type == "disk".
+    cache_dir: str = ".cache/llama_cache"
+
+    @field_validator("capacity")
+    @classmethod
+    def _check_capacity(cls, value: str | int) -> str | int:
+        parse_size(value)  # raises on invalid size/unit or non-positive
+        return value
+
+    @property
+    def capacity_bytes(self) -> int:
+        return parse_size(self.capacity)
+
+
 class LlamaCppConfig(BaseModel):
     n_gpu_layers: int = -1
     n_ctx: int = 2048
@@ -106,6 +165,8 @@ class LlamaCppConfig(BaseModel):
     # tools (enforces the envelope, per-tool JSON schema, and a call-count cap).
     # Free-text answers stay reachable. Only the parser path honors this.
     constrain_tool_calls: bool = False
+    # llama.cpp's native prompt-state cache; None disables it.
+    cache: LlamaCppCacheConfig | None = None
 
 
 class StableDiffusionCppConfig(BaseModel):

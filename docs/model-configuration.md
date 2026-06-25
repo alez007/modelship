@@ -393,8 +393,31 @@ The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-
 | `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor |
 | `constrain_tool_calls` | bool | `false` | Constrain tool-call decoding with a GBNF grammar built from the request's `tools` (see below) |
+| `cache` | object | — | llama.cpp's native prompt-state cache (see below). Omit to disable. |
 
 > **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` will enable `verbose` mode in the underlying llama.cpp engine.
+
+#### Prompt cache (`cache`)
+
+When set, llama.cpp's native prompt-state cache is attached to the model (via `Llama.set_cache`). It stores the model's evaluated KV state keyed by prompt prefix, so a later request that shares a prefix skips re-evaluating it — useful for repeated system prompts or long shared contexts.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` | string | `ram` | `ram` keeps states in process memory; `disk` persists them under `cache_dir` (survives replica restarts, at the cost of disk I/O) |
+| `capacity` | string/int | `2GiB` | Eviction ceiling for cached states. Accepts a human-readable size — `2GiB`, `512MB`, `1.5gb` — or a bare byte count. Decimal units (`KB`/`MB`/`GB`/`TB`) are powers of 1000; binary units (`KiB`/`MiB`/`GiB`/`TiB`) powers of 1024 |
+| `cache_dir` | string | `.cache/llama_cache` | Directory for persisted states (only used when `type: disk`) |
+
+```yaml
+models:
+  - name: "qwen-gguf-hf"
+    model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+    usecase: "generate"
+    loader: "llama_cpp"
+    llama_cpp_config:
+      cache:
+        type: disk
+        capacity: 4GiB
+```
 
 #### Constrained tool calling (`constrain_tool_calls`)
 

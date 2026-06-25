@@ -2,7 +2,7 @@ import asyncio
 import os
 from collections.abc import AsyncGenerator
 
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaDiskCache, LlamaRAMCache
 
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import LlamaCppConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
@@ -104,6 +104,7 @@ class LlamaCppInfer(BaseInfer):
         self._set_max_context_length(self.config.n_ctx)
 
         assert self.llamacpp is not None
+        self._enable_cache()
         capabilities = LlamaCppCapabilities.detect(self.llamacpp)
         if capabilities.supports_image:
             logger.info("Multimodal (vision) capability detected for model: %s", self.model_config.name)
@@ -172,6 +173,27 @@ class LlamaCppInfer(BaseInfer):
             )
         elif self.model_config.usecase == ModelUsecase.embed:
             self.serving_embedding = OpenAIServingEmbedding(self.llamacpp, self.model_config.name)
+
+    def _enable_cache(self) -> None:
+        """Attach llama.cpp's native prompt-state cache if configured."""
+        cache_config = self.config.cache
+        if cache_config is None:
+            return
+        assert self.llamacpp is not None
+        if cache_config.type == "disk":
+            cache = LlamaDiskCache(
+                cache_dir=cache_config.cache_dir,
+                capacity_bytes=cache_config.capacity_bytes,
+            )
+        else:
+            cache = LlamaRAMCache(capacity_bytes=cache_config.capacity_bytes)
+        self.llamacpp.set_cache(cache)
+        logger.info(
+            "enabled llama.cpp %s prompt cache (capacity=%d bytes) for model '%s'",
+            cache_config.type,
+            cache_config.capacity_bytes,
+            self.model_config.name,
+        )
 
     async def warmup(self) -> None:
         if self.serving_chat is not None:

@@ -24,6 +24,47 @@ class TestLlamaCppConfig:
         assert config.chat_format is None
         assert config.model_kwargs == {}
         assert config.constrain_tool_calls is False
+        assert config.cache is None
+
+    def test_cache_defaults(self):
+        config = LlamaCppConfig(cache={})
+        assert config.cache is not None
+        assert config.cache.type == "ram"
+        assert config.cache.capacity == "2GiB"
+        assert config.cache.capacity_bytes == 2 << 30
+        assert config.cache.cache_dir == ".cache/llama_cache"
+
+    def test_cache_disk(self):
+        config = LlamaCppConfig(cache={"type": "disk", "capacity": "512MB", "cache_dir": "/var/cache/llm"})
+        assert config.cache is not None
+        assert config.cache.type == "disk"
+        assert config.cache.capacity_bytes == 512 * 1000**2
+        assert config.cache.cache_dir == "/var/cache/llm"
+
+    @pytest.mark.parametrize(
+        ("capacity", "expected_bytes"),
+        [
+            ("2GiB", 2 << 30),
+            ("512MB", 512 * 1000**2),
+            ("1.5gb", int(1.5 * 1000**3)),
+            ("100mib", 100 << 20),
+            ("4096", 4096),
+            (1024, 1024),
+        ],
+    )
+    def test_cache_capacity_parsing(self, capacity, expected_bytes):
+        config = LlamaCppConfig(cache={"capacity": capacity})
+        assert config.cache is not None
+        assert config.cache.capacity_bytes == expected_bytes
+
+    def test_cache_rejects_invalid_type(self):
+        with pytest.raises(ValidationError):
+            LlamaCppConfig(cache={"type": "gpu"})
+
+    @pytest.mark.parametrize("capacity", ["0", "-5MB", "2PB", "abc", ""])
+    def test_cache_rejects_invalid_capacity(self, capacity):
+        with pytest.raises(ValidationError):
+            LlamaCppConfig(cache={"capacity": capacity})
 
     def test_custom_values(self):
         config = LlamaCppConfig(
