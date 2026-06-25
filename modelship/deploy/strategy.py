@@ -24,6 +24,11 @@ class DeployPlan:
 
     models_to_add: list[ModelshipModelConfig]
     apps_to_remove: list[str]
+    # Previously-effective deployments that are no longer desired AND aren't live
+    # (no Serve app to delete) — e.g. reloaded from the durable registry after a
+    # cluster restart. They have no app to delete, but their stale coordinator
+    # registry entry must still be dropped or the gateway routes to a ghost.
+    registry_only_drop: list[str]
 
 
 def compute_deploy_plan(
@@ -59,9 +64,21 @@ def compute_deploy_plan(
 
     desired_names = {c.deployment_name(gateway_name) for c in sorted_models}
 
-    apps_to_remove = sorted((prev_effective_names & existing_apps) - desired_names)
+    # All previously-effective deployments this run drops, split by liveness:
+    # the live ones get serve.delete + registry drop; the rest (tracked but not
+    # live — typically resurrected from the durable registry onto a fresh cluster)
+    # get a registry-only drop so the gateway stops routing to a non-existent app.
+    dropped = prev_effective_names - desired_names
+    apps_to_remove = sorted(dropped & existing_apps)
+    registry_only_drop = sorted(dropped - existing_apps)
     if apps_to_remove:
         logger.info("Reconcile: %d deployment(s) to remove: %s", len(apps_to_remove), apps_to_remove)
+    if registry_only_drop:
+        logger.info(
+            "Reconcile: %d stale registry entr(ies) to drop (no live app): %s",
+            len(registry_only_drop),
+            registry_only_drop,
+        )
 
     # Skip configs already live under their fingerprint — makes re-runs idempotent
     # and adopts a matching un-tracked deployment instead of redeploying it.
@@ -72,7 +89,11 @@ def compute_deploy_plan(
             len(models_to_add),
             [c.deployment_name(gateway_name) for c in models_to_add],
         )
-    return DeployPlan(models_to_add=models_to_add, apps_to_remove=apps_to_remove)
+    return DeployPlan(
+        models_to_add=models_to_add,
+        apps_to_remove=apps_to_remove,
+        registry_only_drop=registry_only_drop,
+    )
 
 
 @dataclass
