@@ -403,9 +403,10 @@ When set, llama.cpp's native prompt-state cache is attached to the model (via `L
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `type` | string | `ram` | `ram` keeps states in process memory; `disk` persists them under `cache_dir` (survives replica restarts, at the cost of disk I/O) |
+| `type` | string | `ram` | `ram` keeps states in process memory; `disk` persists them (survives replica restarts, at the cost of disk I/O) |
 | `capacity` | string/int | `2GiB` | Eviction ceiling for cached states. Accepts a human-readable size — `2GiB`, `512MB`, `1.5gb` — or a bare byte count. Decimal units (`KB`/`MB`/`GB`/`TB`) are powers of 1000; binary units (`KiB`/`MiB`/`GiB`/`TiB`) powers of 1024 |
-| `cache_dir` | string | `.cache/llama_cache` | Directory for persisted states (only used when `type: disk`) |
+
+The `disk` cache is stored under `$MSHIP_CACHE_DIR/llama_cache/<model-name>` (default `/.cache`), isolated per model so different models never share — and cross-load — incompatible cached states.
 
 ```yaml
 models:

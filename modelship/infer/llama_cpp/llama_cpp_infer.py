@@ -19,7 +19,7 @@ from modelship.openai.protocol import (
     ErrorResponse,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
-from modelship.utils import drop_reserved_kwargs
+from modelship.utils import cache_dir, drop_reserved_kwargs
 
 logger = get_logger("infer.llama_cpp")
 
@@ -181,19 +181,26 @@ class LlamaCppInfer(BaseInfer):
             return
         assert self.llamacpp is not None
         if cache_config.type == "disk":
-            cache = LlamaDiskCache(
-                cache_dir=cache_config.cache_dir,
-                capacity_bytes=cache_config.capacity_bytes,
+            # Root the cache under MSHIP_CACHE_DIR (not the Ray actor's ephemeral
+            # working dir) so it survives restarts/reschedules, and isolate it
+            # per-model: llama.cpp keys entries on prompt tokens alone, so sharing
+            # a dir across models would cross-load incompatible KV states.
+            cache_path = os.path.join(cache_dir(), "llama_cache", self.model_config.name)
+            cache = LlamaDiskCache(cache_dir=cache_path, capacity_bytes=cache_config.capacity_bytes)
+            logger.info(
+                "enabled llama.cpp disk prompt cache at %s (capacity=%d bytes) for model '%s'",
+                cache_path,
+                cache_config.capacity_bytes,
+                self.model_config.name,
             )
         else:
             cache = LlamaRAMCache(capacity_bytes=cache_config.capacity_bytes)
+            logger.info(
+                "enabled llama.cpp ram prompt cache (capacity=%d bytes) for model '%s'",
+                cache_config.capacity_bytes,
+                self.model_config.name,
+            )
         self.llamacpp.set_cache(cache)
-        logger.info(
-            "enabled llama.cpp %s prompt cache (capacity=%d bytes) for model '%s'",
-            cache_config.type,
-            cache_config.capacity_bytes,
-            self.model_config.name,
-        )
 
     async def warmup(self) -> None:
         if self.serving_chat is not None:

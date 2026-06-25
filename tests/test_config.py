@@ -32,14 +32,12 @@ class TestLlamaCppConfig:
         assert config.cache.type == "ram"
         assert config.cache.capacity == "2GiB"
         assert config.cache.capacity_bytes == 2 << 30
-        assert config.cache.cache_dir == ".cache/llama_cache"
 
     def test_cache_disk(self):
-        config = LlamaCppConfig(cache={"type": "disk", "capacity": "512MB", "cache_dir": "/var/cache/llm"})
+        config = LlamaCppConfig(cache={"type": "disk", "capacity": "512MB"})
         assert config.cache is not None
         assert config.cache.type == "disk"
         assert config.cache.capacity_bytes == 512 * 1000**2
-        assert config.cache.cache_dir == "/var/cache/llm"
 
     @pytest.mark.parametrize(
         ("capacity", "expected_bytes"),

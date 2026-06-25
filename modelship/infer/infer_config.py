@@ -134,14 +134,12 @@ class LlamaCppCacheConfig(BaseModel):
     """llama.cpp's native prompt-state cache (via `Llama.set_cache`). Stores the
     evaluated KV state keyed by prompt prefix, so a later request sharing a prefix
     skips re-evaluating it. `ram` keeps states in process memory; `disk` persists
-    them under `cache_dir` (survives replica restarts at the cost of disk I/O)."""
+    them under MSHIP_CACHE_DIR (survives replica restarts at the cost of disk I/O)."""
 
     type: Literal["ram", "disk"] = "ram"
     # Eviction ceiling for cached states, as a human-readable size ('2GiB',
     # '512MB') or a bare byte count. Default 2 GiB matches llama-cpp-python.
     capacity: str | int = "2GiB"
-    # Only used when type == "disk".
-    cache_dir: str = ".cache/llama_cache"
 
     @field_validator("capacity")
     @classmethod
