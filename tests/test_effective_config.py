@@ -186,6 +186,32 @@ class TestComputeDeployPlan:
         plan = compute_deploy_plan(desired, existing, {_dep("a")}, "g")
         assert plan.models_to_add == []
         assert plan.apps_to_remove == []
+        assert plan.registry_only_drop == []
+
+    def test_dropped_effective_model_with_no_live_app_is_registry_only(self):
+        # prev effective managed a,b but the cluster is fresh (only the new app a
+        # is live); reconcile to a. b has no Serve app to delete, but its stale
+        # registry entry must still be dropped so the gateway stops routing to it.
+        from modelship.deploy.strategy import compute_deploy_plan
+
+        desired = to_config([_model("a")])
+        existing = {_dep("a"), "g"}
+        prev = {_dep("a"), _dep("b")}
+        plan = compute_deploy_plan(desired, existing, prev, "g")
+        assert plan.apps_to_remove == []  # b isn't live -> nothing to serve.delete
+        assert plan.registry_only_drop == [_dep("b")]  # ...but purge its ghost entry
+
+    def test_dropped_effective_model_split_live_and_ghost(self):
+        # prev managed a,b,c; b is live (delete + registry), c is a ghost (registry
+        # only); reconcile keeps a.
+        from modelship.deploy.strategy import compute_deploy_plan
+
+        desired = to_config([_model("a")])
+        existing = {_dep("a"), _dep("b"), "g"}
+        prev = {_dep("a"), _dep("b"), _dep("c")}
+        plan = compute_deploy_plan(desired, existing, prev, "g")
+        assert plan.apps_to_remove == [_dep("b")]
+        assert plan.registry_only_drop == [_dep("c")]
 
 
 class TestCase2AdditiveAccumulation:

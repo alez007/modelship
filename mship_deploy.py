@@ -30,6 +30,7 @@ from modelship.logging import propagate_lib_log_env  # noqa: E402
 
 propagate_lib_log_env()
 
+import ray  # noqa: E402
 from ray.serve.schema import LoggingConfig  # noqa: E402
 
 from modelship.deploy.config import (  # noqa: E402
@@ -172,6 +173,19 @@ def main(argv: list[str] | None = None) -> None:
         resolve_all_reasoning_parsers(yml_conf)
 
         seed_expected_models(coordinator, gateway_name, yml_conf)
+
+        # Purge registry entries for previously-effective deployments that are no
+        # longer desired and have no live Serve app (e.g. resurrected from the
+        # durable registry onto a fresh cluster). remove_apps handles the live ones
+        # below; these have nothing to serve.delete, so drop them from the registry
+        # directly or the gateway keeps trying (and failing) to route to a ghost.
+        if plan.registry_only_drop:
+            try:
+                ray.get(
+                    [coordinator.unregister_deployment.remote(gateway_name, name) for name in plan.registry_only_drop]
+                )
+            except Exception:
+                logger.exception("Failed to drop stale registry entries: %s", plan.registry_only_drop)
 
         # stop_start: drop old deployments BEFORE deploying new ones, so the
         # freed resources are available for the deploy loop. Used when the
