@@ -53,6 +53,11 @@ class ToolCallParser(ABC):
     # strips every OTHER registered special from chunks itself. Hermes and
     # llama3_json keep the default — their markers are regular text.
     markers_are_specials: bool = False
+    # Delimiter token wrapping string values in custom-syntax (non-JSON) call
+    # bodies — ``<escape>`` for FunctionGemma, ``<|"|>`` for Gemma 4. ``None``
+    # for JSON-family parsers (Hermes/Mistral) whose bodies need no such token.
+    # The GBNF tool-grammar emitter reads it to wrap string-valued arguments.
+    string_delim: str | None = None
 
     @abstractmethod
     def extract_partial_name(self, partial_payload: str) -> str | None:
