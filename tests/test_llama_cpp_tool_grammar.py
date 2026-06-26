@@ -245,6 +245,21 @@ class TestGemmaToolCallGrammar:
         assert '"on:" ( "true" | "false" )' in text
         assert '"[" (' in text  # array rule for `tags`
 
+    def test_empty_type_list_falls_back_to_generic(self):
+        # `type: []` must not emit an empty group `(  )`, which is invalid GBNF.
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "F", "parameters": {"type": "object", "properties": {"x": {"type": []}}}},
+            }
+        ]
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, tools)
+        assert text is not None
+        assert "(  )" not in text
+        assert '"x:" gv' in text
+        assert build_tool_call_grammar(parser, tools) is not None
+
     def test_generic_rules_omitted_when_unneeded(self):
         # The fully-typed GEMMA_TOOLS never needs the generic fallback, so the
         # gv-* rule block must not be emitted.

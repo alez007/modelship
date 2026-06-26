@@ -218,7 +218,7 @@ def _build_gemma_tool_call_gbnf(
                 return "( " + " | ".join(emit_value(s, depth + 1) for s in subs) + " )"
 
         t = schema.get("type")
-        if isinstance(t, list):
+        if isinstance(t, list) and t:
             return "( " + " | ".join(emit_value({**schema, "type": tt}, depth + 1) for tt in t) + " )"
         if t == "string":
             return str_val
