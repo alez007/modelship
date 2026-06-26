@@ -182,10 +182,15 @@ class LlamaCppInfer(BaseInfer):
         assert self.llamacpp is not None
         if cache_config.type == "disk":
             # Root the cache under MSHIP_CACHE_DIR (not the Ray actor's ephemeral
-            # working dir) so it survives restarts/reschedules, and isolate it
-            # per-model: llama.cpp keys entries on prompt tokens alone, so sharing
-            # a dir across models would cross-load incompatible KV states.
-            cache_path = os.path.join(cache_dir(), "llama_cache", self.model_config.name)
+            # working dir) so it survives restarts/reschedules, and key it by the
+            # deployment name (name + config fingerprint + gateway). llama.cpp keys
+            # entries on prompt tokens alone, so this prevents a different model,
+            # changed config, or another gateway from cross-loading or concurrently
+            # corrupting an incompatible store. The fingerprint is stable across
+            # redeploys of the same config, so persistence holds.
+            gateway_name = os.environ.get("MSHIP_GATEWAY_NAME", "")
+            deployment_name = self.model_config.deployment_name(gateway_name)
+            cache_path = os.path.join(cache_dir(), "llama_cache", deployment_name)
             cache = LlamaDiskCache(cache_dir=cache_path, capacity_bytes=cache_config.capacity_bytes)
             logger.info(
                 "enabled llama.cpp disk prompt cache at %s (capacity=%d bytes) for model '%s'",
