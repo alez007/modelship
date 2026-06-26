@@ -64,7 +64,8 @@ _MAX_TOOL_CALLS = 1
 _REQUIRE_TOOL_CALL = True
 
 # Recursion guard for nested object/array schemas — beyond this, value rules
-# collapse to the permissive delimited-string fallback.
+# collapse to the generic recursive value rule (``gv``), which accepts any
+# string / number / bool / null / array / object the DSL can express.
 _MAX_SCHEMA_DEPTH = 5
 
 # Parser names already logged as unconstrained, to avoid repeating per request.
@@ -176,6 +177,17 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
     excl_cls = f"\\{excl}" if excl in "]-^\\" else excl
     str_val = f"( {d_lit} [^{excl_cls}]* {d_lit} )"
 
+    # Generic recursive value rules, emitted only when referenced (free-form
+    # objects, unconstrained arrays, schemaless props, or past the depth cap).
+    # ``gv`` accepts any value the DSL can express, so the grammar never forces
+    # a delimited string where the model legitimately needs ``{...}`` / ``[...]``.
+    uses_generic = False
+
+    def generic(ref: str) -> str:
+        nonlocal uses_generic
+        uses_generic = True
+        return ref
+
     def emit_enum_value(v: object) -> str:
         if isinstance(v, bool):
             return '"true"' if v else '"false"'
@@ -192,7 +204,7 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
         leaking precedence into the enclosing alternation.
         """
         if not isinstance(schema, dict) or depth > _MAX_SCHEMA_DEPTH:
-            return str_val
+            return generic("gv")
 
         enum = schema.get("enum")
         if enum:
@@ -218,7 +230,7 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
             return '( "null" )'
         if t == "array":
             items = schema.get("items")
-            item = emit_value(items, depth + 1) if isinstance(items, dict) else str_val
+            item = emit_value(items, depth + 1) if isinstance(items, dict) else generic("gv")
             return f'( "[" ( {item} ( "," {item} )* )? "]" )'
         if t == "object":
             props = schema.get("properties")
@@ -229,7 +241,9 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
                     + " )"
                 )
                 return f'( "{{" ( {pair} ( "," {pair} )* )? "}}" )'
-        return str_val
+            # Free-form object (no/empty properties): accept any DSL object.
+            return generic("gv-obj")
+        return generic("gv")
 
     tool_rules: list[str] = []
     n_tools = 0
@@ -276,7 +290,23 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
         f"call-choice ::= {call_choice}",
         *content_rules,
     ]
-    return "\n".join(envelope + tool_rules) + "\n"
+
+    generic_rules: list[str] = []
+    if uses_generic:
+        generic_rules = [
+            "gv ::= gv-str | gv-num | gv-bool | gv-null | gv-arr | gv-obj",
+            f"gv-str ::= {d_lit} [^{excl_cls}]* {d_lit}",
+            'gv-num ::= "-"? [0-9]+ ( "." [0-9]+ )?',
+            'gv-bool ::= "true" | "false"',
+            'gv-null ::= "null"',
+            'gv-arr ::= "[" ( gv ( "," gv )* )? "]"',
+            'gv-obj ::= "{" ( gv-pair ( "," gv-pair )* )? "}"',
+            'gv-pair ::= gv-key ":" gv',
+            # Bare key: anything up to the structural ``:`` / separators / delim lead.
+            f"gv-key ::= [^:,{{}}\\[\\]{excl_cls}]+",
+        ]
+
+    return "\n".join(envelope + tool_rules + generic_rules) + "\n"
 
 
 def build_tool_call_grammar(parser: ToolCallParser, tools: list[dict[str, Any]]) -> LlamaGrammar | None:

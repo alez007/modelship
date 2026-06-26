@@ -4,7 +4,12 @@ import json
 
 from llama_cpp import LlamaGrammar
 
-from modelship.infer.llama_cpp.tool_grammar import _MAX_TOOL_CALLS, build_tool_call_gbnf, build_tool_call_grammar
+from modelship.infer.llama_cpp.tool_grammar import (
+    _MAX_TOOL_CALLS,
+    _REQUIRE_TOOL_CALL,
+    build_tool_call_gbnf,
+    build_tool_call_grammar,
+)
 from modelship.openai.parsers.tool_calling import HermesToolCallParser, get_parser
 
 GEMMA_TOOLS = [
@@ -177,9 +182,14 @@ class TestGemmaToolCallGrammar:
         parser = get_parser("function_gemma")
         text = build_tool_call_gbnf(parser, GEMMA_TOOLS)
         assert text is not None
-        assert "root ::= ( content )? tool-calls ( content )? | content" in text
         assert f'tool-call ::= "{parser.start_marker}" "call:" call-choice "{parser.end_marker}"' in text
-        assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
+        if _REQUIRE_TOOL_CALL:
+            # Forced-call root: no free-text escape, so no `content` rule.
+            assert "root ::= tool-calls" in text
+            assert "content ::=" not in text
+        else:
+            assert "root ::= ( content )? tool-calls ( content )? | content" in text
+            assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
 
     def test_call_cap_is_structural(self):
         # The cap is exactly _MAX_TOOL_CALLS calls, concatenated with no separator.
@@ -221,6 +231,59 @@ class TestGemmaToolCallGrammar:
         assert '"minutes:" ( "-"? [0-9]+ )' in text
         assert '"on:" ( "true" | "false" )' in text
         assert '"[" (' in text  # array rule for `tags`
+
+    def test_generic_rules_omitted_when_unneeded(self):
+        # The fully-typed GEMMA_TOOLS never needs the generic fallback, so the
+        # gv-* rule block must not be emitted.
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        assert "gv ::=" not in text
+
+    def test_free_form_object_uses_generic_object_rule(self):
+        # A property typed `object` with no `properties`, a schemaless property,
+        # and an array with no `items` must map to the generic value rules — not
+        # a delimited string, which would reject a legitimate {...} / [...] and
+        # deadlock constrained sampling.
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "SetState",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "attrs": {"type": "object"},
+                            "anything": {},
+                            "list": {"type": "array"},
+                        },
+                    },
+                },
+            }
+        ]
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, tools)
+        assert text is not None
+        assert '"attrs:" gv-obj' in text
+        assert '"anything:" gv' in text
+        assert "gv ::= gv-str | gv-num | gv-bool | gv-null | gv-arr | gv-obj" in text
+        # And it compiles + round-trips a nested object and a mixed array.
+        assert build_tool_call_grammar(parser, tools) is not None
+        d = parser.string_delim
+        sample = (
+            parser.start_marker
+            + "call:SetState{attrs:{k:"
+            + d
+            + "v"
+            + d
+            + ",n:5},list:["
+            + d
+            + "a"
+            + d
+            + ",true]}"
+            + parser.end_marker
+        )
+        out = parser.parse(sample)
+        assert json.loads(out.tool_calls[0].function.arguments) == {"attrs": {"k": "v", "n": 5}, "list": ["a", True]}
 
     def test_all_malformed_tools_returns_none(self):
         tools = [{"type": "function", "function": {}}, {"type": "function"}]
