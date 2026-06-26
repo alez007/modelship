@@ -41,6 +41,7 @@ class OpenAIServingChat(OpenAIServing):
         reasoning_parser: str | None = None,
         renderer: LlamaCppToolCallRenderer | None = None,
         constrain_tool_calls: bool = False,
+        require_tool_call: bool = False,
     ):
         self._llama = llama
         self.model_name = model_name
@@ -52,6 +53,7 @@ class OpenAIServingChat(OpenAIServing):
         self.reasoning_parser = reasoning_parser
         self._renderer = renderer
         self._constrain_tool_calls = constrain_tool_calls
+        self._require_tool_call = require_tool_call
         self._logged_reasoning_unconstrained = False
         # The renderer's presence is the sole switch between paths:
         #  - renderer set → drive `create_completion` raw, route every
@@ -232,7 +234,9 @@ class OpenAIServingChat(OpenAIServing):
             max_tokens = request.max_completion_tokens
 
         completion_kwargs = self._build_completion_kwargs(request, prompt)
-        if self._constrain_tool_calls and tool_parser_name and tools:
+        # `require_tool_call` forces a tool call *via* the grammar, so it implies
+        # building one even when `constrain_tool_calls` is off.
+        if (self._constrain_tool_calls or self._require_tool_call) and tool_parser_name and tools:
             if self.reasoning_parser:
                 # Grammar's `content` excludes `<` (the start marker's first char),
                 # which also opens `<think>` — constraining would block the reasoning
@@ -245,7 +249,9 @@ class OpenAIServingChat(OpenAIServing):
                         self.model_name,
                     )
             else:
-                grammar = build_tool_call_grammar(get_parser(tool_parser_name), tools)
+                grammar = build_tool_call_grammar(
+                    get_parser(tool_parser_name), tools, require_tool_call=self._require_tool_call
+                )
                 if grammar is not None:
                     if completion_kwargs.get("grammar") is not None:
                         logger.warning(

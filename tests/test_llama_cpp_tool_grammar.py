@@ -6,7 +6,6 @@ from llama_cpp import LlamaGrammar
 
 from modelship.infer.llama_cpp.tool_grammar import (
     _MAX_TOOL_CALLS,
-    _REQUIRE_TOOL_CALL,
     build_tool_call_gbnf,
     build_tool_call_grammar,
 )
@@ -179,17 +178,31 @@ class TestGemmaToolCallGrammar:
         assert isinstance(g, LlamaGrammar)
 
     def test_envelope_and_markers(self):
+        # Default: free-text answers stay reachable around the tool calls.
         parser = get_parser("function_gemma")
         text = build_tool_call_gbnf(parser, GEMMA_TOOLS)
         assert text is not None
         assert f'tool-call ::= "{parser.start_marker}" "call:" call-choice "{parser.end_marker}"' in text
-        if _REQUIRE_TOOL_CALL:
-            # Forced-call root: no free-text escape, so no `content` rule.
-            assert "root ::= tool-calls" in text
-            assert "content ::=" not in text
-        else:
-            assert "root ::= ( content )? tool-calls ( content )? | content" in text
-            assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
+        assert "root ::= ( content )? tool-calls ( content )? | content" in text
+        assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
+
+    def test_require_tool_call_drops_free_text_escape(self):
+        # Forced-call root: no `content` branch, so the model must emit a call.
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, GEMMA_TOOLS, require_tool_call=True)
+        assert text is not None
+        assert "root ::= tool-calls\n" in text
+        assert "content ::=" not in text
+        assert build_tool_call_grammar(parser, GEMMA_TOOLS, require_tool_call=True) is not None
+
+    def test_require_tool_call_drops_free_text_escape_hermes(self):
+        # The flag is parser-agnostic — the JSON-family envelope honors it too.
+        parser = HermesToolCallParser()
+        text = build_tool_call_gbnf(parser, TOOLS, require_tool_call=True)
+        assert text is not None
+        assert "root ::= tool-calls\n" in text
+        assert "content ::=" not in text
+        assert build_tool_call_grammar(parser, TOOLS, require_tool_call=True) is not None
 
     def test_call_cap_is_structural(self):
         # The cap is exactly _MAX_TOOL_CALLS calls, concatenated with no separator.

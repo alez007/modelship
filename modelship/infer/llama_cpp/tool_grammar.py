@@ -56,13 +56,6 @@ _GEMMA_FAMILY_PARSERS = frozenset({"function_gemma", "gemma4"})
 # single-command correctness and hardest-stop the 270M runaway; raise to relax.
 _MAX_TOOL_CALLS = 1
 
-# When True the Gemma grammar's root REQUIRES a tool call — the free-text
-# ``content`` escape is dropped, so the model cannot end its turn empty. Tiny
-# models (FunctionGemma 270M) frequently decline to act (finish_reason=stop,
-# no tool); forcing a call converts those into an attempt. Trade-off: it forces
-# a tool even on chit-chat ("thank you"), so gate non-actions upstream (hassil).
-_REQUIRE_TOOL_CALL = True
-
 # Recursion guard for nested object/array schemas — beyond this, value rules
 # collapse to the generic recursive value rule (``gv``), which accepts any
 # string / number / bool / null / array / object the DSL can express.
@@ -82,18 +75,21 @@ def _gbnf_literal(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
-def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) -> str | None:
+def build_tool_call_gbnf(
+    parser: ToolCallParser, tools: list[dict[str, Any]], *, require_tool_call: bool = False
+) -> str | None:
     """Assemble the GBNF text for the tool-call grammar, or ``None`` if unsupported.
 
     Split from compilation so the emitted grammar can be inspected/tested as
     text. Returns ``None`` (logged once per parser) for parsers without an
-    emitter and on conversion failure.
+    emitter and on conversion failure. When ``require_tool_call`` is set the
+    root drops its free-text escape, so the model must emit a tool call.
     """
     if not tools:
         return None
 
     if parser.name in _GEMMA_FAMILY_PARSERS:
-        return _build_gemma_tool_call_gbnf(parser, tools)
+        return _build_gemma_tool_call_gbnf(parser, tools, require_tool_call=require_tool_call)
 
     if parser.name not in _JSON_FAMILY_PARSERS:
         if parser.name not in _logged_unconstrained:
@@ -151,17 +147,23 @@ def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) ->
     # Allow optional leading/trailing conversational text and optional whitespace
     # around the JSON envelope, so a chatty prefix can't strand the model in the
     # content branch. `tool-calls` caps at two calls so decoding can't loop forever.
+    # `require_tool_call` drops the free-text branch so a tool call is mandatory.
+    if require_tool_call:
+        root_rule = "root ::= tool-calls\n"
+        content_rule = ""
+    else:
+        root_rule = "root ::= ( content )? tool-calls ( content )? | content\n"
+        content_rule = f"content ::= [^{escaped_char}]+\n"
     prefix = (
-        "root ::= ( content )? tool-calls ( content )? | content\n"
-        "tool-calls ::= tool-call ( tc-ws tool-call )?\n"
-        f"tool-call ::= {start} tc-ws tc-json tc-ws {end}\n"
-        f"content ::= [^{escaped_char}]+\n"
-        "tc-ws ::= [ \\t\\n\\r]*\n"
+        root_rule + "tool-calls ::= tool-call ( tc-ws tool-call )?\n"
+        f"tool-call ::= {start} tc-ws tc-json tc-ws {end}\n" + content_rule + "tc-ws ::= [ \\t\\n\\r]*\n"
     )
     return prefix + inner
 
 
-def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) -> str | None:
+def _build_gemma_tool_call_gbnf(
+    parser: ToolCallParser, tools: list[dict[str, Any]], *, require_tool_call: bool = False
+) -> str | None:
     """Hand-build the GBNF for a Gemma-family ``call:FUNC{...}`` DSL body.
 
     ``json_schema_to_gbnf`` only speaks JSON, so the per-tool body is emitted
@@ -277,7 +279,7 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
     start_char = parser.start_marker[0] if parser.start_marker else "<"
     content_excl = f"\\{start_char}" if start_char in "]-^\\" else start_char
 
-    if _REQUIRE_TOOL_CALL:
+    if require_tool_call:
         root_rule = "root ::= tool-calls"
         content_rules: list[str] = []
     else:
@@ -309,15 +311,18 @@ def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, An
     return "\n".join(envelope + tool_rules + generic_rules) + "\n"
 
 
-def build_tool_call_grammar(parser: ToolCallParser, tools: list[dict[str, Any]]) -> LlamaGrammar | None:
+def build_tool_call_grammar(
+    parser: ToolCallParser, tools: list[dict[str, Any]], *, require_tool_call: bool = False
+) -> LlamaGrammar | None:
     """Compile a tool-call-constraining grammar, or ``None`` if unsupported.
 
     ``parser`` supplies the envelope markers; ``tools`` is the OpenAI-shaped list
-    already resolved for the request. Returns ``None`` for parsers without an
+    already resolved for the request. ``require_tool_call`` forces a tool call by
+    dropping the free-text root branch. Returns ``None`` for parsers without an
     emitter and on any conversion/compile failure, so the caller falls back to
     unconstrained decoding rather than erroring.
     """
-    text = build_tool_call_gbnf(parser, tools)
+    text = build_tool_call_gbnf(parser, tools, require_tool_call=require_tool_call)
     if text is None:
         return None
     try:

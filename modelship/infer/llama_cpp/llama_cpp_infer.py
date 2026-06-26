@@ -170,6 +170,7 @@ class LlamaCppInfer(BaseInfer):
                 reasoning_parser=reasoning_name,
                 renderer=renderer,
                 constrain_tool_calls=self.config.constrain_tool_calls,
+                require_tool_call=self.config.require_tool_call,
             )
         elif self.model_config.usecase == ModelUsecase.embed:
             self.serving_embedding = OpenAIServingEmbedding(self.llamacpp, self.model_config.name)

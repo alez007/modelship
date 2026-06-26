@@ -163,6 +163,13 @@ class LlamaCppConfig(BaseModel):
     # tools (enforces the envelope, per-tool JSON schema, and a call-count cap).
     # Free-text answers stay reachable. Only the parser path honors this.
     constrain_tool_calls: bool = False
+    # When True, the tool-call grammar's root REQUIRES a tool call — the free-text
+    # escape is dropped, so the model cannot end its turn without calling a tool.
+    # Tiny models (FunctionGemma 270M) often decline to act; forcing a call turns
+    # those into an attempt. Trade-off: it forces a tool even on chit-chat, so
+    # gate non-actions upstream. Forcing a call is done *via* the grammar, so this
+    # implies constrain_tool_calls (the grammar is built even if that is off).
+    require_tool_call: bool = False
     # llama.cpp's native prompt-state cache; None disables it.
     cache: LlamaCppCacheConfig | None = None
 

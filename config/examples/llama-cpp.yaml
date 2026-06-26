@@ -32,6 +32,11 @@ models:
     num_cpus: 2
     llama_cpp_config:
       constrain_tool_calls: true
+      # Force a tool call (drop the free-text escape). Helps tiny checkpoints
+      # that otherwise decline to act; gate non-actions upstream since it fires
+      # even on chit-chat. Implies constrain_tool_calls (the grammar is built
+      # regardless), so it works on its own too.
+      require_tool_call: true
 
   # Embeddings
   - name: "nomic-embed"
