@@ -4,8 +4,44 @@ import json
 
 from llama_cpp import LlamaGrammar
 
-from modelship.infer.llama_cpp.tool_grammar import build_tool_call_gbnf, build_tool_call_grammar
+from modelship.infer.llama_cpp.tool_grammar import _MAX_TOOL_CALLS, build_tool_call_gbnf, build_tool_call_grammar
 from modelship.openai.parsers.tool_calling import HermesToolCallParser, get_parser
+
+GEMMA_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "HassTurnOn",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "area": {"enum": ["Living Room", "Small Bedroom"]},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        # All-optional / no-property intent: must collapse to FUNC{}.
+        "type": "function",
+        "function": {"name": "HassGetState", "parameters": {"type": "object", "properties": {}}},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "SetTimer",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "minutes": {"type": "integer"},
+                    "on": {"type": "boolean"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    },
+]
 
 TOOLS = [
     {
@@ -54,10 +90,6 @@ class TestBuildToolCallGrammar:
     def test_empty_tools_returns_none(self):
         assert build_tool_call_grammar(HermesToolCallParser(), []) is None
         assert build_tool_call_gbnf(HermesToolCallParser(), []) is None
-
-    def test_function_gemma_returns_none(self):
-        # Custom-syntax family has no emitter yet.
-        assert build_tool_call_grammar(get_parser("function_gemma"), TOOLS) is None
 
     def test_qwen3_coder_returns_none(self):
         # Shares Hermes markers but an XML body — must not be treated as JSON-family.
@@ -128,3 +160,111 @@ class TestGrammarShapedOutputRoundTrips:
         )
         out = parser.parse(sample)
         assert [c.function.name for c in out.tool_calls] == ["HassTurnOn", "HassTurnOff"]
+
+
+class TestGemmaToolCallGrammar:
+    """The hand-built emitter for the FunctionGemma / Gemma 4 ``call:FUNC{...}`` DSL."""
+
+    def test_function_gemma_returns_grammar(self):
+        g = build_tool_call_grammar(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert isinstance(g, LlamaGrammar)
+
+    def test_gemma4_returns_grammar(self):
+        g = build_tool_call_grammar(get_parser("gemma4"), GEMMA_TOOLS)
+        assert isinstance(g, LlamaGrammar)
+
+    def test_envelope_and_markers(self):
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, GEMMA_TOOLS)
+        assert text is not None
+        assert "root ::= ( content )? tool-calls ( content )? | content" in text
+        assert f'tool-call ::= "{parser.start_marker}" "call:" call-choice "{parser.end_marker}"' in text
+        assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
+
+    def test_call_cap_is_structural(self):
+        # The cap is exactly _MAX_TOOL_CALLS calls, concatenated with no separator.
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        expected = "tool-calls ::= " + "tool-call" + " ( tool-call )?" * (_MAX_TOOL_CALLS - 1)
+        assert expected in text
+
+    def test_every_tool_name_is_a_literal(self):
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        for name in ("HassTurnOn", "HassGetState", "SetTimer"):
+            assert f'"{name}"' in text
+        # All three tools are selectable.
+        assert "call-choice ::= tool-0 | tool-1 | tool-2" in text
+
+    def test_enum_values_are_escaped_literals(self):
+        # FunctionGemma wraps string values in the <escape> delimiter.
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        assert '"<escape>" "Living Room" "<escape>"' in text
+        assert '"<escape>" "Small Bedroom" "<escape>"' in text
+
+    def test_gemma4_uses_its_own_delimiter(self):
+        # Gemma 4 uses <|"|> rather than <escape>; it appears as an escaped literal.
+        text = build_tool_call_gbnf(get_parser("gemma4"), GEMMA_TOOLS)
+        assert text is not None
+        assert '"<|\\"|>" "Living Room" "<|\\"|>"' in text
+        assert "<escape>" not in text
+
+    def test_empty_property_tool_collapses_to_empty_braces(self):
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        assert 'tool-1 ::= "HassGetState" "{" "}"' in text
+
+    def test_number_bool_array_value_rules(self):
+        text = build_tool_call_gbnf(get_parser("function_gemma"), GEMMA_TOOLS)
+        assert text is not None
+        assert '"minutes:" ( "-"? [0-9]+ )' in text
+        assert '"on:" ( "true" | "false" )' in text
+        assert '"[" (' in text  # array rule for `tags`
+
+    def test_all_malformed_tools_returns_none(self):
+        tools = [{"type": "function", "function": {}}, {"type": "function"}]
+        assert build_tool_call_gbnf(get_parser("function_gemma"), tools) is None
+        assert build_tool_call_grammar(get_parser("function_gemma"), tools) is None
+
+    def test_empty_tools_returns_none(self):
+        assert build_tool_call_gbnf(get_parser("function_gemma"), []) is None
+
+
+class TestGemmaGrammarParserAgreement:
+    """Canonical strings the grammar can emit must parse back to the right call.
+
+    Guards the emitter and the parser against drifting apart — the grammar
+    constrains generation, the parser consumes it, and nothing checks they
+    agree except this.
+    """
+
+    def test_string_arg_roundtrips(self):
+        parser = get_parser("function_gemma")
+        sample = f"{parser.start_marker}call:HassTurnOn{{name:{parser.string_delim}small_bedroom_light{parser.string_delim}}}{parser.end_marker}"
+        out = parser.parse(sample)
+        assert len(out.tool_calls) == 1
+        call = out.tool_calls[0]
+        assert call.function.name == "HassTurnOn"
+        assert json.loads(call.function.arguments) == {"name": "small_bedroom_light"}
+
+    def test_enum_arg_roundtrips(self):
+        parser = get_parser("function_gemma")
+        d = parser.string_delim
+        sample = f"{parser.start_marker}call:HassTurnOn{{name:{d}x{d},area:{d}Living Room{d}}}{parser.end_marker}"
+        out = parser.parse(sample)
+        assert json.loads(out.tool_calls[0].function.arguments) == {"name": "x", "area": "Living Room"}
+
+    def test_empty_args_roundtrips(self):
+        parser = get_parser("function_gemma")
+        sample = f"{parser.start_marker}call:HassGetState{{}}{parser.end_marker}"
+        out = parser.parse(sample)
+        assert out.tool_calls[0].function.name == "HassGetState"
+        assert json.loads(out.tool_calls[0].function.arguments) == {}
+
+    def test_number_bool_array_roundtrips(self):
+        parser = get_parser("function_gemma")
+        d = parser.string_delim
+        sample = f"{parser.start_marker}call:SetTimer{{minutes:42,on:true,tags:[{d}a{d},{d}b{d}]}}{parser.end_marker}"
+        out = parser.parse(sample)
+        assert json.loads(out.tool_calls[0].function.arguments) == {"minutes": 42, "on": True, "tags": ["a", "b"]}

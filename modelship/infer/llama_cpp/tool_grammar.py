@@ -10,8 +10,19 @@ chatty preamble before a tool call are both reachable.
 
 JSON-family parsers (Hermes) wrap each call's ``{"name", "arguments"}`` JSON in
 literal marker tags, so the body is built by reusing llama.cpp's own
-``json_schema_to_gbnf`` and only the envelope is hand-written. Custom-syntax
-families return ``None`` (no emitter yet).
+``json_schema_to_gbnf`` and only the envelope is hand-written.
+
+Gemma-family parsers (FunctionGemma / Gemma 4) use a non-JSON DSL —
+``call:FUNC{key:<delim>val<delim>,n:42}`` — so ``json_schema_to_gbnf`` can't
+express it; that body is hand-built by :func:`_build_gemma_tool_call_gbnf`,
+which maps each tool's parameter schema to value rules (enum alternations,
+delimited strings, bare numbers/bools, arrays, nested objects). The envelope
+caps the number of calls (``_MAX_TOOL_CALLS``) to stop the runaway repetition
+small FunctionGemma checkpoints fall into. Other families return ``None``.
+
+The Gemma grammar is loose by design: it pins the call count, tool name, and
+enum values, but does not enforce ``required`` args, key uniqueness, or key
+ordering.
 """
 
 from __future__ import annotations
@@ -37,8 +48,37 @@ logger = get_logger("infer.llama_cpp.tool_grammar")
 # different envelope shape, not wired here.
 _JSON_FAMILY_PARSERS = frozenset({"hermes"})
 
+# Parsers whose call body is a custom ``call:FUNC{...}`` DSL — handled by the
+# hand-built emitter, not ``json_schema_to_gbnf``.
+_GEMMA_FAMILY_PARSERS = frozenset({"function_gemma", "gemma4"})
+
+# Max enveloped calls the grammar allows per response. Held at 1 to isolate
+# single-command correctness and hardest-stop the 270M runaway; raise to relax.
+_MAX_TOOL_CALLS = 1
+
+# When True the Gemma grammar's root REQUIRES a tool call — the free-text
+# ``content`` escape is dropped, so the model cannot end its turn empty. Tiny
+# models (FunctionGemma 270M) frequently decline to act (finish_reason=stop,
+# no tool); forcing a call converts those into an attempt. Trade-off: it forces
+# a tool even on chit-chat ("thank you"), so gate non-actions upstream (hassil).
+_REQUIRE_TOOL_CALL = True
+
+# Recursion guard for nested object/array schemas — beyond this, value rules
+# collapse to the permissive delimited-string fallback.
+_MAX_SCHEMA_DEPTH = 5
+
 # Parser names already logged as unconstrained, to avoid repeating per request.
 _logged_unconstrained: set[str] = set()
+
+
+def _gbnf_literal(s: str) -> str:
+    """Render ``s`` as a GBNF double-quoted string literal.
+
+    GBNF accepts the same ``\\"`` / ``\\\\`` escapes JSON uses, so ``json.dumps``
+    produces a valid literal; ``ensure_ascii=False`` keeps UTF-8 enum values
+    intact rather than emitting ``\\uXXXX`` escapes.
+    """
+    return json.dumps(s, ensure_ascii=False)
 
 
 def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) -> str | None:
@@ -50,6 +90,9 @@ def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) ->
     """
     if not tools:
         return None
+
+    if parser.name in _GEMMA_FAMILY_PARSERS:
+        return _build_gemma_tool_call_gbnf(parser, tools)
 
     if parser.name not in _JSON_FAMILY_PARSERS:
         if parser.name not in _logged_unconstrained:
@@ -115,6 +158,125 @@ def build_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) ->
         "tc-ws ::= [ \\t\\n\\r]*\n"
     )
     return prefix + inner
+
+
+def _build_gemma_tool_call_gbnf(parser: ToolCallParser, tools: list[dict[str, Any]]) -> str | None:
+    """Hand-build the GBNF for a Gemma-family ``call:FUNC{...}`` DSL body.
+
+    ``json_schema_to_gbnf`` only speaks JSON, so the per-tool body is emitted
+    directly: a name literal, then a brace-wrapped alternation of ``key:value``
+    pairs whose value rules come from :func:`_emit_value`. Returns ``None`` when
+    no tool carries a usable function name.
+    """
+    delim = parser.string_delim or ""
+    d_lit = _gbnf_literal(delim)
+    # String values exclude the marker/delim lead char ('<' for both families)
+    # so a value can't swallow the closing delim or end marker mid-generation.
+    excl = (delim or parser.start_marker or "<")[0]
+    excl_cls = f"\\{excl}" if excl in "]-^\\" else excl
+    str_val = f"( {d_lit} [^{excl_cls}]* {d_lit} )"
+
+    def emit_enum_value(v: object) -> str:
+        if isinstance(v, bool):
+            return '"true"' if v else '"false"'
+        if isinstance(v, int | float):
+            return _gbnf_literal(str(v))  # bare, unquoted in the wire format
+        if v is None:
+            return '"null"'
+        return f"{d_lit} {_gbnf_literal(str(v))} {d_lit}"
+
+    def emit_value(schema: object, depth: int = 0) -> str:
+        """Return a parenthesized GBNF expression matching one value of ``schema``.
+
+        Always parenthesized so it can sit on either side of a ``|`` without
+        leaking precedence into the enclosing alternation.
+        """
+        if not isinstance(schema, dict) or depth > _MAX_SCHEMA_DEPTH:
+            return str_val
+
+        enum = schema.get("enum")
+        if enum:
+            return "( " + " | ".join(emit_enum_value(v) for v in enum) + " )"
+
+        for combinator in ("anyOf", "oneOf"):
+            subs = schema.get(combinator)
+            if isinstance(subs, list) and subs:
+                return "( " + " | ".join(emit_value(s, depth + 1) for s in subs) + " )"
+
+        t = schema.get("type")
+        if isinstance(t, list):
+            return "( " + " | ".join(emit_value({**schema, "type": tt}, depth + 1) for tt in t) + " )"
+        if t == "string":
+            return str_val
+        if t == "integer":
+            return '( "-"? [0-9]+ )'
+        if t == "number":
+            return '( "-"? [0-9]+ ( "." [0-9]+ )? )'
+        if t == "boolean":
+            return '( "true" | "false" )'
+        if t == "null":
+            return '( "null" )'
+        if t == "array":
+            items = schema.get("items")
+            item = emit_value(items, depth + 1) if isinstance(items, dict) else str_val
+            return f'( "[" ( {item} ( "," {item} )* )? "]" )'
+        if t == "object":
+            props = schema.get("properties")
+            if isinstance(props, dict) and props:
+                pair = (
+                    "( "
+                    + " | ".join(f"{_gbnf_literal(f'{k}:')} {emit_value(v, depth + 1)}" for k, v in props.items())
+                    + " )"
+                )
+                return f'( "{{" ( {pair} ( "," {pair} )* )? "}}" )'
+        return str_val
+
+    tool_rules: list[str] = []
+    n_tools = 0
+    for t in tools:
+        func = t.get("function")
+        if not func or not func.get("name"):
+            continue
+        idx = n_tools
+        n_tools += 1
+        name_lit = _gbnf_literal(func["name"])
+        params = func.get("parameters") or {}
+        props = params.get("properties") if isinstance(params, dict) else None
+        if isinstance(props, dict) and props:
+            pair_branches = " | ".join(f"{_gbnf_literal(f'{k}:')} {emit_value(v)}" for k, v in props.items())
+            tool_rules.append(f"tool-{idx}-pair ::= {pair_branches}")
+            tool_rules.append(f'tool-{idx}-args ::= ( tool-{idx}-pair ( "," tool-{idx}-pair )* )?')
+            tool_rules.append(f'tool-{idx} ::= {name_lit} "{{" tool-{idx}-args "}}"')
+        else:
+            # All-optional / no-property intents collapse to FUNC{}.
+            tool_rules.append(f'tool-{idx} ::= {name_lit} "{{" "}}"')
+
+    if n_tools == 0:
+        return None
+
+    call_choice = " | ".join(f"tool-{i}" for i in range(n_tools))
+    # Calls are concatenated back-to-back (no separator) up to the cap.
+    tool_calls_rhs = "tool-call" + " ( tool-call )?" * (_MAX_TOOL_CALLS - 1)
+
+    start = _gbnf_literal(parser.start_marker)
+    end = _gbnf_literal(parser.end_marker)
+    start_char = parser.start_marker[0] if parser.start_marker else "<"
+    content_excl = f"\\{start_char}" if start_char in "]-^\\" else start_char
+
+    if _REQUIRE_TOOL_CALL:
+        root_rule = "root ::= tool-calls"
+        content_rules: list[str] = []
+    else:
+        root_rule = "root ::= ( content )? tool-calls ( content )? | content"
+        content_rules = [f"content ::= [^{content_excl}]+"]
+    envelope = [
+        root_rule,
+        f"tool-calls ::= {tool_calls_rhs}",
+        f'tool-call ::= {start} "call:" call-choice {end}',
+        f"call-choice ::= {call_choice}",
+        *content_rules,
+    ]
+    return "\n".join(envelope + tool_rules) + "\n"
 
 
 def build_tool_call_grammar(parser: ToolCallParser, tools: list[dict[str, Any]]) -> LlamaGrammar | None:
