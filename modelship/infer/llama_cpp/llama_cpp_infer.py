@@ -2,7 +2,7 @@ import asyncio
 import os
 from collections.abc import AsyncGenerator
 
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaDiskCache, LlamaRAMCache
 
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import LlamaCppConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
@@ -19,7 +19,7 @@ from modelship.openai.protocol import (
     ErrorResponse,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
-from modelship.utils import drop_reserved_kwargs
+from modelship.utils import cache_dir, drop_reserved_kwargs
 
 logger = get_logger("infer.llama_cpp")
 
@@ -104,6 +104,7 @@ class LlamaCppInfer(BaseInfer):
         self._set_max_context_length(self.config.n_ctx)
 
         assert self.llamacpp is not None
+        self._enable_cache()
         capabilities = LlamaCppCapabilities.detect(self.llamacpp)
         if capabilities.supports_image:
             logger.info("Multimodal (vision) capability detected for model: %s", self.model_config.name)
@@ -172,6 +173,39 @@ class LlamaCppInfer(BaseInfer):
             )
         elif self.model_config.usecase == ModelUsecase.embed:
             self.serving_embedding = OpenAIServingEmbedding(self.llamacpp, self.model_config.name)
+
+    def _enable_cache(self) -> None:
+        """Attach llama.cpp's native prompt-state cache if configured."""
+        cache_config = self.config.cache
+        if cache_config is None:
+            return
+        assert self.llamacpp is not None
+        if cache_config.type == "disk":
+            # Root the cache under MSHIP_CACHE_DIR (not the Ray actor's ephemeral
+            # working dir) so it survives restarts/reschedules, and key it by the
+            # deployment name (name + config fingerprint + gateway). llama.cpp keys
+            # entries on prompt tokens alone, so this prevents a different model,
+            # changed config, or another gateway from cross-loading or concurrently
+            # corrupting an incompatible store. The fingerprint is stable across
+            # redeploys of the same config, so persistence holds.
+            gateway_name = os.environ.get("MSHIP_GATEWAY_NAME", "")
+            deployment_name = self.model_config.deployment_name(gateway_name)
+            cache_path = os.path.join(cache_dir(), "llama_cache", deployment_name)
+            cache = LlamaDiskCache(cache_dir=cache_path, capacity_bytes=cache_config.capacity_bytes)
+            logger.info(
+                "enabled llama.cpp disk prompt cache at %s (capacity=%d bytes) for model '%s'",
+                cache_path,
+                cache_config.capacity_bytes,
+                self.model_config.name,
+            )
+        else:
+            cache = LlamaRAMCache(capacity_bytes=cache_config.capacity_bytes)
+            logger.info(
+                "enabled llama.cpp ram prompt cache (capacity=%d bytes) for model '%s'",
+                cache_config.capacity_bytes,
+                self.model_config.name,
+            )
+        self.llamacpp.set_cache(cache)
 
     async def warmup(self) -> None:
         if self.serving_chat is not None:
