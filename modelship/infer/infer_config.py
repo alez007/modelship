@@ -319,7 +319,7 @@ class ModelshipModelConfig(BaseModel):
             return self
         if self.llama_cpp_config.cache.type != "disk":
             return self
-        multi_replica = ("num_replicas" in self.model_fields_set and self.num_replicas > 1) or (
+        multi_replica = self.num_replicas > 1 or (
             self.autoscaling_config is not None and self.autoscaling_config.max_replicas > 1
         )
         if multi_replica:
