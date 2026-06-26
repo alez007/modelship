@@ -90,6 +90,19 @@ class TestLlamaCppConfig:
         config = self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=0, max_replicas=1))
         assert config.llama_cpp_config.cache.type == "disk"
 
+    def test_disk_cache_ignored_for_non_llama_cpp_loader(self):
+        # A leftover llama_cpp_config on a different loader is ignored, so the
+        # disk-cache multi-replica guard must not fire.
+        config = ModelshipModelConfig(
+            name="qwen-vllm",
+            model="Qwen/Qwen2.5-7B-Instruct",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
+            num_replicas=2,
+        )
+        assert config.num_replicas == 2
+
     def test_ram_cache_allows_multiple_replicas(self):
         config = ModelshipModelConfig(
             name="qwen-gguf",

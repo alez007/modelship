@@ -315,6 +315,8 @@ class ModelshipModelConfig(BaseModel):
         # llama.cpp's LlamaDiskCache reads/writes/prunes its SQLite store with no
         # file locking. Replicas of the same model share one cache dir, so >1
         # replica races into corruption. RAM cache is per-process and always safe.
+        if self.loader != ModelLoader.llama_cpp:
+            return self
         if self.llama_cpp_config is None or self.llama_cpp_config.cache is None:
             return self
         if self.llama_cpp_config.cache.type != "disk":
