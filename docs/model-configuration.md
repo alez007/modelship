@@ -408,6 +408,8 @@ When set, llama.cpp's native prompt-state cache is attached to the model (via `L
 
 The `disk` cache is stored under `$MSHIP_CACHE_DIR/llama_cache/<model-name>` (default `/.cache`), isolated per model so different models never share — and cross-load — incompatible cached states.
 
+> **Note:** `type: disk` requires a single replica. llama.cpp's on-disk cache has no file locking, so replicas sharing the store would corrupt it — combining `disk` with `num_replicas > 1` (or an `autoscaling_config` whose `max_replicas > 1`) is a config error that stops the deploy. Use `type: ram` (per-process, always safe) for multi-replica models.
+
 ```yaml
 models:
   - name: "qwen-gguf-hf"

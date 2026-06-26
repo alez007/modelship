@@ -64,6 +64,43 @@ class TestLlamaCppConfig:
         with pytest.raises(ValidationError):
             LlamaCppConfig(cache={"capacity": capacity})
 
+    def _disk_cache_model(self, **overrides):
+        return ModelshipModelConfig(
+            name="qwen-gguf",
+            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_cpp,
+            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
+            **overrides,
+        )
+
+    def test_disk_cache_single_replica_allowed(self):
+        config = self._disk_cache_model()
+        assert config.llama_cpp_config.cache.type == "disk"
+
+    def test_disk_cache_rejects_multiple_num_replicas(self):
+        with pytest.raises(ValidationError, match="not process-safe"):
+            self._disk_cache_model(num_replicas=2)
+
+    def test_disk_cache_rejects_autoscaling_above_one(self):
+        with pytest.raises(ValidationError, match="not process-safe"):
+            self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=1, max_replicas=3))
+
+    def test_disk_cache_allows_scale_to_zero_single_max(self):
+        config = self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=0, max_replicas=1))
+        assert config.llama_cpp_config.cache.type == "disk"
+
+    def test_ram_cache_allows_multiple_replicas(self):
+        config = ModelshipModelConfig(
+            name="qwen-gguf",
+            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_cpp,
+            llama_cpp_config=LlamaCppConfig(cache={"type": "ram"}),
+            num_replicas=4,
+        )
+        assert config.num_replicas == 4
+
     def test_custom_values(self):
         config = LlamaCppConfig(
             n_gpu_layers=33,

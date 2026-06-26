@@ -311,6 +311,27 @@ class ModelshipModelConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_disk_cache_single_replica(self):
+        # llama.cpp's LlamaDiskCache reads/writes/prunes its SQLite store with no
+        # file locking. Replicas of the same model share one cache dir, so >1
+        # replica races into corruption. RAM cache is per-process and always safe.
+        if self.llama_cpp_config is None or self.llama_cpp_config.cache is None:
+            return self
+        if self.llama_cpp_config.cache.type != "disk":
+            return self
+        multi_replica = ("num_replicas" in self.model_fields_set and self.num_replicas > 1) or (
+            self.autoscaling_config is not None and self.autoscaling_config.max_replicas > 1
+        )
+        if multi_replica:
+            raise ValueError(
+                f"model '{self.name}': llama_cpp_config.cache.type='disk' cannot be combined with "
+                f"multiple replicas (num_replicas > 1 or autoscaling max_replicas > 1) — the disk "
+                f"cache is not process-safe and replicas would corrupt a shared store. Use "
+                f"cache.type='ram' (per-process, safe) or keep a single replica."
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_custom_requires_plugin(self):
         if self.loader == ModelLoader.custom and self.plugin is None:
             raise ValueError("loader='custom' requires plugin to be set")
