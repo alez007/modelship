@@ -273,7 +273,7 @@ def _build_gemma_tool_call_gbnf(
             if isinstance(req_val, str):
                 req_keys = {req_val}
             elif isinstance(req_val, list):
-                req_keys = set(req_val)
+                req_keys = {k for k in req_val if isinstance(k, str)}
             else:
                 req_keys = set()
 
