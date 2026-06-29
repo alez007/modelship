@@ -290,20 +290,21 @@ def _build_gemma_tool_call_gbnf(
     content_excl = f"\\{start_char}" if start_char in "]-^\\" else start_char
 
     if require_tool_call:
-        root_rule = "root ::= tool-calls"
+        root_rule = "root ::= ws tool-calls ws"
         content_rules: list[str] = []
     else:
         # A turn is *either* tool calls or free text — never text wrapped around a call.
         # The old ``( content )? tool-calls ( content )?`` let a small model spill malformed
         # DSL as leading/trailing content (e.g. ``capturePlayercall:HassMediaNext{}``), which
         # then got captured into chat history and poisoned later turns.
-        root_rule = "root ::= tool-calls | content"
+        root_rule = "root ::= ws tool-calls ws | content"
         content_rules = [f"content ::= [^{content_excl}]+"]
     envelope = [
         root_rule,
         f"tool-calls ::= {tool_calls_rhs}",
         f'tool-call ::= {start} "call:" call-choice {end}',
         f"call-choice ::= {call_choice}",
+        "ws ::= [ \\t\\n\\r]*",
         *content_rules,
     ]
 

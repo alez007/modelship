@@ -183,7 +183,7 @@ class TestGemmaToolCallGrammar:
         text = build_tool_call_gbnf(parser, GEMMA_TOOLS)
         assert text is not None
         assert f'tool-call ::= "{parser.start_marker}" "call:" call-choice "{parser.end_marker}"' in text
-        assert "root ::= tool-calls | content" in text
+        assert "root ::= ws tool-calls ws | content" in text
         assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
 
     def test_require_tool_call_drops_free_text_escape(self):
@@ -191,7 +191,7 @@ class TestGemmaToolCallGrammar:
         parser = get_parser("function_gemma")
         text = build_tool_call_gbnf(parser, GEMMA_TOOLS, require_tool_call=True)
         assert text is not None
-        assert "root ::= tool-calls\n" in text
+        assert "root ::= ws tool-calls ws\n" in text
         assert "content ::=" not in text
         assert build_tool_call_grammar(parser, GEMMA_TOOLS, require_tool_call=True) is not None
 
