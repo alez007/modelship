@@ -259,9 +259,19 @@ def _build_gemma_tool_call_gbnf(
         params = func.get("parameters") or {}
         props = params.get("properties") if isinstance(params, dict) else None
         if isinstance(props, dict) and props:
-            pair_branches = " | ".join(f"{_gbnf_literal(f'{k}:')} {emit_value(v)}" for k, v in props.items())
-            tool_rules.append(f"tool-{idx}-pair ::= {pair_branches}")
-            tool_rules.append(f'tool-{idx}-args ::= ( tool-{idx}-pair ( "," tool-{idx}-pair )* )?')
+            prop_items = list(props.items())
+            for j, (k, v) in enumerate(prop_items):
+                tool_rules.append(f"tool-{idx}-p{j} ::= {_gbnf_literal(f'{k}:')} {emit_value(v)}")
+            m = len(prop_items)
+            # Ordered-optional args: each property appears at most once, in schema order,
+            # with correct commas (first present property is bare, every later one carries a
+            # leading comma). Enforces key *uniqueness* — a free ``pair ( "," pair )*``
+            # alternation let the model repeat a key (e.g. ``name`` twice) -> corrupt call.
+            branches = " | ".join(
+                " ".join([f"tool-{idx}-p{j}"] + [f'( "," tool-{idx}-p{n} )?' for n in range(j + 1, m)])
+                for j in range(m)
+            )
+            tool_rules.append(f"tool-{idx}-args ::= ( {branches} )?")
             tool_rules.append(f'tool-{idx} ::= {name_lit} "{{" tool-{idx}-args "}}"')
         else:
             # All-optional / no-property intents collapse to FUNC{}.
@@ -280,16 +290,21 @@ def _build_gemma_tool_call_gbnf(
     content_excl = f"\\{start_char}" if start_char in "]-^\\" else start_char
 
     if require_tool_call:
-        root_rule = "root ::= tool-calls"
+        root_rule = "root ::= ws tool-calls ws"
         content_rules: list[str] = []
     else:
-        root_rule = "root ::= ( content )? tool-calls ( content )? | content"
+        # A turn is *either* tool calls or free text — never text wrapped around a call.
+        # The old ``( content )? tool-calls ( content )?`` let a small model spill malformed
+        # DSL as leading/trailing content (e.g. ``capturePlayercall:HassMediaNext{}``), which
+        # then got captured into chat history and poisoned later turns.
+        root_rule = "root ::= ws tool-calls ws | content"
         content_rules = [f"content ::= [^{content_excl}]+"]
     envelope = [
         root_rule,
         f"tool-calls ::= {tool_calls_rhs}",
         f'tool-call ::= {start} "call:" call-choice {end}',
         f"call-choice ::= {call_choice}",
+        "ws ::= [ \\t\\n\\r]*",
         *content_rules,
     ]
 
