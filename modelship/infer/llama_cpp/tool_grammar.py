@@ -21,8 +21,8 @@ caps the number of calls (``_MAX_TOOL_CALLS``) to stop the runaway repetition
 small FunctionGemma checkpoints fall into. Other families return ``None``.
 
 The Gemma grammar is loose by design: it pins the call count, tool name, and
-enum values, but does not enforce ``required`` args, key uniqueness, or key
-ordering.
+enum values. Key uniqueness, ordering, and ``required`` arguments are enforced
+at the top level, and only nested-object shape remains loose.
 """
 
 from __future__ import annotations
@@ -267,11 +267,29 @@ def _build_gemma_tool_call_gbnf(
             # with correct commas (first present property is bare, every later one carries a
             # leading comma). Enforces key *uniqueness* — a free ``pair ( "," pair )*``
             # alternation let the model repeat a key (e.g. ``name`` twice) -> corrupt call.
+            # Enforces top-level ``required`` fields by restricting branches to only valid
+            # ordered subsets that include all top-level required properties.
+            req_val = params.get("required")
+            if isinstance(req_val, str):
+                req_keys = {req_val}
+            elif isinstance(req_val, list):
+                req_keys = {k for k in req_val if isinstance(k, str)}
+            else:
+                req_keys = set()
+
+            req_set = {j for j, (k, _) in enumerate(prop_items) if k in req_keys}
+            first_req = min(req_set) if req_set else None
+
+            branch_js = range(first_req + 1) if first_req is not None else range(m)
+
+            def later(n: int) -> str:
+                return f'"," tool-{idx}-p{n}' if n in req_set else f'( "," tool-{idx}-p{n} )?'  # noqa: B023
+
             branches = " | ".join(
-                " ".join([f"tool-{idx}-p{j}"] + [f'( "," tool-{idx}-p{n} )?' for n in range(j + 1, m)])
-                for j in range(m)
+                " ".join([f"tool-{idx}-p{j}"] + [later(n) for n in range(j + 1, m)]) for j in branch_js
             )
-            tool_rules.append(f"tool-{idx}-args ::= ( {branches} )?")
+            args_rhs = f"( {branches} )?" if first_req is None else f"( {branches} )"
+            tool_rules.append(f"tool-{idx}-args ::= {args_rhs}")
             tool_rules.append(f'tool-{idx} ::= {name_lit} "{{" tool-{idx}-args "}}"')
         else:
             # All-optional / no-property intents collapse to FUNC{}.

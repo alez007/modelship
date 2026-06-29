@@ -321,6 +321,88 @@ class TestGemmaToolCallGrammar:
     def test_empty_tools_returns_none(self):
         assert build_tool_call_gbnf(get_parser("function_gemma"), []) is None
 
+    def test_required_arg_is_mandatory(self):
+        # 1. Required arg is mandatory: with a tool `{name:string, area:enum}`,
+        #    `required:["name"]`, assert the emitted `tool-0-args` rule equals the expected
+        #    string (no outer `?`, p0 in every branch). Assert `build_tool_call_grammar` compiles.
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "HassTurnOn",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "area": {"enum": ["Living Room", "Small Bedroom"]},
+                        },
+                        "required": ["name"],
+                    },
+                },
+            }
+        ]
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, tools)
+        assert text is not None
+        assert 'tool-0-args ::= ( tool-0-p0 ( "," tool-0-p1 )? | tool-0-p1 )' not in text
+        assert 'tool-0-args ::= ( tool-0-p0 ( "," tool-0-p1 )? )' in text
+        assert 'tool-0-args ::= ( tool-0-p0 ( "," tool-0-p1 )? )?' not in text
+        assert build_tool_call_grammar(parser, tools) is not None
+
+    def test_no_required_regression(self):
+        # 2. No-required regression: a tool with the same props but no `required` still
+        #    emits `tool-0-args ::= ( ... )?` (outer optional present) — byte-identical to pre-change output.
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "HassTurnOn",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "area": {"enum": ["Living Room", "Small Bedroom"]},
+                        },
+                    },
+                },
+            }
+        ]
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, tools)
+        assert text is not None
+        assert 'tool-0-args ::= ( tool-0-p0 ( "," tool-0-p1 )? | tool-0-p1 )?' in text
+
+    def test_multiple_required_order_preserved(self):
+        # 3. Multiple required, order preserved: `[opt a, req b, opt c, req d]` produces the
+        #    branch set from the worked examples (assert key substrings: `"," tool-0-p1` mandatory,
+        #    `( "," tool-0-p2 )?` optional, `"," tool-0-p3` mandatory).
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "MultiReq",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "string"},
+                            "b": {"type": "string"},
+                            "c": {"type": "string"},
+                            "d": {"type": "string"},
+                        },
+                        "required": ["b", "d"],
+                    },
+                },
+            }
+        ]
+        parser = get_parser("function_gemma")
+        text = build_tool_call_gbnf(parser, tools)
+        assert text is not None
+        expected_rule = (
+            'tool-0-args ::= ( tool-0-p0 "," tool-0-p1 ( "," tool-0-p2 )? "," tool-0-p3 | '
+            'tool-0-p1 ( "," tool-0-p2 )? "," tool-0-p3 )'
+        )
+        assert expected_rule in text
+
 
 class TestGemmaGrammarParserAgreement:
     """Canonical strings the grammar can emit must parse back to the right call.
@@ -359,3 +441,15 @@ class TestGemmaGrammarParserAgreement:
         sample = f"{parser.start_marker}call:SetTimer{{minutes:42,on:true,tags:[{d}a{d},{d}b{d}]}}{parser.end_marker}"
         out = parser.parse(sample)
         assert json.loads(out.tool_calls[0].function.arguments) == {"minutes": 42, "on": True, "tags": ["a", "b"]}
+
+    def test_required_arg_parser_agreement(self):
+        # 4. Parser agreement: the minimal grammar-emittable call for `HassTurnOn` is
+        #    `...call:HassTurnOn{name:<escape>x<escape>}...` and round-trips via
+        #    `parser.parse(...)` to `{"name": "x"}` (mirrors `test_enum_arg_roundtrips`).
+        parser = get_parser("function_gemma")
+        d = parser.string_delim
+        sample = f"{parser.start_marker}call:HassTurnOn{{name:{d}x{d}}}{parser.end_marker}"
+        out = parser.parse(sample)
+        assert len(out.tool_calls) == 1
+        assert out.tool_calls[0].function.name == "HassTurnOn"
+        assert json.loads(out.tool_calls[0].function.arguments) == {"name": "x"}
