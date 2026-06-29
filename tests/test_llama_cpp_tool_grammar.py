@@ -183,7 +183,7 @@ class TestGemmaToolCallGrammar:
         text = build_tool_call_gbnf(parser, GEMMA_TOOLS)
         assert text is not None
         assert f'tool-call ::= "{parser.start_marker}" "call:" call-choice "{parser.end_marker}"' in text
-        assert "root ::= ( content )? tool-calls ( content )? | content" in text
+        assert "root ::= tool-calls | content" in text
         assert "content ::= [^<]+" in text  # both gemma markers/delims lead with '<'
 
     def test_require_tool_call_drops_free_text_escape(self):
