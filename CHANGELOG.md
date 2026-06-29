@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.6] - 2026-06-29
+
+### Added
+- enforce required arguments in Gemma tool-call GBNF grammar
+- allow optional leading/trailing whitespace in Gemma GBNF tool call grammar
+- enforce schema order and uniqueness in Gemma tool call GBNF grammar
+- back require_tool_call with LlamaCppConfig, imply constraining
+- constrain FunctionGemma/Gemma4 tool calls with a GBNF grammar
+- add llama.cpp native prompt cache support
+
+### Fixed
+- robustly filter required schema property elements
+- guard empty type list in Gemma value emitter
+- emit generic recursive value rules for free-form Gemma tool args
+- scope disk-cache replica guard to the llama_cpp loader
+- key llama.cpp disk cache by deployment name, not model name
+- reject llama.cpp disk cache with multiple replicas
+- isolate llama.cpp disk cache per-model under MSHIP_CACHE_DIR
+- drop stale registry entries for resurrected deployments on reconcile
+
+### Changed
+- simplify Gemma GBNF grammar generator and add defensive schema handling
+- set _require_tool_call on __new__-built serving chat in trace test
+- simplify multi-replica check for disk cache guard
+
 ## [0.5.5] - 2026-06-24
 
 ### Added

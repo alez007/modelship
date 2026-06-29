@@ -1,6 +1,6 @@
 [project]
 name = "modelship"
-version = "0.5.5"
+version = "0.5.6"
 description = "Self-hosted, multi-model AI inference server. Run LLMs, TTS, STT, embeddings, and image generation with an OpenAI-compatible API."
 authors = [
     { name = "Alex Margarit" }
