@@ -4,10 +4,40 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from modelship.logging import get_logger
 
 logger = get_logger("openai.parsers.utils")
+
+# Render args we supply ourselves; a user kwarg of the same name would be a
+# duplicate-keyword TypeError in render_jinja_template.
+_RESERVED_RENDER_KEYS = frozenset(
+    {"conversations", "messages", "tools", "chat_template", "add_generation_prompt", "bos_token", "eos_token"}
+)
+
+
+def render_generation_prompt(chat_template: str, chat_template_kwargs: dict[str, Any] | None = None) -> str:
+    """Render a minimal generation prompt from a chat-template string.
+
+    Standalone Jinja render (HF's ``render_jinja_template``, with its undefined-safe
+    polyfills) of a single user turn with ``add_generation_prompt``. Used to probe
+    whether reasoning is primed under the deployment's effective kwargs without
+    touching a live engine. ``bos_token``/``eos_token`` are irrelevant to reasoning
+    markers, so they are left empty.
+    """
+    from transformers.utils.chat_template_utils import render_jinja_template
+
+    kwargs = {k: v for k, v in (chat_template_kwargs or {}).items() if k not in _RESERVED_RENDER_KEYS}
+    rendered, _ = render_jinja_template(
+        conversations=[[{"role": "user", "content": "hi"}]],
+        chat_template=chat_template,
+        add_generation_prompt=True,
+        bos_token="",
+        eos_token="",
+        **kwargs,
+    )
+    return rendered[0]
 
 
 def read_chat_template(model_path: str | Path) -> str | None:

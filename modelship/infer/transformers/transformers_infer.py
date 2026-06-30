@@ -6,6 +6,7 @@ from modelship.infer.base_infer import BaseInfer
 from modelship.infer.base_serving import OpenAIServing
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, TransformersConfig
 from modelship.logging import get_logger
+from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -99,6 +100,13 @@ class TransformersInfer(BaseInfer):
                 reasoning_parser=reasoning_parser,
                 skip_special_tokens=skip_special_tokens,
                 chat_template_kwargs=self.model_config.chat_template_kwargs,
+            )
+            # Confirm the capability-detected reasoning parser against the real render:
+            # a deployment that suppressed reasoning via chat_template_kwargs downgrades
+            # to None. Rendered through the same path real requests use.
+            self.serving_chat.reasoning_parser = resolve_active_reasoning_parser(
+                reasoning_parser,
+                lambda: self.serving_chat._render_prompt([{"role": "user", "content": "hi"}]),
             )
             self._serving.append(self.serving_chat)
 

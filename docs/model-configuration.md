@@ -392,7 +392,6 @@ The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-
 | `n_gpu_layers` | int | `0` | Currently ignored — forced to `0` (CPU-only) |
 | `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor |
-| `constrain_tool_calls` | bool | `false` | Constrain tool-call decoding with a GBNF grammar built from the request's `tools` (see below) |
 | `cache` | object | — | llama.cpp's native prompt-state cache (see below). Omit to disable. |
 
 > **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` will enable `verbose` mode in the underlying llama.cpp engine.
@@ -422,16 +421,23 @@ models:
         capacity: 4GiB
 ```
 
-#### Constrained tool calling (`constrain_tool_calls`)
+#### Tool calling (`tool_choice`)
 
-When enabled, requests that carry `tools` are decoded under a [GBNF](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md) grammar compiled from those tool schemas. The grammar's top level allows **either** a free-text answer **or** a bounded sequence (max two) of tool calls, each forced into the parser's envelope with `name` pinned to a real tool name and `arguments` constrained to that tool's JSON schema. This prevents malformed envelopes, invented fields, and runaway repetition while still letting the model answer in plain text.
+Tool-call behavior is driven entirely by the per-request OpenAI `tool_choice` parameter — there is no deploy-level flag. Sending a `tools` array is the opt-in.
 
-Caveats:
+When a request carries `tools` and the model has a usable `tool_call_parser`, decoding is automatically constrained by a [GBNF](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md) grammar compiled from those tool schemas (it caps the call count, pins `name` to a real tool, and constrains `arguments` to each tool's JSON schema — preventing malformed envelopes, invented fields, and runaway repetition). `tool_choice` selects the grammar's root:
 
-- It enforces *structure*, not *choice* — the grammar cannot make the model pick the correct field or value, only that whatever it emits is well-typed and well-formed.
-- JSON-schema numeric bounds (e.g. `minimum`/`maximum`) are not expressible as ranges in GBNF; numbers are constrained to digit shape only.
-- The free-text branch cannot contain a literal `<`.
-- Only the parser-driven path honors this. It requires a resolvable `tool_call_parser` from a JSON family (currently `hermes`); other families are left unconstrained (logged once). It also takes precedence over a `response_format` grammar on the same request — the two cannot be combined.
+- `auto` (default) — the model may answer in free text **or** call tools. The free-text branch cannot contain a literal `<`, so it is skipped on a reasoning-enabled deployment (which would emit `<think>`); tool calls are still parsed from the raw output.
+- `required` / `{"type":"function","function":{"name":"X"}}` — the free-text branch is dropped, so the model **must** call a tool. Because that root cannot emit `<think>`, it is enforced even on a reasoning-capable model.
+- `none` — tools are suppressed entirely.
+
+Per-loader enforcement: **vLLM** honors `tool_choice` natively. **llama_cpp** enforces `required`/named via the grammar above (when a grammar-emitting parser is resolved — currently the JSON family `hermes` and the Gemma family; others are left unconstrained, logged once). **transformers** has no constrained decoding, so `required`/named are best-effort (tools are passed and the model is trusted).
+
+Caveats: the grammar enforces *structure*, not *choice* (it can't pick the right value); JSON-schema numeric bounds aren't expressible as GBNF ranges (digit shape only); and the tool-call grammar takes precedence over a `response_format` grammar on the same request — the two cannot be combined.
+
+#### Reasoning detection
+
+A model's reasoning parser is auto-detected from its chat template. After load, each loader renders a generation prompt with the deployment's effective `chat_template_kwargs` and confirms whether reasoning is actually emitted; if you suppress it (e.g. `chat_template_kwargs: {enable_thinking: false}` on Qwen3), the parser is disabled — speeding up inference and letting `tool_choice=auto` fully constrain. There is no modelship-level reasoning flag.
 
 GGUF variants in a HuggingFace repo are picked via the `:filename` syntax on the
 `model:` field (see [Model source](#model-source)). The selector is a glob and

@@ -95,7 +95,7 @@ def build_tool_call_gbnf(
         if parser.name not in _logged_unconstrained:
             _logged_unconstrained.add(parser.name)
             logger.info(
-                "constrain_tool_calls: no grammar emitter for tool_call_parser %r; left unconstrained",
+                "tool-call grammar: no emitter for tool_call_parser %r; left unconstrained",
                 parser.name,
             )
         return None
@@ -129,7 +129,7 @@ def build_tool_call_gbnf(
     try:
         inner = json_schema_to_gbnf(json.dumps(meta_schema))
     except Exception as exc:
-        logger.warning("constrain_tool_calls: failed to convert tool schemas to GBNF: %s; skipping", exc)
+        logger.warning("tool-call grammar: failed to convert tool schemas to GBNF: %s; skipping", exc)
         return None
 
     # The converter's entry rule is ``root``; rename only its LHS so our own
@@ -361,5 +361,5 @@ def build_tool_call_grammar(
     try:
         return LlamaGrammar.from_string(text, verbose=False)
     except Exception as exc:
-        logger.warning("constrain_tool_calls: failed to compile tool-call grammar: %s; skipping", exc)
+        logger.warning("tool-call grammar: failed to compile: %s; skipping", exc)
         return None

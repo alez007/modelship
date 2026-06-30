@@ -17,7 +17,7 @@ from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
 from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
 from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
-from modelship.openai.parsers.tool_calling import get_parser, resolve_tools_for_request
+from modelship.openai.parsers.tool_calling import get_parser, request_forces_tool_call, resolve_tools_for_request
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -40,8 +40,6 @@ class OpenAIServingChat(OpenAIServing):
         tool_call_parser: str | None = None,
         reasoning_parser: str | None = None,
         renderer: LlamaCppToolCallRenderer | None = None,
-        constrain_tool_calls: bool = False,
-        require_tool_call: bool = False,
     ):
         self._llama = llama
         self.model_name = model_name
@@ -52,8 +50,6 @@ class OpenAIServingChat(OpenAIServing):
         self.tool_call_parser = tool_call_parser
         self.reasoning_parser = reasoning_parser
         self._renderer = renderer
-        self._constrain_tool_calls = constrain_tool_calls
-        self._require_tool_call = require_tool_call
         self._logged_reasoning_unconstrained = False
         # The renderer's presence is the sole switch between paths:
         #  - renderer set → drive `create_completion` raw, route every
@@ -234,32 +230,28 @@ class OpenAIServingChat(OpenAIServing):
             max_tokens = request.max_completion_tokens
 
         completion_kwargs = self._build_completion_kwargs(request, prompt)
-        # `require_tool_call` forces a tool call *via* the grammar, so it implies
-        # building one even when `constrain_tool_calls` is off.
-        if (self._constrain_tool_calls or self._require_tool_call) and tool_parser_name and tools:
-            if self.reasoning_parser:
-                # Grammar's `content` excludes `<` (the start marker's first char),
-                # which also opens `<think>` — constraining would block the reasoning
-                # block. Leave unconstrained; the parser still extracts tool calls.
-                if not self._logged_reasoning_unconstrained:
-                    self._logged_reasoning_unconstrained = True
-                    logger.info(
-                        "constrain_tool_calls: disabled for reasoning-enabled deployment %r; "
-                        "the tool-call grammar would block the reasoning block",
-                        self.model_name,
+        # `tool_choice` drives the grammar. `force` (required/named) builds a
+        # tool-only root that can't emit `<think>`, so it ignores the reasoning
+        # parser. The `auto` grammar's `content ::= [^<]+` excludes `<`, which also
+        # opens `<think>`, so it yields to a reasoning-enabled deployment.
+        force = request_forces_tool_call(request.tool_choice)
+        if tool_parser_name and tools and (force or self.reasoning_parser is None):
+            grammar = build_tool_call_grammar(get_parser(tool_parser_name), tools, require_tool_call=force)
+            if grammar is not None:
+                if completion_kwargs.get("grammar") is not None:
+                    logger.warning(
+                        "chat request %s: response_format grammar overridden by the tool-call grammar; "
+                        "the two cannot be combined",
+                        request_id,
                     )
-            else:
-                grammar = build_tool_call_grammar(
-                    get_parser(tool_parser_name), tools, require_tool_call=self._require_tool_call
-                )
-                if grammar is not None:
-                    if completion_kwargs.get("grammar") is not None:
-                        logger.warning(
-                            "chat request %s: response_format grammar overridden by the tool-call grammar "
-                            "(constrain_tool_calls); the two cannot be combined",
-                            request_id,
-                        )
-                    completion_kwargs["grammar"] = grammar
+                completion_kwargs["grammar"] = grammar
+        elif tool_parser_name and tools and self.reasoning_parser and not self._logged_reasoning_unconstrained:
+            self._logged_reasoning_unconstrained = True
+            logger.info(
+                "tool-call grammar left off for reasoning-enabled deployment %r on tool_choice=auto; "
+                "the grammar would block the reasoning block",
+                self.model_name,
+            )
         prompt_tokens = renderer.count_tokens(prompt)
         loop = asyncio.get_event_loop()
         llama = self._llama
