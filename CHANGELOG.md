@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.7] - 2026-06-30
+
+### Added
+- drive tool calling from per-request tool_choice and infer reasoning state
+
+### Fixed
+- harden reasoning probe and auto-path reasoning check
+- guard get_parser in reasoning probe against startup crash
+
 ## [0.5.6] - 2026-06-29
 
 ### Added
