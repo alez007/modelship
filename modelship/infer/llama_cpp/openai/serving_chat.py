@@ -235,7 +235,7 @@ class OpenAIServingChat(OpenAIServing):
         # parser. The `auto` grammar's `content ::= [^<]+` excludes `<`, which also
         # opens `<think>`, so it yields to a reasoning-enabled deployment.
         force = request_forces_tool_call(request.tool_choice)
-        if tool_parser_name and tools and (force or self.reasoning_parser is None):
+        if tool_parser_name and tools and (force or not self.reasoning_parser):
             grammar = build_tool_call_grammar(get_parser(tool_parser_name), tools, require_tool_call=force)
             if grammar is not None:
                 if completion_kwargs.get("grammar") is not None:
