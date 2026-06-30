@@ -11,6 +11,7 @@ from modelship.infer.llama_cpp.openai.serving_chat import OpenAIServingChat
 from modelship.infer.llama_cpp.openai.serving_embedding import OpenAIServingEmbedding
 from modelship.infer.llama_cpp.utils import build_tool_call_renderer
 from modelship.logging import get_logger
+from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -142,6 +143,12 @@ class LlamaCppInfer(BaseInfer):
                     context=f"model '{self.model_config.name}'",
                 )
                 renderer = build_tool_call_renderer(self.llamacpp, template, template_kwargs)
+                # Confirm the capability-detected reasoning parser against the real
+                # render: a deployment that suppressed reasoning via chat_template_kwargs
+                # downgrades to None, so `tool_choice=auto` can constrain.
+                reasoning_name = resolve_active_reasoning_parser(
+                    reasoning_name, lambda: renderer.render([{"role": "user", "content": "hi"}], None)
+                )
             else:
                 renderer = None
                 if self.model_config.chat_template_kwargs:
@@ -169,8 +176,6 @@ class LlamaCppInfer(BaseInfer):
                 tool_call_parser=parser_name,
                 reasoning_parser=reasoning_name,
                 renderer=renderer,
-                constrain_tool_calls=self.config.constrain_tool_calls,
-                require_tool_call=self.config.require_tool_call,
             )
         elif self.model_config.usecase == ModelUsecase.embed:
             self.serving_embedding = OpenAIServingEmbedding(self.llamacpp, self.model_config.name)

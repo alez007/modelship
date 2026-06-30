@@ -20,23 +20,18 @@ models:
       n_batch: 512
 
   # Tool calling: FunctionGemma emits a custom `call:FUNC{...}` syntax. The
-  # tool-call parser is auto-detected from the model. `constrain_tool_calls`
-  # decodes under a GBNF grammar built from each request's tools — it caps the
-  # call count, pins the tool name, and constrains enum args, which stops the
-  # runaway repetition small (270M) checkpoints fall into. Free-text answers
-  # stay reachable; not compatible with reasoning-enabled deployments.
+  # tool-call parser is auto-detected from the model. Tool behavior is driven per
+  # request by the OpenAI `tool_choice` parameter — there is no deploy-level flag:
+  #   - sending `tools` auto-constrains decoding with a GBNF grammar (caps the call
+  #     count, pins the tool name, constrains enum args), stopping the runaway
+  #     repetition small (270M) checkpoints fall into. Free-text stays reachable.
+  #   - `tool_choice: "required"` (or a named function) forces a tool call by
+  #     dropping the free-text branch — helps tiny checkpoints that decline to act.
   - name: "function-gemma"
     model: "/.cache/huggingface/functiongemma-270m-it.Q8_0.gguf"
     usecase: "generate"
     loader: "llama_cpp"
     num_cpus: 2
-    llama_cpp_config:
-      constrain_tool_calls: true
-      # Force a tool call (drop the free-text escape). Helps tiny checkpoints
-      # that otherwise decline to act; gate non-actions upstream since it fires
-      # even on chit-chat. Implies constrain_tool_calls (the grammar is built
-      # regardless), so it works on its own too.
-      require_tool_call: true
 
   # Embeddings
   - name: "nomic-embed"

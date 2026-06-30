@@ -55,6 +55,8 @@ from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.logging import get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
+from modelship.openai.parsers.utils import render_generation_prompt
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -268,7 +270,17 @@ class VllmInfer(BaseInfer):
         # or left them None to signal "disabled". Don't redo the precedence here.
         tool_parser_name = self.model_config._resolved_tool_call_parser
         enable_tools = tool_parser_name is not None
-        reasoning_parser_name = self.model_config._resolved_reasoning_parser or ""
+        # Confirm the capability-detected reasoning parser against the real render: a
+        # deployment that suppressed reasoning via chat_template_kwargs downgrades to
+        # None. vLLM owns reasoning parsing, so this mainly keeps reported state honest.
+        template = self.model_config._resolved_chat_template
+        reasoning_parser_name = (
+            resolve_active_reasoning_parser(
+                self.model_config._resolved_reasoning_parser,
+                lambda: render_generation_prompt(template or "", self.model_config.chat_template_kwargs),
+            )
+            or ""
+        )
 
         openai_serving_render = OpenAIServingRender(
             model_config=self.engine.model_config,

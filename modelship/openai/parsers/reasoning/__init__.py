@@ -9,7 +9,12 @@ reasoning parsers and uses only the auto-detected parser name.
 
 from modelship.openai.parsers.reasoning.parsers import DeepseekR1ReasoningParser, ReasoningParser
 from modelship.openai.parsers.reasoning.registry import available_parsers, get_parser, register_parser
-from modelship.openai.parsers.reasoning.utils import classify_template, detect_reasoning_parser
+from modelship.openai.parsers.reasoning.utils import (
+    classify_template,
+    detect_reasoning_parser,
+    reasoning_active_in_render,
+    resolve_active_reasoning_parser,
+)
 
 __all__ = [
     "DeepseekR1ReasoningParser",
@@ -18,5 +23,7 @@ __all__ = [
     "classify_template",
     "detect_reasoning_parser",
     "get_parser",
+    "reasoning_active_in_render",
     "register_parser",
+    "resolve_active_reasoning_parser",
 ]

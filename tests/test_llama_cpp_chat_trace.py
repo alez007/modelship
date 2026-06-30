@@ -51,8 +51,7 @@ def _serving(text: str) -> OpenAIServingChat:
     chat._renderer = _FakeRenderer()
     chat._llama = _FakeLlama(text)
     chat.reasoning_parser = None
-    chat._constrain_tool_calls = False
-    chat._require_tool_call = False
+    chat._logged_reasoning_unconstrained = False
     chat._completion_accepted_params = set(inspect.signature(Llama.create_completion).parameters)
     return chat
 

@@ -13,7 +13,7 @@ from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
 from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
 from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
-from modelship.openai.parsers.tool_calling import get_parser, resolve_tools_for_request
+from modelship.openai.parsers.tool_calling import get_parser, request_forces_tool_call, resolve_tools_for_request
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -59,6 +59,7 @@ class OpenAIServingChat(OpenAIServing):
         assert pipeline.tokenizer is not None, "text-generation pipeline must have a tokenizer"
         self.tokenizer: PreTrainedTokenizerBase = pipeline.tokenizer
         self._lock = asyncio.Lock()
+        self._logged_force_unenforceable = False
         # Validate configured parsers at startup so misconfiguration surfaces
         # before the first request rather than mid-generation. None means
         # auto-detection found no usable parser; tool calls in requests will be
@@ -152,6 +153,12 @@ class OpenAIServingChat(OpenAIServing):
                 self.model_name,
             )
             tools = None
+        if tools and request_forces_tool_call(request.tool_choice) and not self._logged_force_unenforceable:
+            self._logged_force_unenforceable = True
+            logger.info(
+                "tool_choice forces a tool call but the transformers loader has no constrained decoding; "
+                "passing tools to the model and trusting it to comply (best-effort)"
+            )
 
         max_tokens = request.max_tokens
         if max_tokens is None and request.max_completion_tokens is not None:

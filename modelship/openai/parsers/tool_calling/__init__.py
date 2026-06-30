@@ -8,7 +8,7 @@ streaming and non-streaming responses lives one level up at
 streaming helpers from ``modelship.openai.parsers.streaming``.
 """
 
-from modelship.openai.parsers.tool_calling.input import resolve_tools_for_request
+from modelship.openai.parsers.tool_calling.input import request_forces_tool_call, resolve_tools_for_request
 from modelship.openai.parsers.tool_calling.parsers import (
     HermesToolCallParser,
     Llama3JsonToolCallParser,
@@ -25,5 +25,6 @@ __all__ = [
     "available_parsers",
     "get_parser",
     "register_parser",
+    "request_forces_tool_call",
     "resolve_tools_for_request",
 ]
