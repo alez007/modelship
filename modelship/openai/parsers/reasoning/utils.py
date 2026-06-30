@@ -68,11 +68,11 @@ def resolve_active_reasoning_parser(candidate: str | None, render_prompt: Callab
         return None
     from modelship.openai.parsers.reasoning.registry import get_parser
 
-    parser = get_parser(candidate)
     try:
+        parser = get_parser(candidate)
         rendered = render_prompt()
     except Exception as exc:
-        logger.warning("reasoning probe render failed (%s); keeping reasoning_parser=%r", exc, candidate)
+        logger.warning("reasoning probe failed (%s); keeping reasoning_parser=%r", exc, candidate)
         return candidate
     if reasoning_active_in_render(rendered, parser.start_marker, parser.end_marker):
         return candidate
