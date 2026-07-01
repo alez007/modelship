@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.8] - 2026-07-01
+
+### Added
+- add GPU offload support to the llama_cpp loader
+
+### Fixed
+- gate llama_cpp GPU warning correctly and unbreak CI import of cu130 wheel
+- match .GGUF extension case-insensitively in vllm loader guard
+
+### Changed
+- bump vllm to 0.24.0
+
 ## [0.5.7] - 2026-06-30
 
 ### Added
