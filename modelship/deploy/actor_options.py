@@ -117,13 +117,12 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
         # wheel reuse the install.
         runtime_env["pip"] = [str(plugin_wheel)]
 
-    if config.loader in (ModelLoader.llama_cpp, ModelLoader.stable_diffusion_cpp):
+    if config.loader == ModelLoader.stable_diffusion_cpp:
         if config.num_gpus > 0:
             logger.warning(
-                "num_gpus=%s is ignored for model '%s': %s loader currently only supports CPU.",
+                "num_gpus=%s is ignored for model '%s': stable_diffusion_cpp loader currently only supports CPU.",
                 config.num_gpus,
                 config.name,
-                config.loader.value,
             )
         opts: dict = {"ray_actor_options": {"num_gpus": 0, "num_cpus": config.num_cpus, "runtime_env": runtime_env}}
     else:

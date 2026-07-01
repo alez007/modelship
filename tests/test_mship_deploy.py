@@ -163,12 +163,35 @@ class TestBuildDeploymentOptions:
         opts = build_deployment_options(config, plugin_wheel=wheel_path)
         assert opts["ray_actor_options"]["runtime_env"]["pip"] == [str(wheel_path)]
 
-    def test_llama_cpp_force_cpu(self):
+    def test_llama_cpp_honors_num_gpus(self):
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
             usecase=ModelUsecase.generate,
             loader=ModelLoader.llama_cpp,
+            num_gpus=2,
+        )
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 2
+        assert "placement_group_bundles" not in opts
+
+    def test_llama_cpp_num_gpus_zero_stays_cpu(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_cpp,
+            num_gpus=0,
+        )
+        opts = build_deployment_options(config)
+        assert opts["ray_actor_options"]["num_gpus"] == 0
+
+    def test_stable_diffusion_cpp_force_cpu(self):
+        config = ModelshipModelConfig(
+            name="test-model",
+            model="some-model",
+            usecase=ModelUsecase.image,
+            loader=ModelLoader.stable_diffusion_cpp,
             num_gpus=1,
         )
         opts = build_deployment_options(config)

@@ -28,7 +28,7 @@ Ray's object store needs shared memory. Always pass `--shm-size=8g` (or larger f
 
 ## `n_gpu_layers` ignored with llama_cpp loader
 
-The `llama_cpp` loader currently runs CPU-only in this build — any `n_gpu_layers` value is forced to `0` and a warning is logged. For GPU inference, use the `vllm` loader instead. Tracked for a future release.
+`n_gpu_layers` is honored on the GPU build (`MSHIP_VARIANT=gpu`) when the model's `num_gpus` is set to `1` or more (a whole integer — fractional `num_gpus` is rejected at config time, since llama.cpp has no VRAM-fraction knob). It's forced to `0` and a warning is logged when either `num_gpus` is `0`, or the installed `llama-cpp-python` was built without GPU support (e.g. the CPU image's plain PyPI wheel).
 
 ## arm64 vs amd64 image selection
 

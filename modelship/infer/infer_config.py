@@ -330,6 +330,18 @@ class ModelshipModelConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_llama_cpp_num_gpus(self):
+        # llama.cpp has no VRAM-fraction knob, so a fractional GPU share can't be
+        # honored — require whole GPUs (or 0 for CPU).
+        if self.loader == ModelLoader.llama_cpp and self.num_gpus != int(self.num_gpus):
+            raise ValueError(
+                f"num_gpus={self.num_gpus!r} is not allowed for the llama_cpp loader: "
+                f"use an integer number of whole GPUs, or 0 for CPU. Fractional GPU "
+                f"sharing isn't supported (llama.cpp has no GPU-memory fraction control)."
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_custom_requires_plugin(self):
         if self.loader == ModelLoader.custom and self.plugin is None:
             raise ValueError("loader='custom' requires plugin to be set")

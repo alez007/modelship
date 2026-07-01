@@ -2,7 +2,7 @@ import asyncio
 import os
 from collections.abc import AsyncGenerator
 
-from llama_cpp import Llama, LlamaDiskCache, LlamaRAMCache
+from llama_cpp import Llama, LlamaDiskCache, LlamaRAMCache, llama_supports_gpu_offload
 
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import LlamaCppConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
@@ -47,14 +47,22 @@ class LlamaCppInfer(BaseInfer):
         mship_log_level = os.environ.get("MSHIP_LOG_LEVEL", "INFO").upper()
         self._verbose = mship_log_level == "TRACE"
 
-        # Force CPU-only as llama_cpp is currently compiled without GPU support in this environment.
-        if self.config.n_gpu_layers != 0:
-            logger.warning(
-                "n_gpu_layers=%s is ignored for model '%s': llama_cpp currently only supports CPU.",
-                self.config.n_gpu_layers,
-                self.model_config.name,
-            )
-        self._n_gpu_layers = 0
+        # Honor GPU offload only when the installed llama-cpp-python has a GPU backend
+        # AND Ray assigned this actor a GPU. Otherwise force CPU so the CPU wheel and
+        # num_gpus:0 deploys still work.
+        gpu_capable = llama_supports_gpu_offload()
+        gpu_assigned = self.model_config.num_gpus > 0
+        if gpu_capable and gpu_assigned:
+            self._n_gpu_layers = self.config.n_gpu_layers
+        else:
+            if gpu_assigned and not gpu_capable and self.config.n_gpu_layers != 0:
+                logger.warning(
+                    "n_gpu_layers=%s ignored for model '%s': llama-cpp-python was built "
+                    "without GPU support; running CPU-only.",
+                    self.config.n_gpu_layers,
+                    self.model_config.name,
+                )
+            self._n_gpu_layers = 0
 
         self.llamacpp: Llama | None = None
         self.serving_chat: OpenAIServingChat | None = None

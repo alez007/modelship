@@ -37,13 +37,13 @@ Each deployment uses one of the following loaders:
 | Loader | Backend | Use cases | GPU required |
 |--------|---------|-----------|--------------|
 | `vllm` | vLLM engine | Chat/generation, embeddings, transcription, translation | Yes |
-| `llama_cpp` | llama-cpp-python | Chat/generation, embeddings (GGUF models) | No — currently CPU-only |
+| `llama_cpp` | llama-cpp-python | Chat/generation, embeddings (GGUF models) | No — runs on CPU or GPU (GGUF offload) |
 | `transformers` | PyTorch + HuggingFace | Chat/generation, embeddings, transcription, translation, TTS | No — runs on CPU or GPU |
 | `diffusers` | HuggingFace Diffusers | Image generation (any `AutoPipelineForText2Image` model) | Yes |
 | `stable_diffusion_cpp` | stable-diffusion.cpp | Image generation (GGUF models: SD1.5/SDXL/SD-Turbo, all-in-one Flux) | No — currently CPU-only |
 | `custom` | Plugin system | TTS backends (Kokoro ONNX, Bark, Orpheus), STT backends (whisper.cpp) | No |
 
-The `transformers` loader is ideal for CPU-only deployments, smaller models, or development/testing without a GPU. It uses HuggingFace `pipeline()` under the hood and handles audio resampling automatically for speech-to-text models. The `llama_cpp` loader provides high-efficiency inference for quantized GGUF models on CPU. The `vllm` loader provides higher throughput on GPU with continuous batching and PagedAttention.
+The `transformers` loader is ideal for CPU-only deployments, smaller models, or development/testing without a GPU. It uses HuggingFace `pipeline()` under the hood and handles audio resampling automatically for speech-to-text models. The `llama_cpp` loader provides high-efficiency inference for quantized GGUF models on CPU or GPU (`n_gpu_layers` offload, whole GPUs only — fractional `num_gpus` is rejected). The `vllm` loader provides higher throughput on GPU with continuous batching and PagedAttention.
 
 ## Responses API (`/v1/responses`)
 
