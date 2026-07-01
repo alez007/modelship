@@ -161,7 +161,7 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
         # tree, and the only external plugin is incompatible with 0.24's
         # quantization API. Reject early with a pointer to llama_cpp instead of
         # letting vLLM misparse the .gguf as a config.json deep in engine init.
-        if cfg.loader == ModelLoader.vllm and cfg._resolved_path.endswith(".gguf"):
+        if cfg.loader == ModelLoader.vllm and cfg._resolved_path.lower().endswith(".gguf"):
             raise ValueError(
                 f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
                 f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_cpp` for GGUF models, or point "
