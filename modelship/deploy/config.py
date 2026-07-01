@@ -157,6 +157,17 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
         cfg._resolved_path = resolve_model_source(cfg.model, trust_remote_code=trust_remote_code)
         logger.info("Resolved '%s' -> %s", cfg.name, cfg._resolved_path)
 
+        # GGUF is not supported on the vllm loader: vLLM 0.24 moved GGUF out of
+        # tree, and the only external plugin is incompatible with 0.24's
+        # quantization API. Reject early with a pointer to llama_cpp instead of
+        # letting vLLM misparse the .gguf as a config.json deep in engine init.
+        if cfg.loader == ModelLoader.vllm and cfg._resolved_path.endswith(".gguf"):
+            raise ValueError(
+                f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
+                f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_cpp` for GGUF models, or point "
+                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant)."
+            )
+
 
 def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     """Pre-flight: resolve the final tool-call parser name per generative model.

@@ -8,7 +8,6 @@ from starlette.requests import Request
 from starlette.responses import Response
 from vllm.config.model import ModelDType
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.entrypoints.logger import RequestLogger
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
@@ -21,30 +20,32 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 from vllm.entrypoints.openai.models.serving import OpenAIServingModels
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranscriptionRequest as VllmTranscriptionRequest,
-)
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranscriptionResponse as VllmTranscriptionResponse,
-)
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranscriptionResponseVerbose as VllmTranscriptionResponseVerbose,
-)
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranslationRequest as VllmTranslationRequest,
-)
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranslationResponse as VllmTranslationResponse,
-)
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranslationResponseVerbose as VllmTranslationResponseVerbose,
-)
-from vllm.entrypoints.openai.speech_to_text.serving import OpenAIServingTranscription, OpenAIServingTranslation
 from vllm.entrypoints.pooling.embed.protocol import (
     EmbeddingCompletionRequest as VllmEmbeddingCompletionRequest,
 )
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender
+from vllm.entrypoints.serve.utils.request_logger import RequestLogger
+from vllm.entrypoints.speech_to_text.transcription.protocol import (
+    TranscriptionRequest as VllmTranscriptionRequest,
+)
+from vllm.entrypoints.speech_to_text.transcription.protocol import (
+    TranscriptionResponse as VllmTranscriptionResponse,
+)
+from vllm.entrypoints.speech_to_text.transcription.protocol import (
+    TranscriptionResponseVerbose as VllmTranscriptionResponseVerbose,
+)
+from vllm.entrypoints.speech_to_text.transcription.serving import OpenAIServingTranscription
+from vllm.entrypoints.speech_to_text.translation.protocol import (
+    TranslationRequest as VllmTranslationRequest,
+)
+from vllm.entrypoints.speech_to_text.translation.protocol import (
+    TranslationResponse as VllmTranslationResponse,
+)
+from vllm.entrypoints.speech_to_text.translation.protocol import (
+    TranslationResponseVerbose as VllmTranslationResponseVerbose,
+)
+from vllm.entrypoints.speech_to_text.translation.serving import OpenAIServingTranslation
 from vllm.exceptions import VLLMValidationError
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM

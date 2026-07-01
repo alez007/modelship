@@ -190,6 +190,10 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | `enforce_eager` | bool | — | Disable CUDA graph capture |
 | `kv_cache_dtype` | string | — | KV cache dtype (e.g. `fp8`) |
 
+> **GGUF is not supported on the `vllm` loader.** vLLM 0.24 dropped in-tree GGUF, so
+> pointing the vllm loader at a `.gguf` is rejected at startup. Use `loader: llama_cpp`
+> for GGUF models; the vllm loader takes safetensors checkpoints or AWQ/GPTQ/FP8 quants.
+
 ### Chat / Text Generation
 
 ```yaml
