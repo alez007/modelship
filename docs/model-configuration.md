@@ -393,7 +393,7 @@ The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-
 |---|---|---|---|
 | `n_ctx` | int | `2048` | Maximum sequence length |
 | `n_batch` | int | `512` | Batch size for prompt processing |
-| `n_gpu_layers` | int | `0` | Layers to offload to GPU (`-1` = all). Honored when `num_gpus >= 1` on a GPU-capable build; forced to `0` otherwise |
+| `n_gpu_layers` | int | `-1` | Layers to offload to GPU (`-1` = all). Honored when `num_gpus >= 1` on a GPU-capable build; forced to `0` otherwise |
 | `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
 | `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor (e.g. `tensor_split`, `split_mode`, `main_gpu`) |
 | `cache` | object | — | llama.cpp's native prompt-state cache (see below). Omit to disable. |

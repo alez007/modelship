@@ -55,17 +55,12 @@ class LlamaCppInfer(BaseInfer):
         if gpu_capable and gpu_assigned:
             self._n_gpu_layers = self.config.n_gpu_layers
         else:
-            if self.config.n_gpu_layers != 0:
-                reason = (
-                    "no GPU assigned (num_gpus=0)"
-                    if not gpu_assigned
-                    else "llama-cpp-python was built without GPU support"
-                )
+            if gpu_assigned and not gpu_capable and self.config.n_gpu_layers != 0:
                 logger.warning(
-                    "n_gpu_layers=%s ignored for model '%s': %s; running CPU-only.",
+                    "n_gpu_layers=%s ignored for model '%s': llama-cpp-python was built "
+                    "without GPU support; running CPU-only.",
                     self.config.n_gpu_layers,
                     self.model_config.name,
-                    reason,
                 )
             self._n_gpu_layers = 0
 

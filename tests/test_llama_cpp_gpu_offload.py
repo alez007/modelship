@@ -38,3 +38,21 @@ class TestLlamaCppGpuOffloadGating:
         with patch("modelship.infer.llama_cpp.llama_cpp_infer.llama_supports_gpu_offload", return_value=True):
             infer = LlamaCppInfer(_make_config(num_gpus=0, n_gpu_layers=-1))
         assert infer._n_gpu_layers == 0
+
+    def test_no_warning_for_cpu_only_deploy_with_default_n_gpu_layers(self, caplog):
+        # num_gpus=0 is an explicit CPU-only request; n_gpu_layers=-1 (the
+        # library default) shouldn't trigger a warning just because it's non-zero.
+        with (
+            patch("modelship.infer.llama_cpp.llama_cpp_infer.llama_supports_gpu_offload", return_value=True),
+            caplog.at_level("WARNING"),
+        ):
+            LlamaCppInfer(_make_config(num_gpus=0, n_gpu_layers=-1))
+        assert not any("n_gpu_layers" in record.message for record in caplog.records)
+
+    def test_warns_when_gpu_assigned_but_wheel_lacks_support(self, caplog):
+        with (
+            patch("modelship.infer.llama_cpp.llama_cpp_infer.llama_supports_gpu_offload", return_value=False),
+            caplog.at_level("WARNING"),
+        ):
+            LlamaCppInfer(_make_config(num_gpus=1, n_gpu_layers=-1))
+        assert any("n_gpu_layers" in record.message for record in caplog.records)
