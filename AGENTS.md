@@ -101,7 +101,8 @@ Commit messages matter: use Conventional Commits prefixes so the changelog gener
 ## Gotchas
 
 - `config/models.yaml` is gitignored; `mship_deploy.py` errors out with a pointer to `config/examples/` if missing.
-- vLLM version is pinned (`vllm==0.20.1`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor.
+- vLLM version is pinned (`vllm==0.24.0`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor, and the loader imports vLLM-internal `entrypoints.*` module paths that upstream restructures between minors.
+- **GGUF is not supported on the `vllm` loader.** 0.24 moved GGUF out of tree; the only external `vllm-gguf-plugin` (`0.0.2`) has a stale `override_quantization_method` signature incompatible with 0.24's quantization API (it breaks *all* quantized models, not just GGUF), so it is deliberately not installed. `resolve_all_model_sources` rejects a `.gguf` on the vllm loader at driver preflight and points to `llama_cpp`. For GGUF use `loader: llama_cpp`; feed the vllm loader safetensors or an AWQ/GPTQ/FP8 quant.
 - `llama_cpp` loader is CPU-only today; `num_gpus > 0` is silently warned and forced to 0 in `mship_deploy.py:build_deployment_options`.
 - Metrics are on by default on port **8079** (not 8000). Disable with `--no-metrics` or `MSHIP_METRICS=false`.
 - Log level `TRACE` (below `DEBUG`) is a custom level and logs full request/response payloads.

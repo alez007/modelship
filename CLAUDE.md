@@ -65,7 +65,8 @@ Under `tests/`, `pytest-asyncio` for async. Tests **mock out Ray Serve** — the
 
 ## Sharp edges
 
-- `vllm==0.20.1` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor.
+- `vllm==0.24.0` is pinned. Don't bump casually — TP scheduling in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor, and the loader binds to vLLM-internal `entrypoints.*` module paths that upstream restructures between minors (the `vllm_infer.py` imports moved in 0.22/0.23).
+- **GGUF is unsupported on the `vllm` loader.** 0.24 moved GGUF out of tree, and the only external `vllm-gguf-plugin` (`0.0.2`) has a stale `override_quantization_method` signature that breaks *every* quantized model on 0.24 — so it's deliberately not installed. `resolve_all_model_sources` (in `deploy/config.py`) rejects a `.gguf` on the vllm loader at driver preflight with a pointer to `llama_cpp`. Use `loader: llama_cpp` for GGUF; the vllm loader takes safetensors or AWQ/GPTQ/FP8 quants.
 - Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables. When `mship_deploy` starts its own head (no `--use-existing-ray-cluster`), `connect_ray` pins that port via `ray.init(_metrics_export_port=…)` — a **private** Ray kwarg (accepted through `**kwargs`). A `TestConnectRay` test guards it so a Ray bump that drops it fails loudly.
 - `TRACE` is a custom log level below `DEBUG`; it logs full request/response payloads.
 - Docker CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a `:latest-cpu` tag suffix.
