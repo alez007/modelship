@@ -44,6 +44,13 @@ _DEFAULT_KV_DTYPE_BYTES = 2
 
 class LlamaCppPreflight:
     def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        if config.num_gpus > 0:
+            logger.info(
+                "preflight '%s': skipping — GPU offload requested; n_ctx left to user config",
+                config.name,
+            )
+            return {}
+
         if hw.ram_bytes <= 0:
             logger.info("preflight '%s': skipping — system RAM not discoverable", config.name)
             return {}

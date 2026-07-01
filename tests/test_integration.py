@@ -85,6 +85,17 @@ MODEL_CONFIGS: dict[str, dict] = {
         "loader": "llama_cpp",
         "num_cpus": 1,
     },
+    "chat-llama-gpu": {
+        "name": "chat-llama-gpu",
+        # Same GGUF as chat-llama-mship, but on a whole GPU to exercise the
+        # cu130-wheel offload path end-to-end (actor GPU allocation,
+        # n_gpu_layers honored, preflight RAM sizing skipped).
+        "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
+        "usecase": "generate",
+        "loader": "llama_cpp",
+        "num_gpus": 1,
+        "num_cpus": 1,
+    },
     "autoscale-llama": {
         "name": "autoscale-llama",
         # Tiny CPU GGUF so the host can hold several replicas (1 cpu each, up to
@@ -1019,6 +1030,47 @@ class TestChatLlamaCpp:
             f"expected client-error status, got {response.status_code}: {response.text}"
         )
         assert "tool_choice='none'" in response.text
+
+
+@pytest.mark.integration
+@pytest.mark.llama_cpp
+class TestChatLlamaCppGpu:
+    """End-to-end GPU offload through the llama_cpp loader.
+
+    Same GGUF and tool-calling shape as `TestChatLlamaCpp` (CPU), but deployed
+    with `num_gpus=1` so the actor gets a whole GPU and the cu130 wheel's
+    `llama_supports_gpu_offload()` gate honors `n_gpu_layers` instead of
+    forcing CPU-only. Proves the offload path end-to-end rather than
+    re-covering the CPU loader's response-format/streaming behavior.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-llama-gpu")
+
+    def test_chat_completion(self, client):
+        completion = client.chat.completions.create(
+            model="chat-llama-gpu",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            max_tokens=32,
+        )
+        content = completion.choices[0].message.content
+        assert content
+        assert "Paris" in content
+
+    def test_tool_calling_llama_cpp_gpu_loader(self, client):
+        completion = client.chat.completions.create(
+            model="chat-llama-gpu",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            max_tokens=128,
+        )
+        tool_calls = completion.choices[0].message.tool_calls
+        assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
+        assert tool_calls[0].function.name == "get_weather"
+        assert "Paris" in tool_calls[0].function.arguments
+        assert completion.choices[0].finish_reason == "tool_calls"
 
 
 @pytest.mark.integration

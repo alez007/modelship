@@ -26,6 +26,7 @@ def _make_config(
     *,
     resolved_path: str | None = None,
     llama_cpp_kwargs: dict | None = None,
+    num_gpus: float = 0,
 ) -> ModelshipModelConfig:
     cfg = ModelshipModelConfig(
         name="test-model",
@@ -33,6 +34,7 @@ def _make_config(
         usecase=ModelUsecase.generate,
         loader=ModelLoader.llama_cpp,
         llama_cpp_config=LlamaCppConfig(**(llama_cpp_kwargs or {})),
+        num_gpus=num_gpus,
     )
     cfg._resolved_path = resolved_path
     return cfg
@@ -69,6 +71,13 @@ class TestLlamaCppPreflightSkips:
         cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)))
         hw = HardwareProfile(ram_bytes=64 * 1024**3)
         # Real GGUFReader will fail on our zero-bytes file; preflight must skip.
+        assert LlamaCppPreflight().recommend(cfg, hw) == {}
+
+    def test_gpu_offload_skips_ram_sizing(self, tmp_path):
+        # num_gpus > 0 means weights live in VRAM; the RAM-based sizer must not
+        # run at all, regardless of GGUF metadata or RAM available.
+        cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)), num_gpus=1)
+        hw = HardwareProfile(ram_bytes=64 * 1024**3)
         assert LlamaCppPreflight().recommend(cfg, hw) == {}
 
 

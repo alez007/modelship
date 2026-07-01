@@ -1437,15 +1437,42 @@ wheels = [
 
 [[package]]
 name = "llama-cpp-python"
-version = "0.3.22"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.32"
+source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cu130" }
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'emscripten'",
+    "sys_platform == 'darwin'",
+    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+]
 dependencies = [
     { name = "diskcache" },
     { name = "jinja2" },
     { name = "numpy" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/ee/206c17c34ce1ba4cb5518c846e27b1f71f42a971fcfa008d24c871729e12/llama_cpp_python-0.3.22.tar.gz", hash = "sha256:93c54af95d917fe6d6d70039efe16ca9240634d11010f5aaf795261b9f43042f", size = 67970237, upload-time = "2026-05-02T22:40:56.385Z" }
+wheels = [
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.32-cu130/llama_cpp_python-0.3.32-py3-none-manylinux_2_35_x86_64.whl" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.32-cu130/llama_cpp_python-0.3.32-py3-none-win_amd64.whl" },
+]
+
+[[package]]
+name = "llama-cpp-python"
+version = "0.3.32"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'emscripten'",
+    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "diskcache" },
+    { name = "jinja2" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/c8/3eb9c10c138eaa9d6148471701476169322eafbd825fdc13ec326552b516/llama_cpp_python-0.3.32.tar.gz", hash = "sha256:b06502361770f82eb08b7f1a192eb084b9ead2b88fe32cda8c397a2782eabde6", size = 70308017, upload-time = "2026-06-29T05:59:48.626Z" }
 
 [[package]]
 name = "llguidance"
@@ -1659,7 +1686,7 @@ bark = [
     { name = "bark" },
 ]
 cpu = [
-    { name = "llama-cpp-python" },
+    { name = "llama-cpp-python", version = "0.3.32", source = { registry = "https://pypi.org/simple" } },
     { name = "onnxruntime" },
     { name = "sentence-transformers" },
     { name = "stable-diffusion-cpp-python" },
@@ -1682,7 +1709,7 @@ gpu = [
     { name = "bitsandbytes" },
     { name = "diffusers" },
     { name = "flashinfer-python" },
-    { name = "llama-cpp-python" },
+    { name = "llama-cpp-python", version = "0.3.32", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cu130" } },
     { name = "nvidia-ml-py" },
     { name = "onnxruntime-gpu" },
     { name = "sentence-transformers" },
@@ -1721,8 +1748,8 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "kokoroonnx", marker = "extra == 'kokoroonnx'", editable = "plugins/kokoroonnx" },
     { name = "librosa", specifier = ">=0.11.0" },
-    { name = "llama-cpp-python", marker = "extra == 'cpu'", specifier = ">=0.3.6" },
-    { name = "llama-cpp-python", marker = "extra == 'gpu'", specifier = ">=0.3.6" },
+    { name = "llama-cpp-python", marker = "extra == 'cpu'", specifier = ">=0.3.32" },
+    { name = "llama-cpp-python", marker = "extra == 'gpu'", specifier = ">=0.3.32", index = "https://abetlen.github.io/llama-cpp-python/whl/cu130", conflict = { package = "modelship", extra = "gpu" } },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "nvidia-ml-py", marker = "extra == 'gpu'" },
     { name = "onnxruntime", marker = "extra == 'cpu'", specifier = ">=1.20.1" },

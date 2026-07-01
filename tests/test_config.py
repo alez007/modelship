@@ -89,6 +89,37 @@ class TestLlamaCppConfig:
         config = self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=0, max_replicas=1))
         assert config.llama_cpp_config.cache.type == "disk"
 
+    def _num_gpus_model(self, num_gpus):
+        return ModelshipModelConfig(
+            name="qwen-gguf",
+            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_cpp,
+            num_gpus=num_gpus,
+        )
+
+    def test_num_gpus_integer_allowed(self):
+        config = self._num_gpus_model(1)
+        assert config.num_gpus == 1
+
+    def test_num_gpus_zero_allowed(self):
+        config = self._num_gpus_model(0)
+        assert config.num_gpus == 0
+
+    def test_num_gpus_fractional_rejected(self):
+        with pytest.raises(ValidationError, match="not allowed for the llama_cpp loader"):
+            self._num_gpus_model(0.5)
+
+    def test_num_gpus_fractional_still_allowed_on_vllm(self):
+        config = ModelshipModelConfig(
+            name="qwen-vllm",
+            model="repo/Qwen",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0.5,
+        )
+        assert config.num_gpus == 0.5
+
     def test_disk_cache_ignored_for_non_llama_cpp_loader(self):
         # A leftover llama_cpp_config on a different loader is ignored, so the
         # disk-cache multi-replica guard must not fire.

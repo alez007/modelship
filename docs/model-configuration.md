@@ -387,15 +387,15 @@ models:
 
 ## llama.cpp Loader
 
-The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) to run GGUF models. It currently supports **CPU-only inference** — any `num_gpus` or `n_gpu_layers` configuration is ignored (a warning is logged and `n_gpu_layers` is forced to `0`). This loader is ideal for running quantized models efficiently on hardware without dedicated GPUs.
+The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) to run GGUF models. It supports **CPU or GPU inference** (GGUF offload via `n_gpu_layers`). `num_gpus` must be `0` (CPU-only, `n_gpu_layers` forced to `0`) or a whole integer number of GPUs — fractional `num_gpus` is rejected at config time, since llama.cpp has no VRAM-fraction knob. With `num_gpus >= 1` on the GPU build, `n_gpu_layers` is honored (default `-1` = offload all layers); multi-GPU deploys use llama.cpp's default even layer split across the visible GPUs (`tensor_split`, `split_mode`, and `main_gpu` are available via `model_kwargs` for finer control). This loader is ideal for running quantized models efficiently, including on hardware without dedicated GPUs.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `n_ctx` | int | `2048` | Maximum sequence length |
 | `n_batch` | int | `512` | Batch size for prompt processing |
-| `n_gpu_layers` | int | `0` | Currently ignored — forced to `0` (CPU-only) |
+| `n_gpu_layers` | int | `0` | Layers to offload to GPU (`-1` = all). Honored when `num_gpus >= 1` on a GPU-capable build; forced to `0` otherwise |
 | `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
-| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor |
+| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor (e.g. `tensor_split`, `split_mode`, `main_gpu`) |
 | `cache` | object | — | llama.cpp's native prompt-state cache (see below). Omit to disable. |
 
 > **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` will enable `verbose` mode in the underlying llama.cpp engine.
