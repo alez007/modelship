@@ -1,13 +1,13 @@
 [project]
 name = "modelship"
 version = "0.5.8"
-description = "Self-hosted, multi-model AI inference server. Run LLMs, TTS, STT, embeddings, and image generation with an OpenAI-compatible API."
+description = "Self-hosted, OpenAI-compatible multi-model inference for the agentic era — reasoning LLMs, tool calling, and the Responses API alongside embeddings, speech-to-text, text-to-speech, and image generation, all sharing your GPUs behind one gateway. Built on Ray Serve."
 authors = [
     { name = "Alex Margarit" }
 ]
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "Apache-2.0" }
-keywords = ["ai", "inference", "vllm", "ray", "openai", "llm", "tts", "stt", "embeddings", "image-generation", "diffusers", "self-hosted"]
+keywords = ["ai", "inference", "vllm", "ray", "ray-serve", "openai", "llm", "agentic", "tool-calling", "reasoning", "responses-api", "multimodal", "tts", "stt", "embeddings", "image-generation", "diffusers", "self-hosted"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",

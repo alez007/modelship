@@ -4,7 +4,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-Self-hosted, multi-model AI inference server. Runs LLMs alongside specialized models (TTS, speech-to-text, embeddings, image generation) on GPU or CPU, exposing an OpenAI-compatible API. Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) with pluggable inference backends: [vLLM](https://github.com/vllm-project/vllm) for high-throughput GPU inference, [HuggingFace Transformers](https://github.com/huggingface/transformers) for CPU and lightweight GPU workloads, [llama.cpp](https://github.com/abetlen/llama-cpp-python) for high-efficiency GGUF models on CPU, [Diffusers](https://github.com/huggingface/diffusers) for image generation, and a plugin system for custom backends.
+Self-hosted, OpenAI-compatible inference for the agentic era. Modelship runs your whole AI stack — reasoning LLMs with universal tool calling and the Responses API, plus embeddings, speech-to-text, text-to-speech, and image generation — as many models sharing your GPUs (or CPU) behind a single gateway. Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) with pluggable inference backends: [vLLM](https://github.com/vllm-project/vllm) for high-throughput GPU inference, [HuggingFace Transformers](https://github.com/huggingface/transformers) for CPU and lightweight GPU workloads, [llama.cpp](https://github.com/abetlen/llama-cpp-python) for high-efficiency GGUF models on CPU, [Diffusers](https://github.com/huggingface/diffusers) for image generation, and a plugin system for custom backends.
 
 ## Why Modelship?
 
@@ -13,6 +13,7 @@ Most self-hosted inference tools focus on running a single model. Modelship is f
 - **One server, many models** — run a full AI stack (chat + TTS + STT + embeddings + image gen) on a single machine instead of juggling separate services
 - **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so everything fits on your hardware
 - **Mix and match backends** — use vLLM for high-throughput GPU inference, Transformers or llama.cpp for CPU-only workloads, Diffusers for images, and plugins for custom backends — in the same deployment
+- **Agentic-ready** — reasoning (`<think>` → `reasoning_content`), universal tool/function calling, and the `/v1/responses` API work across the vLLM, llama.cpp, and Transformers loaders — the OpenAI-spec surface agents already target
 - **Drop-in OpenAI replacement** — any OpenAI SDK client works out of the box, making it easy to integrate with existing apps and tools like [Home Assistant](docs/home-assistant.md)
 
 ## Architecture
@@ -183,7 +184,6 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 - [Home Assistant Integration](docs/home-assistant.md) — Wyoming protocol setup for voice automation
 - [Monitoring & Logging](docs/monitoring.md) — Prometheus metrics, Grafana dashboard, structured logging, health checks
 - [Troubleshooting](docs/troubleshooting.md) — common first-run errors and fixes
-- [Roadmap](ROADMAP.md) — what's planned next and where to contribute
 
 ## Monitoring
 
@@ -202,7 +202,7 @@ Modelship is actively used and designed for stability in multi-tenant setups. Ke
 - **Payload & concurrency limits:** Built-in safeguards against large payloads (`MSHIP_MAX_REQUEST_BODY_BYTES`) and configurable limits per backend.
 - **Observability:** Deep integration with Prometheus, OpenTelemetry, and structured logging.
 
-We are currently working towards Kubernetes-native hardening (Helm charts, GPU-aware probes) and rate-limiting. See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
+We are currently hardening the Kubernetes/KubeRay path (a Helm chart ships in [`helm/`](helm/modelship/); GPU-aware probes and gateway-level rate-limiting are next). See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
 
 ## Contributing
 
