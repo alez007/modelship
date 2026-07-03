@@ -648,6 +648,9 @@ class RawRequestProxy:
         self.request_id = request_id
 
     async def is_disconnected(self) -> bool:
+        if self._registry is None:
+            # No real registry (e.g. an internal warmup request) — nothing to poll.
+            return False
         try:
             return await self._registry.is_set.remote(self.request_id)
         except RayActorError:

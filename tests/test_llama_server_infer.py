@@ -4,6 +4,7 @@ no real llama-server binary in CI) and HTTP request/response projection
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import stat
 import sys
@@ -210,6 +211,19 @@ def _request(**kwargs) -> ChatCompletionRequest:
     return ChatCompletionRequest(model="test-model", messages=[{"role": "user", "content": "hi"}], **kwargs)
 
 
+class _DisconnectingRawRequest:
+    """A RawRequestProxy stand-in whose is_disconnected() flips to True after
+    `disconnect_after` seconds, for exercising BaseInfer.run_cancellable."""
+
+    def __init__(self, disconnect_after: float):
+        self._disconnect_after = disconnect_after
+        self._start = asyncio.get_event_loop().time()
+        self.request_id = "req-1"
+
+    async def is_disconnected(self) -> bool:
+        return asyncio.get_event_loop().time() - self._start >= self._disconnect_after
+
+
 class TestNonStreamingProjection:
     @pytest.mark.asyncio
     async def test_strips_extension_fields_and_maps_reasoning_and_tools(self):
@@ -314,6 +328,26 @@ class TestNonStreamingProjection:
         result = await infer.create_chat_completion(_request(), RawRequestProxy(None, {}))
         assert isinstance(result, ErrorResponse)
         assert "bad request" in result.error.message
+
+    @pytest.mark.asyncio
+    async def test_disconnect_aborts_inflight_request_without_waiting_for_response(self):
+        # A client disconnect should cancel the in-flight httpx call to
+        # llama-server (freeing its GPU/CPU slot) rather than waiting out
+        # a response nobody will receive.
+        handler_finished = False
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal handler_finished
+            await asyncio.sleep(10)
+            handler_finished = True
+            return httpx.Response(200, json={"choices": [], "usage": {}})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(), _DisconnectingRawRequest(disconnect_after=0.05))
+
+        assert isinstance(result, ErrorResponse)
+        assert "disconnect" in result.error.message.lower()
+        assert handler_finished is False
 
     @pytest.mark.asyncio
     async def test_no_client_falls_back_to_not_supported(self):

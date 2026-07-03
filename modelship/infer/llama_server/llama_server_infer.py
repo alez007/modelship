@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from modelship.infer.base_infer import BaseInfer
+from modelship.infer.base_infer import BaseInfer, ClientDisconnectedError
 from modelship.infer.infer_config import LlamaServerConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
 from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import (
@@ -420,6 +420,16 @@ class LlamaServerInfer(BaseInfer):
         if request.stream:
             return self._stream_chat_completion(payload, request_id)
 
+        try:
+            return await self.run_cancellable(self._send_chat_completion(payload, request_id), raw_request)
+        except ClientDisconnectedError:
+            logger.info("chat request %s aborted: client disconnected", request_id)
+            return create_error_response("Client disconnected")
+
+    async def _send_chat_completion(
+        self, payload: dict[str, Any], request_id: str
+    ) -> ErrorResponse | ChatCompletionResponse:
+        assert self._client is not None
         try:
             resp = await self._client.post("/v1/chat/completions", json=payload)
             resp.raise_for_status()
