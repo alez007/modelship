@@ -236,6 +236,7 @@ class LlamaServerInfer(BaseInfer):
             ),
         )
         self._recent_log_lines.clear()
+        assert self._proc is not None
         assert self._proc.stdout is not None
         assert self._proc.stderr is not None
 
