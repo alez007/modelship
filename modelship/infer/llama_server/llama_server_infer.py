@@ -97,6 +97,7 @@ class LlamaServerInfer(BaseInfer):
         self._port: int | None = None
         self._api_key: str = secrets.token_hex(32)
         self._client: httpx.AsyncClient | None = None
+        self._log_lock = threading.Lock()
         self._recent_log_lines: deque[str] = deque(maxlen=_RECENT_LOG_LINES)
         self._log_threads: list[threading.Thread] = []
 
@@ -134,12 +135,11 @@ class LlamaServerInfer(BaseInfer):
             client, self._client = self._client, None
             try:
                 loop = asyncio.get_running_loop()
-            except RuntimeError:
-                pass  # no running loop (e.g. interpreter teardown) — let GC reclaim the socket
-            else:
                 task = loop.create_task(client.aclose())
                 _pending_client_closes.add(task)
                 task.add_done_callback(_pending_client_closes.discard)
+            except RuntimeError:
+                pass  # no running loop or closed loop (e.g. interpreter teardown) — let GC reclaim the socket
 
     def __del__(self):
         self.shutdown()
@@ -175,6 +175,7 @@ class LlamaServerInfer(BaseInfer):
                     _LAUNCH_RETRY_LIMIT,
                     e,
                 )
+                self.shutdown()
         else:
             raise RuntimeError(
                 f"llama-server for '{self.model_config.name}' failed to start after "
@@ -238,7 +239,8 @@ class LlamaServerInfer(BaseInfer):
                 errors="replace",
             ),
         )
-        self._recent_log_lines.clear()
+        with self._log_lock:
+            self._recent_log_lines.clear()
         assert self._proc is not None
         assert self._proc.stdout is not None
         assert self._proc.stderr is not None
@@ -266,7 +268,8 @@ class LlamaServerInfer(BaseInfer):
             for raw_line in iter(stream.readline, ""):
                 line = raw_line.rstrip("\n")
                 logger.log(TRACE, "[%s:%s] %s", self.model_config.name, tag, line)
-                self._recent_log_lines.append(line)
+                with self._log_lock:
+                    self._recent_log_lines.append(line)
         except (ValueError, OSError):
             pass  # stream closed from the main thread while we were reading
         finally:
@@ -286,7 +289,8 @@ class LlamaServerInfer(BaseInfer):
             while True:
                 rc = self._proc.poll()
                 if rc is not None:
-                    tail = "\n".join(self._recent_log_lines)
+                    with self._log_lock:
+                        tail = "\n".join(self._recent_log_lines)
                     message = f"llama-server for '{self.model_config.name}' exited (rc={rc}) during startup: {tail}"
                     if time.monotonic() - spawned_at < _EARLY_CRASH_WINDOW_S:
                         raise _EarlyCrashError(message)
