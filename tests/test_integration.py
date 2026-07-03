@@ -729,6 +729,51 @@ class TestChatCapable:
         assert 0 < len(first.top_logprobs) <= 3
         assert all(isinstance(tl.token, str) and isinstance(tl.logprob, float) for tl in first.top_logprobs)
 
+    def test_streaming_n_greater_than_one_returns_independent_choices(self, client):
+        """Streaming counterpart of the n>1 test above — each choice needs its
+        own `Parser` instance (`engine_ops.stream_chat_completion`'s per-choice
+        `make_parsers` call), or every choice after the first corrupts onto a
+        shared stream state."""
+        stream = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "Say one random word."}],
+            max_tokens=10,
+            n=3,
+            stream=True,
+        )
+        content_by_index: dict[int, str] = {0: "", 1: "", 2: ""}
+        finish_reasons: dict[int, str | None] = {}
+        for chunk in stream:
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    content_by_index[choice.index] += choice.delta.content
+                if choice.finish_reason:
+                    finish_reasons[choice.index] = choice.finish_reason
+        assert set(finish_reasons) == {0, 1, 2}
+        assert all(content_by_index[i] for i in range(3))
+
+    def test_streaming_logprobs_returns_choice_logprobs(self, client):
+        """Streaming counterpart of the logprobs test above — logprobs must be
+        built per-delta from `RequestOutput.logprobs`, not just on the final
+        non-streamed response."""
+        stream = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "Say hello."}],
+            max_tokens=10,
+            logprobs=True,
+            top_logprobs=3,
+            stream=True,
+        )
+        seen_logprobs = []
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].logprobs and chunk.choices[0].logprobs.content:
+                seen_logprobs.extend(chunk.choices[0].logprobs.content)
+        assert seen_logprobs
+        first = seen_logprobs[0]
+        assert isinstance(first.token, str) and first.token
+        assert isinstance(first.logprob, float)
+        assert 0 < len(first.top_logprobs) <= 3
+
 
 @pytest.mark.integration
 @pytest.mark.vllm

@@ -1,13 +1,17 @@
-"""Unit tests for BaseInfer.run_cancellable, the generic non-stream disconnect guard.
+"""Unit tests for BaseInfer.run_cancellable / run_cancellable_stream, the
+generic disconnect guards.
 
 Non-streaming Ray Serve calls don't get a socket to watch (unlike streaming,
 where Starlette's own StreamingResponse races disconnect against the body
 iterator and cancellation propagates all the way down automatically).
 run_cancellable polls RawRequestProxy.is_disconnected() alongside an arbitrary
 coroutine and cancels whichever loses, calling the on_generation_aborted()
-hook so a loader can free engine-side resources. No GPU/Ray needed — both
-race participants are plain asyncio coroutines against a minimal BaseInfer
-subclass.
+hook so a loader can free engine-side resources. run_cancellable_stream does
+the same thing per-item for an async generator, so a loader can opt into
+explicit disconnect handling for streaming too instead of relying solely on
+the ASGI layer's own cancellation-on-disconnect. No GPU/Ray needed — both
+race participants are plain asyncio coroutines/generators against a minimal
+BaseInfer subclass.
 """
 
 import asyncio
@@ -115,4 +119,83 @@ async def test_disconnect_poll_interval_does_not_starve_fast_work():
     elapsed = asyncio.get_event_loop().time() - start
 
     assert result == 42
+    assert elapsed < _DISCONNECT_POLL_INTERVAL_S
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_items_without_aborting():
+    async def gen():
+        for i in range(3):
+            yield i
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)
+
+    items = [item async for item in infer.run_cancellable_stream(gen(), raw_request)]
+
+    assert items == [0, 1, 2]
+    assert infer.aborted is False
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_cancels_work_and_calls_abort_hook():
+    cancelled = asyncio.Event()
+
+    async def gen():
+        yield "first"
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        yield "unreachable"  # pragma: no cover - never reached
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=0.05)
+
+    received = []
+    with pytest.raises(ClientDisconnectedError):
+        async for item in infer.run_cancellable_stream(gen(), raw_request):
+            received.append(item)
+
+    assert received == ["first"]
+    assert cancelled.is_set()
+    assert infer.aborted is True
+
+
+@pytest.mark.asyncio
+async def test_stream_exception_propagates_without_aborting():
+    async def gen():
+        yield "first"
+        raise ValueError("boom")
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)
+
+    received = []
+    with pytest.raises(ValueError, match="boom"):
+        async for item in infer.run_cancellable_stream(gen(), raw_request):
+            received.append(item)
+
+    assert received == ["first"]
+    assert infer.aborted is False
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_poll_interval_does_not_starve_fast_stream():
+    """A slow poll interval must not delay a fast stream — each `__anext__()`
+    races `asyncio.wait` with FIRST_COMPLETED, not the poll loop."""
+
+    async def gen():
+        for i in range(5):
+            yield i
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)
+
+    start = asyncio.get_event_loop().time()
+    items = [item async for item in infer.run_cancellable_stream(gen(), raw_request)]
+    elapsed = asyncio.get_event_loop().time() - start
+
+    assert items == [0, 1, 2, 3, 4]
     assert elapsed < _DISCONNECT_POLL_INTERVAL_S

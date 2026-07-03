@@ -111,6 +111,41 @@ class BaseInfer(ABC):
         await self.on_generation_aborted()
         raise ClientDisconnectedError
 
+    async def run_cancellable_stream(
+        self, work: AsyncGenerator[T, None], raw_request: RawRequestProxy
+    ) -> AsyncGenerator[T, None]:
+        """Streaming counterpart of `run_cancellable`.
+
+        Races each pulled item against the same disconnect signal: cancelling
+        the in-flight `__anext__()` call delivers `CancelledError` straight into
+        `work`'s currently-suspended frame (and transitively into whatever it's
+        awaiting, e.g. an engine's own generator), the same way cancelling a
+        plain task does for `run_cancellable`. `aclose()` afterward is a defensive
+        no-op when the generator already self-terminated on that exception.
+        """
+        watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
+        try:
+            while True:
+                next_item = asyncio.ensure_future(work.__anext__())
+                done, _pending = await asyncio.wait({next_item, watch}, return_when=asyncio.FIRST_COMPLETED)
+                if next_item in done:
+                    try:
+                        item = next_item.result()
+                    except StopAsyncIteration:
+                        return
+                    yield item
+                    continue
+                next_item.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await next_item
+                await work.aclose()
+                await self.on_generation_aborted()
+                raise ClientDisconnectedError
+        finally:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+
     async def on_generation_aborted(self) -> None:
         """Hook for loaders whose engine needs cleanup beyond task cancellation
         when `run_cancellable` aborts a request on client disconnect. No-op by

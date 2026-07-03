@@ -1,4 +1,5 @@
 import io
+import json
 from collections.abc import AsyncGenerator
 from http import HTTPStatus
 from typing import Any, ClassVar, cast
@@ -51,7 +52,7 @@ from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer, ClientDisconnecte
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
 from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
-from modelship.logging import get_logger
+from modelship.logging import TRACE, get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.chat_utils import UnsupportedContentError, build_from_parsed, normalize_chat_messages
 from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
@@ -59,6 +60,7 @@ from modelship.openai.parsers.utils import render_generation_prompt
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompletionStreamResponse,
     EmbeddingCompletionRequest,
     EmbeddingRequest,
     ErrorResponse,
@@ -75,6 +77,14 @@ from modelship.preflight import discover_hardware, merge_with_user_overrides, ru
 from modelship.utils import base_request_id
 
 logger = get_logger("infer.vllm")
+
+
+def _encode_chunk(chunk: ChatCompletionStreamResponse) -> str:
+    return f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
+
+
+def _encode_error(error: ErrorResponse) -> str:
+    return f"data: {json.dumps(error.model_dump(mode='json'))}\n\n"
 
 
 def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
@@ -383,15 +393,70 @@ class VllmInfer(BaseInfer):
         vllm_request = engine_ops.build_vllm_request(request, self.model_config.chat_template_kwargs)
 
         if request.stream:
-            try:
-                result = await self.serving_chat.create_chat_completion(vllm_request, cast("Request", raw_request))
-            except VLLMValidationError as exc:
-                return _validation_error(exc)
-            if isinstance(result, VllmErrorResponse):
-                return ErrorResponse.model_validate(result.model_dump())
-            return cast("AsyncGenerator[str, None]", result)
+            return self._create_chat_completion_stream(request, vllm_request, raw_request)
 
         return await self._create_chat_completion_no_stream(request, vllm_request, raw_request)
+
+    async def _create_chat_completion_stream(
+        self,
+        request: ChatCompletionRequest,
+        vllm_request: VllmChatCompletionRequest,
+        raw_request: RawRequestProxy,
+    ) -> AsyncGenerator[str, None]:
+        """Streaming chat path via `engine_ops`, bypassing `OpenAIServingChat`."""
+        request_id = f"chatcmpl-{base_request_id(raw_request)}"
+        try:
+            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
+        except VLLMValidationError as exc:
+            yield _encode_error(_validation_error(exc))
+            yield "data: [DONE]\n\n"
+            return
+        if isinstance(render_result, VllmErrorResponse):
+            yield _encode_error(ErrorResponse.model_validate(render_result.model_dump()))
+            yield "data: [DONE]\n\n"
+            return
+        engine_input, sampling_params = render_result
+
+        tokenizer = self.openai_serving_render.renderer.tokenizer
+        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+
+        stream = engine_ops.stream_chat_completion(
+            self.engine,
+            self.openai_serving_render,
+            vllm_request,
+            engine_input,
+            sampling_params,
+            request_id,
+            self.model_config.name,
+            tokenizer,
+            enable_auto_tools=self._enable_auto_tools,
+            want_logprobs=bool(request.logprobs),
+            num_output_top_logprobs=request.top_logprobs,
+        )
+        buffered: list[str] = []
+        try:
+            async for chunk in self.run_cancellable_stream(stream, raw_request):
+                for choice in chunk.choices:
+                    if choice.delta.content:
+                        buffered.append(choice.delta.content)
+                yield _encode_chunk(chunk)
+        except ClientDisconnectedError:
+            logger.info("chat request %s aborted: client disconnected", request_id)
+            return
+        except VLLMValidationError as exc:
+            yield _encode_error(_validation_error(exc))
+            yield "data: [DONE]\n\n"
+            return
+        except Exception:
+            logger.exception("chat request %s failed mid-stream", request_id)
+            yield _encode_error(
+                create_error_response("Internal error during generation", err_type="api_error", status_code=500)
+            )
+            yield "data: [DONE]\n\n"
+            return
+        finally:
+            logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
+        yield "data: [DONE]\n\n"
 
     async def _create_chat_completion_no_stream(
         self,
