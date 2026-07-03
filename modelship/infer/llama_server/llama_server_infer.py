@@ -384,9 +384,12 @@ class LlamaServerInfer(BaseInfer):
             logger.warning("embedding request %s failed: %s", request_id, e)
             return create_error_response(f"llama-server request failed: {e}", status_code=502)
 
-        data = resp.json()
+        data = _parse_json_object(resp)
         logger.log(TRACE, "embedding response %s: %s", request_id, data)
-        if isinstance(data, dict) and "error" in data:
+        if data is None:
+            logger.warning("embedding request %s returned a malformed response: %s", request_id, resp.text)
+            return create_error_response("llama-server returned a malformed response", status_code=502)
+        if "error" in data:
             error_data = data["error"] or {}
             message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
             logger.warning("embedding request %s failed with inline error: %s", request_id, message)
@@ -433,9 +436,12 @@ class LlamaServerInfer(BaseInfer):
             logger.warning("chat request %s failed: %s", request_id, e)
             return create_error_response(f"llama-server request failed: {e}", status_code=502)
 
-        data = resp.json()
+        data = _parse_json_object(resp)
         logger.log(TRACE, "chat response %s: %s", request_id, data)
-        if isinstance(data, dict) and "error" in data:
+        if data is None:
+            logger.warning("chat request %s returned a malformed response: %s", request_id, resp.text)
+            return create_error_response("llama-server returned a malformed response", status_code=502)
+        if "error" in data:
             error_data = data["error"] or {}
             message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
             logger.warning("chat request %s failed with inline error: %s", request_id, message)
@@ -468,7 +474,10 @@ class LlamaServerInfer(BaseInfer):
                     except json.JSONDecodeError:
                         logger.warning("chat request %s: unparseable stream chunk: %r", request_id, data_str)
                         continue
-                    if isinstance(data, dict) and "error" in data:
+                    if not isinstance(data, dict):
+                        logger.warning("chat request %s: skipping non-object stream chunk: %r", request_id, data)
+                        continue
+                    if "error" in data:
                         error_data = data["error"] or {}
                         message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
                         logger.warning("chat request %s failed mid-stream with error: %s", request_id, message)
@@ -516,6 +525,15 @@ def _build_payload(request: ChatCompletionRequest, messages: list[dict], *, mode
             payload["top_logprobs"] = request.top_logprobs
 
     return payload
+
+
+def _parse_json_object(response: httpx.Response) -> dict | None:
+    """Parse a response body as JSON, returning None if it isn't a JSON object."""
+    try:
+        data = response.json()
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
