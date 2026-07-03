@@ -118,11 +118,14 @@ async def test_image_part_rejected_on_text_only_model_with_400():
 @pytest.mark.asyncio
 async def test_text_only_request_reaches_serving_chat_on_vlm():
     """Sanity check: a plain text request on a VLM is not blocked by the
-    gating layer."""
+    gating layer. Streaming, since non-stream no longer calls serving_chat
+    (see test_vllm_engine_ops.py / test_integration.py::TestChatCapable for
+    the engine_ops-based non-stream path)."""
     infer = _make_infer(supports_image=True)
     request = ChatCompletionRequest(
         model="qwen-vl",
         messages=[{"role": "user", "content": "hello"}],
+        stream=True,
     )
 
     await infer.create_chat_completion(request, raw_request=MagicMock())
@@ -133,10 +136,10 @@ async def test_text_only_request_reaches_serving_chat_on_vlm():
 @pytest.mark.asyncio
 async def test_model_chat_template_kwargs_merged_into_vllm_request():
     """The model's chat_template_kwargs default reaches the vLLM request that
-    serving_chat renders from."""
+    serving_chat renders from. Streaming — see test above for why."""
     infer = _make_infer(supports_image=False)
     infer.model_config.chat_template_kwargs = {"enable_thinking": False}
-    request = ChatCompletionRequest(model="llm", messages=[{"role": "user", "content": "hi"}])
+    request = ChatCompletionRequest(model="llm", messages=[{"role": "user", "content": "hi"}], stream=True)
 
     await infer.create_chat_completion(request, raw_request=MagicMock())
 

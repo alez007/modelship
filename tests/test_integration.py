@@ -693,6 +693,42 @@ class TestChatCapable:
         parsed = json.loads(content)
         assert set(parsed.keys()) == {"city", "country"}
 
+    def test_n_greater_than_one_returns_independent_choices(self, client):
+        """n>1 needs its own parser instance per choice (see
+        engine_ops.make_parsers) — a shared instance would corrupt state
+        across choices. Sampling is non-greedy by default so choices should
+        actually differ; this also guards against a regression that
+        silently collapses every choice onto the same output.
+        """
+        completion = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "Say one random word."}],
+            max_tokens=10,
+            n=3,
+        )
+        assert len(completion.choices) == 3
+        assert [c.index for c in completion.choices] == [0, 1, 2]
+        assert all(c.message.content for c in completion.choices)
+
+    def test_logprobs_returns_choice_logprobs(self, client):
+        """logprobs must be built from the engine's own RequestOutput.logprobs
+        (engine_ops.build_chat_logprobs), not silently dropped by the
+        non-stream rewire."""
+        completion = client.chat.completions.create(
+            model="chat-capable",
+            messages=[{"role": "user", "content": "Say hello."}],
+            max_tokens=10,
+            logprobs=True,
+            top_logprobs=3,
+        )
+        logprobs = completion.choices[0].logprobs
+        assert logprobs is not None and logprobs.content
+        first = logprobs.content[0]
+        assert isinstance(first.token, str) and first.token
+        assert isinstance(first.logprob, float)
+        assert 0 < len(first.top_logprobs) <= 3
+        assert all(isinstance(tl.token, str) and isinstance(tl.logprob, float) for tl in first.top_logprobs)
+
 
 @pytest.mark.integration
 @pytest.mark.vllm
