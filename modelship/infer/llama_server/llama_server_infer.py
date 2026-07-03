@@ -61,6 +61,12 @@ class _EarlyCrashError(RuntimeError):
     treated as a transient bind race and retried with a fresh port."""
 
 
+# asyncio only holds a weak reference to a task's coroutine, so a fire-and-forget
+# task with no other referent can be GC'd before it runs. Keep a strong reference
+# here for the lifetime of each client-close task, started from the (sync) shutdown().
+_pending_client_closes: set[asyncio.Task] = set()
+
+
 class LlamaServerInfer(BaseInfer):
     """Drives a `llama-server` subprocess over its native OpenAI-compatible
     HTTP API. Unlike `llama_cpp` (in-process `Llama` bindings + modelship's
@@ -102,7 +108,16 @@ class LlamaServerInfer(BaseInfer):
         for task in self._log_tasks:
             task.cancel()
         self._log_tasks = []
-        self._client = None
+        if self._client is not None:
+            client, self._client = self._client, None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass  # no running loop (e.g. interpreter teardown) — let GC reclaim the socket
+            else:
+                task = loop.create_task(client.aclose())
+                _pending_client_closes.add(task)
+                task.add_done_callback(_pending_client_closes.discard)
 
     def __del__(self):
         self.shutdown()

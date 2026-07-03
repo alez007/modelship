@@ -174,7 +174,7 @@ class LlamaServerConfig(BaseModel):
     n_gpu_layers: int = -1
     # Concurrent request slots. llama-server splits its total context (`-c`)
     # across slots, so the process is launched with `n_ctx * parallel`.
-    parallel: int = 1
+    parallel: int = Field(default=1, ge=1)
     # Built-in template name (e.g. "chatml") or a path to a Jinja file;
     # None lets llama-server use the GGUF's embedded chat template.
     chat_template: str | None = None
