@@ -448,7 +448,8 @@ class VllmInfer(BaseInfer):
             num_output_top_logprobs=request.top_logprobs,
         )
 
-        assert final_res.prompt_token_ids is not None
+        if final_res.prompt_token_ids is None:
+            return create_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
 
