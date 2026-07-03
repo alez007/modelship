@@ -237,7 +237,9 @@ def build_chat_logprobs(
     """
     content: list[ChatCompletionLogProbsContent] = []
     for i, token_id in enumerate(token_ids):
-        step_top_logprobs = top_logprobs[i]
+        # Defensive: token_ids and top_logprobs should be the same length, but
+        # guard against a mismatched pair rather than risk an IndexError.
+        step_top_logprobs = top_logprobs[i] if i < len(top_logprobs) else None
         chosen = step_top_logprobs.get(token_id) if step_top_logprobs else None
         if chosen is None:
             token = tokenizer.decode(token_id)
