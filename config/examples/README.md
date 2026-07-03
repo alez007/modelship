@@ -5,6 +5,7 @@ Ready-to-run `models.yaml` configs for common scenarios. Mount one into the cont
 | File | What it runs | Hardware |
 |---|---|---|
 | [llama-cpp.yaml](llama-cpp.yaml) | Quantized GGUF chat + embeddings | CPU (any arch) |
+| [llama-server.yaml](llama-server.yaml) | Quantized GGUF chat (concurrent), vision, embeddings via a llama-server subprocess | CPU or NVIDIA GPU |
 | [transformers-cpu.yaml](transformers-cpu.yaml) | Llama 3.2 1B + Nomic embed + Whisper + MMS-TTS | CPU |
 | [vllm.yaml](vllm.yaml) | High-throughput chat with tool calling, embeddings, Whisper | NVIDIA GPU |
 | [diffusers.yaml](diffusers.yaml) | SDXL Turbo image generation | NVIDIA GPU |
