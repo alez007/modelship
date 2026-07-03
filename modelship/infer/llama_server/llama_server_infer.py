@@ -645,10 +645,13 @@ def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResp
         completion_tokens=raw_usage.get("completion_tokens", 0) or 0,
         total_tokens=raw_usage.get("total_tokens", 0) or 0,
     )
+    created = data.get("created")
+    if created is None:
+        created = int(time.time())
     return EmbeddingResponse(
         id=data.get("id") or f"embd-{random_uuid()}",
         object=data.get("object", "list"),
-        created=data.get("created") or int(time.time()),
+        created=created,
         model=model_name,
         data=projected_data,
         usage=usage,
