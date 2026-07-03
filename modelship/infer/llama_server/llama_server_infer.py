@@ -165,26 +165,30 @@ class LlamaServerInfer(BaseInfer):
 
         logger.info("Starting llama-server for model: %s", self.model_config.name)
         last_error: Exception | None = None
-        for attempt in range(1, _LAUNCH_RETRY_LIMIT + 1):
-            try:
-                await self._launch(binary, model_path)
-                await self._wait_healthy()
-                break
-            except _EarlyCrashError as e:
-                last_error = e
-                logger.warning(
-                    "llama-server for '%s' exited immediately on attempt %d/%d (likely a port race); retrying: %s",
-                    self.model_config.name,
-                    attempt,
-                    _LAUNCH_RETRY_LIMIT,
-                    e,
+        try:
+            for attempt in range(1, _LAUNCH_RETRY_LIMIT + 1):
+                try:
+                    await self._launch(binary, model_path)
+                    await self._wait_healthy()
+                    break
+                except _EarlyCrashError as e:
+                    last_error = e
+                    logger.warning(
+                        "llama-server for '%s' exited immediately on attempt %d/%d (likely a port race); retrying: %s",
+                        self.model_config.name,
+                        attempt,
+                        _LAUNCH_RETRY_LIMIT,
+                        e,
+                    )
+                    self.shutdown()
+            else:
+                raise RuntimeError(
+                    f"llama-server for '{self.model_config.name}' failed to start after "
+                    f"{_LAUNCH_RETRY_LIMIT} attempts: {last_error}"
                 )
-                self.shutdown()
-        else:
-            raise RuntimeError(
-                f"llama-server for '{self.model_config.name}' failed to start after "
-                f"{_LAUNCH_RETRY_LIMIT} attempts: {last_error}"
-            )
+        except Exception:
+            self.shutdown()
+            raise
 
         assert self._port is not None
         self._client = httpx.AsyncClient(
