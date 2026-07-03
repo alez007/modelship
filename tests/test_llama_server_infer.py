@@ -314,3 +314,16 @@ class TestStreamingProjection:
         # in-band error — clients that wait for it rather than connection
         # close would otherwise hang.
         assert chunks[-1] == "data: [DONE]\n\n"
+
+    @pytest.mark.asyncio
+    async def test_stream_transport_error_yields_error_chunk(self):
+        # Simulates a dropped connection / crashed subprocess mid-stream: httpx
+        # raises TransportError rather than handing back a Response at all.
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadError("connection reset")
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(stream=True), RawRequestProxy(None, {}))
+        chunks = [chunk async for chunk in result]
+        assert any("connection reset" in c for c in chunks)
+        assert chunks[-1] == "data: [DONE]\n\n"

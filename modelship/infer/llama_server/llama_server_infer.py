@@ -153,7 +153,7 @@ class LlamaServerInfer(BaseInfer):
         self._set_max_context_length(self.config.n_ctx)
 
     async def _launch(self, binary: str, model_path: str) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         port = await loop.run_in_executor(None, _free_port)
         self._port = port
 
@@ -190,6 +190,7 @@ class LlamaServerInfer(BaseInfer):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            errors="replace",
         )
         self._recent_log_lines.clear()
         assert self._proc.stdout is not None
@@ -337,6 +338,10 @@ class LlamaServerInfer(BaseInfer):
                             buffered.append(choice.delta.content)
                     yield _encode_chunk(chunk)
                 yield "data: [DONE]\n\n"
+        except httpx.TransportError as e:
+            logger.warning("chat request %s failed mid-stream: %s", request_id, e)
+            yield _encode_error(f"llama-server request failed: {e}")
+            yield "data: [DONE]\n\n"
         finally:
             logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
 
