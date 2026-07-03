@@ -418,7 +418,7 @@ class LlamaServerInfer(BaseInfer):
         payload = _build_payload(request, messages, model_name=self.model_config.name)
 
         if request.stream:
-            return self._stream_chat_completion(payload, request_id)
+            return self._stream_chat_completion(payload, request_id, raw_request)
 
         try:
             return await self.run_cancellable(self._send_chat_completion(payload, request_id), raw_request)
@@ -453,7 +453,25 @@ class LlamaServerInfer(BaseInfer):
             return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
         return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
 
-    async def _stream_chat_completion(self, payload: dict[str, Any], request_id: str) -> AsyncGenerator[str, None]:
+    async def _stream_chat_completion(
+        self, payload: dict[str, Any], request_id: str, raw_request: RawRequestProxy
+    ) -> AsyncGenerator[str, None]:
+        """Race the llama-server SSE stream against the client's disconnect signal.
+
+        Ray Serve gives replicas no automatic disconnect propagation across the
+        process boundary, so without this a gone client would leave `_stream_chat_completion_body`
+        (and its `httpx` stream against llama-server) running to completion,
+        holding a `--parallel` slot until the response finishes on its own.
+        """
+        stream = self._stream_chat_completion_body(payload, request_id)
+        try:
+            async for chunk in self.run_cancellable_stream(stream, raw_request):
+                yield chunk
+        except ClientDisconnectedError:
+            logger.info("chat request %s aborted: client disconnected", request_id)
+            return
+
+    async def _stream_chat_completion_body(self, payload: dict[str, Any], request_id: str) -> AsyncGenerator[str, None]:
         assert self._client is not None
         buffered: list[str] = []
         try:
@@ -489,7 +507,7 @@ class LlamaServerInfer(BaseInfer):
                         yield _encode_error(message or "Unknown mid-stream error from llama-server")
                         yield "data: [DONE]\n\n"
                         return
-                    chunk = _project_stream_chunk(data, model_name=self.model_config.name)
+                    chunk = _project_stream_chunk(data, model_name=self.model_config.name, request_id=request_id)
                     for choice in chunk.choices:
                         if choice.delta.content:
                             buffered.append(choice.delta.content)
@@ -610,7 +628,7 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
     )
 
 
-def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStreamResponse:
+def _project_stream_chunk(data: dict, *, model_name: str, request_id: str) -> ChatCompletionStreamResponse:
     choices = []
     for choice in data.get("choices", []):
         delta = choice.get("delta") or {}
@@ -647,6 +665,7 @@ def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStrea
             )
         )
     return ChatCompletionStreamResponse(
+        id=data.get("id") or request_id,
         model=model_name,
         choices=choices,
         usage=_project_usage(data["usage"]) if data.get("usage") else None,
