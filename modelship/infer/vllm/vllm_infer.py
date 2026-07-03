@@ -12,7 +12,6 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
-from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
 from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse as VllmErrorResponse,
 )
@@ -217,7 +216,7 @@ class VllmInfer(BaseInfer):
         self._caps = VllmCapabilities.detect(self.vllm_config.model_config)
         logger.info("vllm capabilities for '%s': %s", self.model_config.name, self._caps)
 
-        self.serving_chat = await self.init_serving_chat()
+        await self.init_serving_chat()
         self.serving_embedding = await self.init_serving_embeding()
         self.serving_transcription = await self.init_serving_transcription()
         self.serving_translation = await self.init_serving_translation()
@@ -226,7 +225,7 @@ class VllmInfer(BaseInfer):
         logger.info("Warming up vllm model: %s", self.model_config.name)
         dummy_proxy = RawRequestProxy(None, {})
 
-        if self.serving_chat is not None:
+        if hasattr(self, "openai_serving_render"):
             request = ChatCompletionRequest(
                 model=self.model_config.name, messages=[{"role": "user", "content": "warmup"}], max_tokens=1, seed=-1
             )
@@ -266,10 +265,13 @@ class VllmInfer(BaseInfer):
                     pass
             logger.info("Warmup translation done for %s", self.model_config.name)
 
-    async def init_serving_chat(self) -> OpenAIServingChat | None:
+    async def init_serving_chat(self) -> None:
+        """Sets up the render/parse pipeline `create_chat_completion` drives directly
+        (see engine_ops), if the model supports it. Leaves `openai_serving_render`
+        unset otherwise — callers gate on `hasattr(self, "openai_serving_render")`."""
         logger.info("init_serving_chat: %s, %s", self.supported_tasks, self.model_config.usecase)
         if not (self.model_config.usecase is ModelUsecase.generate and "generate" in self.supported_tasks):
-            return None
+            return
 
         models = OpenAIServingModels(
             engine_client=self.engine,
@@ -293,26 +295,11 @@ class VllmInfer(BaseInfer):
             or ""
         )
 
-        # Stashed for the non-stream path (engine_ops pipeline), which renders
-        # and parses directly rather than going through OpenAIServingChat.
         self._enable_auto_tools = enable_tools
         self.openai_serving_render = OpenAIServingRender(
             model_config=self.engine.model_config,
             renderer=self.engine.renderer,
             model_registry=models.registry,
-            request_logger=RequestLogger(max_log_len=None),
-            chat_template=None,
-            chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
-            enable_auto_tools=enable_tools,
-            tool_parser=tool_parser_name,
-            reasoning_parser=reasoning_parser_name,
-        )
-
-        return OpenAIServingChat(
-            engine_client=self.engine,
-            models=models,
-            openai_serving_render=self.openai_serving_render,
-            response_role="assistant",
             request_logger=RequestLogger(max_log_len=None),
             chat_template=None,
             chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
@@ -380,7 +367,7 @@ class VllmInfer(BaseInfer):
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
-        if self.serving_chat is None:
+        if not hasattr(self, "openai_serving_render"):
             return await super().create_chat_completion(request, raw_request)
         try:
             request.messages = normalize_chat_messages(

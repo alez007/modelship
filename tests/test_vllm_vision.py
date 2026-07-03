@@ -5,8 +5,8 @@ modelship ``ChatCompletionRequest`` -> ``model_dump()`` -> ``VllmChatCompletionR
 (vLLM's own pydantic model). If image parts survive that, vLLM's downstream
 multimodal preprocessing runs against the same shape it does in upstream
 deployments. Wrapper-level concerns (normalize_chat_messages gating) are
-tested via :class:`VllmInfer.create_chat_completion` with serving_chat stubbed
-out — the goal there is the 400-rejection path, not the inference call.
+tested via :class:`VllmInfer.create_chat_completion` with the streaming path
+stubbed out — the goal there is the 400-rejection path, not the inference call.
 """
 
 from unittest.mock import MagicMock
@@ -83,7 +83,7 @@ def _make_infer(*, supports_image: bool) -> VllmInfer:
     infer = VllmInfer.__new__(VllmInfer)
     infer._caps = VllmCapabilities(supports_image=supports_image)  # type: ignore[attr-defined]
     infer.model_config = MagicMock(chat_template_kwargs={})
-    infer.serving_chat = MagicMock()
+    infer.openai_serving_render = MagicMock()
     infer._create_chat_completion_stream = MagicMock(return_value=MagicMock())
     return infer
 
