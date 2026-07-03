@@ -157,6 +157,13 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
         cfg._resolved_path = resolve_model_source(cfg.model, trust_remote_code=trust_remote_code)
         logger.info("Resolved '%s' -> %s", cfg.name, cfg._resolved_path)
 
+        if cfg.loader == ModelLoader.llama_server and cfg.llama_server_config and cfg.llama_server_config.mmproj:
+            logger.info("Resolving mmproj source for '%s': %s", cfg.name, cfg.llama_server_config.mmproj)
+            cfg.llama_server_config.mmproj = resolve_model_source(
+                cfg.llama_server_config.mmproj, trust_remote_code=trust_remote_code
+            )
+            logger.info("Resolved mmproj -> %s", cfg.llama_server_config.mmproj)
+
         # GGUF is not supported on the vllm loader: vLLM 0.24 moved GGUF out of
         # tree, and the only external plugin is incompatible with 0.24's
         # quantization API. Reject early with a pointer to llama_cpp instead of

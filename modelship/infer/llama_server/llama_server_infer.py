@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from modelship.infer.base_infer import BaseInfer
-from modelship.infer.infer_config import LlamaServerConfig, ModelshipModelConfig, RawRequestProxy
+from modelship.infer.infer_config import LlamaServerConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
 from modelship.logging import TRACE, get_logger
 from modelship.openai.chat_utils import (
     ParsedChatOutput,
@@ -23,6 +23,7 @@ from modelship.openai.chat_utils import (
     normalize_chat_messages,
 )
 from modelship.openai.protocol import (
+    ChatCompletionLogProbs,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseStreamChoice,
@@ -30,6 +31,9 @@ from modelship.openai.protocol import (
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingResponseData,
     ErrorResponse,
     FunctionCall,
     ToolCall,
@@ -225,6 +229,18 @@ class LlamaServerInfer(BaseInfer):
         if self.config.chat_template:
             flag = "--chat-template-file" if os.path.isfile(self.config.chat_template) else "--chat-template"
             args += [flag, self.config.chat_template]
+        if self.config.mmproj:
+            from modelship.infer.model_resolver import resolve_model_source
+
+            mmproj_ref = self.config.mmproj
+            try:
+                mmproj_path = await loop.run_in_executor(None, lambda: resolve_model_source(mmproj_ref))
+            except Exception as e:
+                logger.warning("Failed to resolve mmproj %r, using as is: %s", mmproj_ref, e)
+                mmproj_path = mmproj_ref
+            args += ["--mmproj", mmproj_path]
+        if self.model_config.usecase == ModelUsecase.embed:
+            args += ["--embedding"]
         args += list(self.config.extra_args)
 
         logger.info("llama-server launch args for '%s': %s", self.model_config.name, _redact(args))
@@ -312,6 +328,19 @@ class LlamaServerInfer(BaseInfer):
                 await asyncio.sleep(_HEALTH_POLL_INTERVAL_S)
 
     async def warmup(self) -> None:
+        if self.model_config.usecase == ModelUsecase.embed:
+            logger.info("Warming up llama-server embedding model: %s", self.model_config.name)
+            request = EmbeddingRequest(
+                model=self.model_config.name,
+                input="warmup",
+            )
+            result = await self.create_embedding(request, RawRequestProxy(None, {}))
+            if isinstance(result, ErrorResponse):
+                logger.warning("warmup embedding failed for '%s': %s", self.model_config.name, result.error.message)
+            else:
+                logger.info("warmup embedding done for %s", self.model_config.name)
+            return
+
         logger.info("Warming up llama-server chat model: %s", self.model_config.name)
         request = ChatCompletionRequest(
             model=self.model_config.name,
@@ -323,6 +352,33 @@ class LlamaServerInfer(BaseInfer):
             logger.warning("warmup chat failed for '%s': %s", self.model_config.name, result.error.message)
         else:
             logger.info("warmup chat done for %s", self.model_config.name)
+
+    async def create_embedding(
+        self, request: EmbeddingRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | EmbeddingResponse:
+        if self._client is None:
+            return await super().create_embedding(request, raw_request)
+
+        request_id = f"embd-{base_request_id(raw_request)}"
+        logger.info("embedding request %s", request_id)
+
+        payload = request.model_dump(exclude_none=True, exclude={"model"})
+        payload["model"] = self.model_config.name
+
+        try:
+            resp = await self._client.post("/v1/embeddings", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            detail = _extract_error_detail(e.response)
+            logger.warning("embedding request %s failed: %s", request_id, detail)
+            return create_error_response(detail, status_code=e.response.status_code)
+        except httpx.HTTPError as e:
+            logger.warning("embedding request %s failed: %s", request_id, e)
+            return create_error_response(f"llama-server request failed: {e}", status_code=502)
+
+        data = resp.json()
+        logger.log(TRACE, "embedding response %s: %s", request_id, data)
+        return _project_embedding_response(data, model_name=self.model_config.name)
 
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
@@ -341,8 +397,9 @@ class LlamaServerInfer(BaseInfer):
             request.tool_choice,
         )
 
+        supports_image = bool(self.config.mmproj)
         try:
-            messages = normalize_chat_messages(request.messages, supports_image=False, supports_audio=False)
+            messages = normalize_chat_messages(request.messages, supports_image=supports_image, supports_audio=False)
         except UnsupportedContentError as e:
             logger.warning("chat request %s rejected: %s", request_id, e)
             return create_error_response(e)
@@ -422,13 +479,17 @@ def _redact(args: list[str]) -> list[str]:
 
 
 def _build_payload(request: ChatCompletionRequest, messages: list[dict], *, model_name: str) -> dict[str, Any]:
-    # logprobs/top_logprobs aren't wired into the response projection yet (B3
-    # adds that). ChatCompletionRequest defaults top_logprobs to 0 (not None),
-    # so exclude_none alone would still forward it — and llama-server rejects
-    # top_logprobs being present at all unless logprobs=true, even at 0.
-    payload = request.model_dump(exclude_none=True, exclude={"messages", "model", "logprobs", "top_logprobs"})
+    # If request.logprobs is True, we want to forward logprobs and top_logprobs (if > 0) to llama-server.
+    exclude_fields = {"messages", "model", "logprobs", "top_logprobs"}
+    payload = request.model_dump(exclude_none=True, exclude=exclude_fields)
     payload["messages"] = messages
     payload["model"] = model_name
+
+    if request.logprobs:
+        payload["logprobs"] = True
+        if request.top_logprobs is not None and request.top_logprobs > 0:
+            payload["top_logprobs"] = request.top_logprobs
+
     return payload
 
 
@@ -471,6 +532,7 @@ def _project_usage(raw_usage: dict | None) -> UsageInfo:
 def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> ChatCompletionResponse:
     choices = []
     finish_reasons = []
+    logprobs_list = []
     for choice in data.get("choices", []):
         message = choice.get("message") or {}
         dto = ParsedChatOutput(
@@ -481,6 +543,14 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
         choices.append(dto)
         finish_reasons.append(choice.get("finish_reason") or "stop")
 
+        choice_logprobs = None
+        if choice.get("logprobs") is not None:
+            try:
+                choice_logprobs = ChatCompletionLogProbs.model_validate(choice.get("logprobs"))
+            except Exception as e:
+                logger.warning("Failed to validate choice logprobs: %s", e)
+        logprobs_list.append(choice_logprobs)
+
     return build_from_parsed(
         request_id=data.get("id") or request_id,
         model_name=model_name,
@@ -488,6 +558,7 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
         usage=_project_usage(data.get("usage")),
         finish_reasons=finish_reasons,
         created=data.get("created"),
+        logprobs=logprobs_list,
     )
 
 
@@ -506,6 +577,14 @@ def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStrea
                     function=DeltaFunctionCall(name=function.get("name"), arguments=function.get("arguments")),
                 )
             )
+
+        choice_logprobs = None
+        if choice.get("logprobs") is not None:
+            try:
+                choice_logprobs = ChatCompletionLogProbs.model_validate(choice.get("logprobs"))
+            except Exception as e:
+                logger.warning("Failed to validate stream choice logprobs: %s", e)
+
         choices.append(
             ChatCompletionResponseStreamChoice(
                 index=choice.get("index", 0),
@@ -515,6 +594,7 @@ def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStrea
                     reasoning=delta.get("reasoning_content"),
                     tool_calls=tool_calls or None,
                 ),
+                logprobs=choice_logprobs,
                 finish_reason=choice.get("finish_reason"),
             )
         )
@@ -522,6 +602,31 @@ def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStrea
         model=model_name,
         choices=choices,
         usage=_project_usage(data["usage"]) if data.get("usage") else None,
+    )
+
+
+def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResponse:
+    raw_data_list = data.get("data", [])
+    projected_data = []
+    for item in raw_data_list:
+        projected_data.append(
+            EmbeddingResponseData(
+                index=item.get("index", 0), embedding=item.get("embedding", []), object=item.get("object", "embedding")
+            )
+        )
+    raw_usage = data.get("usage") or {}
+    usage = UsageInfo(
+        prompt_tokens=raw_usage.get("prompt_tokens", 0) or 0,
+        completion_tokens=raw_usage.get("completion_tokens", 0) or 0,
+        total_tokens=raw_usage.get("total_tokens", 0) or 0,
+    )
+    return EmbeddingResponse(
+        id=data.get("id") or f"embd-{random_uuid()}",
+        object=data.get("object", "list"),
+        created=data.get("created") or int(time.time()),
+        model=model_name,
+        data=projected_data,
+        usage=usage,
     )
 
 

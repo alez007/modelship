@@ -425,6 +425,8 @@ models:
         capacity: 4GiB
 ```
 
+> **Note for the `llama_server` loader:** The `llama_server` loader does not support the explicit `cache` configuration block. It manages request-level prefix caching internally and automatically within its thread slots (analogous to standard in-memory caching), but does not support modelship's persistent on-disk prompt cache (`type: disk`) or explicit capacity configuration.
+
 #### Tool calling (`tool_choice`)
 
 Tool-call behavior is driven entirely by the per-request OpenAI `tool_choice` parameter — there is no deploy-level flag. Sending a `tools` array is the opt-in.

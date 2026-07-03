@@ -21,7 +21,7 @@ from modelship.infer.infer_config import (
     RawRequestProxy,
 )
 from modelship.infer.llama_server.llama_server_infer import LlamaServerInfer
-from modelship.openai.protocol import ChatCompletionRequest, ErrorResponse
+from modelship.openai.protocol import ChatCompletionRequest, EmbeddingRequest, EmbeddingResponse, ErrorResponse
 
 # ---------------------------------------------------------------------------
 # Fake llama-server executables (plain scripts; no real binary needed in CI)
@@ -396,3 +396,184 @@ class TestStreamingProjection:
         chunks = [chunk async for chunk in result]
         assert any("connection reset" in c for c in chunks)
         assert chunks[-1] == "data: [DONE]\n\n"
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_embedding_support(self, tmp_path, monkeypatch):
+        # Verify launch args has --embedding when usecase: embed
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        model_config = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.embed,
+            loader=ModelLoader.llama_server,
+        )
+        model_config._resolved_path = "/fake/model.gguf"
+
+        infer = LlamaServerInfer(model_config)
+        await infer.start()
+        try:
+            args = list(infer._proc.args)
+            assert "--embedding" in args
+        finally:
+            infer.shutdown()
+
+        # Verify create_embedding with projected embedding response
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/embeddings"
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "index": 0,
+                            "embedding": [0.1, 0.2, 0.3],
+                        }
+                    ],
+                    "model": "test-model",
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 0,
+                        "total_tokens": 5,
+                    },
+                    "timings": "secret",  # extension field to be stripped
+                },
+            )
+
+        infer_client = LlamaServerInfer(model_config)
+        infer_client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://test")
+
+        req = EmbeddingRequest(model="test-model", input="hello")
+        res = await infer_client.create_embedding(req, RawRequestProxy(None, {}))
+        assert isinstance(res, EmbeddingResponse)
+        assert res.data[0].embedding == [0.1, 0.2, 0.3]
+        # Extra field is not projected
+        assert "timings" not in res.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_vision_support(self, tmp_path, monkeypatch):
+        # Verify launch args has --mmproj when configured
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        model_config = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+            llama_server_config=LlamaServerConfig(mmproj="foo/mmproj.gguf"),
+        )
+        model_config._resolved_path = "/fake/model.gguf"
+
+        infer = LlamaServerInfer(model_config)
+
+        with patch("modelship.infer.model_resolver.resolve_model_source", return_value="/resolved/mmproj.gguf"):
+            await infer.start()
+            try:
+                args = list(infer._proc.args)
+                assert "--mmproj" in args
+                assert "/resolved/mmproj.gguf" in args
+            finally:
+                infer.shutdown()
+
+        # Verify gateway rejection is skipped when mmproj is configured
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"choices": [{"index": 0, "message": {"role": "assistant", "content": "I see an image"}}]},
+            )
+
+        infer_client = LlamaServerInfer(model_config)
+        infer_client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://test")
+
+        req = ChatCompletionRequest(
+            model="test-model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                    ],
+                }
+            ],
+        )
+        res = await infer_client.create_chat_completion(req, RawRequestProxy(None, {}))
+        assert not isinstance(res, ErrorResponse)
+        assert res.choices[0].message.content == "I see an image"
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_concurrency_coupling(self):
+        # Verify max_ongoing_requests is set to parallel by default when unset
+        model_config = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+            llama_server_config=LlamaServerConfig(parallel=4),
+        )
+        from modelship.deploy.actor_options import build_deployment_options
+
+        opts = build_deployment_options(model_config)
+        assert opts["max_ongoing_requests"] == 4
+
+        # When explicitly configured, it should keep the explicit value
+        model_config.max_ongoing_requests = 10
+        opts = build_deployment_options(model_config)
+        assert opts["max_ongoing_requests"] == 10
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_logprobs_support(self):
+        # Verify logprobs in non-streaming response
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            payload = json.loads(request.read())
+            assert payload.get("logprobs") is True
+            assert payload.get("top_logprobs") == 2
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"content": "hello"},
+                            "logprobs": {
+                                "content": [
+                                    {
+                                        "token": "hello",
+                                        "logprob": -0.1,
+                                        "top_logprobs": [
+                                            {"token": "hello", "logprob": -0.1},
+                                            {"token": "hi", "logprob": -1.5},
+                                        ],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+            )
+
+        model_config = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+        )
+        infer_client = LlamaServerInfer(model_config)
+        infer_client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://test")
+
+        req = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            logprobs=True,
+            top_logprobs=2,
+        )
+        res = await infer_client.create_chat_completion(req, RawRequestProxy(None, {}))
+        assert not isinstance(res, ErrorResponse)
+        assert res.choices[0].logprobs is not None
+        assert res.choices[0].logprobs.content[0].token == "hello"
+        assert res.choices[0].logprobs.content[0].top_logprobs[1].token == "hi"

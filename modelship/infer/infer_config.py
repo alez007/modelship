@@ -180,6 +180,8 @@ class LlamaServerConfig(BaseModel):
     # Built-in template name (e.g. "chatml") or a path to a Jinja file;
     # None lets llama-server use the GGUF's embedded chat template.
     chat_template: str | None = None
+    # Path to the multimodal projector file (e.g. clip-model-f16.gguf)
+    mmproj: str | None = None
     # Escape hatch for launch flags not otherwise surfaced, appended verbatim.
     extra_args: list[str] = Field(default_factory=list)
 
