@@ -5,6 +5,7 @@ import os
 import secrets
 import socket
 import subprocess
+import threading
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -94,20 +95,38 @@ class LlamaServerInfer(BaseInfer):
         self._api_key: str = secrets.token_hex(32)
         self._client: httpx.AsyncClient | None = None
         self._recent_log_lines: deque[str] = deque(maxlen=_RECENT_LOG_LINES)
-        self._log_tasks: list[asyncio.Future] = []
+        self._log_threads: list[threading.Thread] = []
 
     def shutdown(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
-            logger.info("Shutting down llama-server for %s", self.model_config.name)
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
+        if self._proc is not None:
+            if self._proc.poll() is None:
+                logger.info("Shutting down llama-server for %s", self.model_config.name)
+                self._proc.terminate()
+
+                proc = self._proc
+
+                def _wait_and_kill():
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                    except Exception:
+                        pass
+
+                thread = threading.Thread(target=_wait_and_kill, daemon=True)
+                thread.start()
+
+            # Close pipes to immediately unblock and terminate log-draining threads
+            if self._proc.stdout is not None:
+                with contextlib.suppress(Exception):
+                    self._proc.stdout.close()
+            if self._proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    self._proc.stderr.close()
+
         self._proc = None
-        for task in self._log_tasks:
-            task.cancel()
-        self._log_tasks = []
+        self._log_threads = []
         if self._client is not None:
             client, self._client = self._client, None
             try:
@@ -205,21 +224,34 @@ class LlamaServerInfer(BaseInfer):
         args += list(self.config.extra_args)
 
         logger.info("llama-server launch args for '%s': %s", self.model_config.name, _redact(args))
-        self._proc = subprocess.Popen(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            errors="replace",
+        self._proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                errors="replace",
+            ),
         )
         self._recent_log_lines.clear()
         assert self._proc.stdout is not None
         assert self._proc.stderr is not None
-        self._log_tasks = [
-            loop.run_in_executor(None, self._drain_stream, self._proc.stdout, "stdout"),
-            loop.run_in_executor(None, self._drain_stream, self._proc.stderr, "stderr"),
-        ]
+
+        thread_stdout = threading.Thread(
+            target=self._drain_stream,
+            args=(self._proc.stdout, "stdout"),
+            daemon=True,
+        )
+        thread_stderr = threading.Thread(
+            target=self._drain_stream,
+            args=(self._proc.stderr, "stderr"),
+            daemon=True,
+        )
+        thread_stdout.start()
+        thread_stderr.start()
+        self._log_threads = [thread_stdout, thread_stderr]
 
     def _drain_stream(self, stream: Any, tag: str) -> None:
         """Consume a pipe to TRACE-level logs so the child never blocks on a
@@ -231,7 +263,7 @@ class LlamaServerInfer(BaseInfer):
                 line = raw_line.rstrip("\n")
                 logger.log(TRACE, "[%s:%s] %s", self.model_config.name, tag, line)
                 self._recent_log_lines.append(line)
-        except ValueError:
+        except (ValueError, OSError):
             pass  # stream closed from the main thread while we were reading
         finally:
             with contextlib.suppress(Exception):
@@ -267,7 +299,7 @@ class LlamaServerInfer(BaseInfer):
                     if resp.status_code == 200:
                         logger.info("llama-server healthy for '%s' on port %d", self.model_config.name, self._port)
                         return
-                except httpx.TransportError:
+                except httpx.HTTPError:
                     pass
                 await asyncio.sleep(_HEALTH_POLL_INTERVAL_S)
 
@@ -319,7 +351,7 @@ class LlamaServerInfer(BaseInfer):
             detail = _extract_error_detail(e.response)
             logger.warning("chat request %s failed: %s", request_id, detail)
             return create_error_response(detail, status_code=e.response.status_code)
-        except httpx.TransportError as e:
+        except httpx.HTTPError as e:
             logger.warning("chat request %s failed: %s", request_id, e)
             return create_error_response(f"llama-server request failed: {e}", status_code=502)
 
@@ -359,7 +391,7 @@ class LlamaServerInfer(BaseInfer):
                             buffered.append(choice.delta.content)
                     yield _encode_chunk(chunk)
                 yield "data: [DONE]\n\n"
-        except httpx.TransportError as e:
+        except httpx.HTTPError as e:
             logger.warning("chat request %s failed mid-stream: %s", request_id, e)
             yield _encode_error(f"llama-server request failed: {e}")
             yield "data: [DONE]\n\n"
@@ -473,7 +505,7 @@ def _project_stream_chunk(data: dict, *, model_name: str) -> ChatCompletionStrea
                     role=delta.get("role"),
                     content=delta.get("content"),
                     reasoning=delta.get("reasoning_content"),
-                    tool_calls=tool_calls,
+                    tool_calls=tool_calls or None,
                 ),
                 finish_reason=choice.get("finish_reason"),
             )

@@ -4,6 +4,7 @@ no real llama-server binary in CI) and HTTP request/response projection
 
 from __future__ import annotations
 
+import contextlib
 import stat
 import sys
 import textwrap
@@ -148,6 +149,50 @@ class TestSubprocessLifecycle:
             pytest.raises(RuntimeError, match="failed to start after"),
         ):
             await infer.start()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_is_non_blocking_and_kills_on_timeout(self, tmp_path, monkeypatch):
+        import subprocess
+        import threading
+        import time
+
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        infer = LlamaServerInfer(_make_config())
+        await infer.start()
+
+        proc = infer._proc
+        assert proc is not None
+
+        original_kill = proc.kill
+
+        wait_called = threading.Event()
+        kill_called = threading.Event()
+
+        def mocked_wait(timeout=None):
+            wait_called.set()
+            raise subprocess.TimeoutExpired(cmd=proc.args, timeout=timeout)
+
+        def mocked_kill():
+            with contextlib.suppress(Exception):
+                original_kill()
+            kill_called.set()
+
+        proc.wait = mocked_wait
+        proc.kill = mocked_kill
+
+        start_time = time.monotonic()
+        infer.shutdown()
+        end_time = time.monotonic()
+
+        # Verify that shutdown returned immediately (did not block for the timeout)
+        assert end_time - start_time < 0.5
+        assert infer._proc is None
+
+        # Wait for the background thread to finish and call wait and kill
+        assert wait_called.wait(timeout=2.0)
+        assert kill_called.wait(timeout=2.0)
 
 
 # ---------------------------------------------------------------------------
