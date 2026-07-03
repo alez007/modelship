@@ -237,8 +237,8 @@ def build_from_parsed(
     response_choices = []
     for idx, parsed in enumerate(choices):
         # Determine finish reason for this choice
-        if isinstance(finish_reasons, list):
-            fr = finish_reasons[idx] if idx < len(finish_reasons) else "stop"
+        if isinstance(finish_reasons, list) and idx < len(finish_reasons):
+            fr = finish_reasons[idx]
         elif isinstance(finish_reasons, str):
             fr = finish_reasons
         else:
