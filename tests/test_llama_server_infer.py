@@ -622,3 +622,24 @@ class TestStreamingProjection:
         res_embed = await infer_client_embed.create_embedding(req, RawRequestProxy(None, {}))
         assert isinstance(res_embed, ErrorResponse)
         assert res_embed.error.message == "inline embedding error detail"
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_mid_stream_json_errors_handled(self):
+        # Verify mid-stream JSON error terminates stream and yields error
+        sse_body = (
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+            'data: {"error": {"message": "inline mid-stream error detail"}}\n\n'
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(stream=True), RawRequestProxy(None, {}))
+
+        chunks = [chunk async for chunk in result]
+        # First 2 are normal choices, then the error chunk, then [DONE]
+        assert len(chunks) == 4
+        assert "inline mid-stream error detail" in chunks[2]
+        assert chunks[-1] == "data: [DONE]\n\n"

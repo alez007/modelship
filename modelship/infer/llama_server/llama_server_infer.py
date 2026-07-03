@@ -464,6 +464,13 @@ class LlamaServerInfer(BaseInfer):
                     except json.JSONDecodeError:
                         logger.warning("chat request %s: unparseable stream chunk: %r", request_id, data_str)
                         continue
+                    if isinstance(data, dict) and "error" in data:
+                        error_data = data["error"] or {}
+                        message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
+                        logger.warning("chat request %s failed mid-stream with error: %s", request_id, message)
+                        yield _encode_error(message or "Unknown mid-stream error from llama-server")
+                        yield "data: [DONE]\n\n"
+                        return
                     chunk = _project_stream_chunk(data, model_name=self.model_config.name)
                     for choice in chunk.choices:
                         if choice.delta.content:
