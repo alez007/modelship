@@ -16,14 +16,17 @@ import httpx
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import LlamaServerConfig, ModelshipModelConfig, RawRequestProxy
 from modelship.logging import TRACE, get_logger
-from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.chat_utils import (
+    ParsedChatOutput,
+    UnsupportedContentError,
+    build_from_parsed,
+    normalize_chat_messages,
+)
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ChatCompletionResponseChoice,
     ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse,
-    ChatMessage,
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
@@ -358,7 +361,7 @@ class LlamaServerInfer(BaseInfer):
 
         data = resp.json()
         logger.log(TRACE, "chat response %s: %s", request_id, data)
-        return _project_chat_response(data, model_name=self.model_config.name)
+        return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
 
     async def _stream_chat_completion(self, payload: dict[str, Any], request_id: str) -> AsyncGenerator[str, None]:
         assert self._client is not None
@@ -461,26 +464,26 @@ def _project_usage(raw_usage: dict | None) -> UsageInfo:
     )
 
 
-def _project_chat_response(data: dict, *, model_name: str) -> ChatCompletionResponse:
+def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> ChatCompletionResponse:
     choices = []
+    finish_reasons = []
     for choice in data.get("choices", []):
         message = choice.get("message") or {}
-        choices.append(
-            ChatCompletionResponseChoice(
-                index=choice.get("index", 0),
-                message=ChatMessage(
-                    role=message.get("role", "assistant"),
-                    content=message.get("content"),
-                    reasoning=message.get("reasoning_content"),
-                    tool_calls=_project_tool_calls(message.get("tool_calls")),
-                ),
-                finish_reason=choice.get("finish_reason") or "stop",
-            )
+        dto = ParsedChatOutput(
+            content=message.get("content"),
+            reasoning=message.get("reasoning_content"),
+            tool_calls=_project_tool_calls(message.get("tool_calls")),
         )
-    return ChatCompletionResponse(
-        model=model_name,
+        choices.append(dto)
+        finish_reasons.append(choice.get("finish_reason") or "stop")
+
+    return build_from_parsed(
+        request_id=data.get("id") or request_id,
+        model_name=model_name,
         choices=choices,
         usage=_project_usage(data.get("usage")),
+        finish_reasons=finish_reasons,
+        created=data.get("created"),
     )
 
 

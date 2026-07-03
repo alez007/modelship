@@ -1,8 +1,17 @@
 """Validation and normalization helpers for OpenAI chat-completion messages."""
 
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from modelship.logging import get_logger
+from modelship.openai.protocol import (
+    ChatCompletionResponse,
+    ChatCompletionResponseChoice,
+    ChatMessage,
+    ToolCall,
+    UsageInfo,
+)
 
 logger = get_logger("openai.chat_utils")
 
@@ -190,3 +199,74 @@ def _validate_part(
         return part
 
     raise UnsupportedContentError(f"messages[{msg_idx}].content: unsupported content part type {ptype!r}")
+
+
+@dataclass(frozen=True)
+class ParsedChatOutput:
+    """Aggregate result of parsing a model's full chat-completion text.
+
+    This is a loader-agnostic 3-field DTO representing the parsed output.
+    """
+
+    content: str | None
+    reasoning: str | None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+
+def build_from_parsed(
+    *,
+    request_id: str,
+    model_name: str,
+    choices: list[ParsedChatOutput],
+    usage: UsageInfo,
+    finish_reasons: list[str | None] | str | None = None,
+    created: int | None = None,
+    logprobs: list[Any] | None = None,
+) -> ChatCompletionResponse:
+    """Build a ChatCompletionResponse from parsed choice DTOs.
+
+    Allows multi-choice responses from day one.
+    """
+    if created is None:
+        created = int(time.time())
+
+    response_choices = []
+    for idx, parsed in enumerate(choices):
+        # Determine finish reason for this choice
+        if isinstance(finish_reasons, list):
+            fr = finish_reasons[idx] if idx < len(finish_reasons) else "stop"
+        elif isinstance(finish_reasons, str):
+            fr = finish_reasons
+        else:
+            # Fallback derivation logic similar to finish_reason_for
+            fr = "tool_calls" if parsed.has_tool_calls else "stop"
+
+        choice_logprobs = None
+        if logprobs is not None and idx < len(logprobs):
+            choice_logprobs = logprobs[idx]
+
+        response_choices.append(
+            ChatCompletionResponseChoice(
+                index=idx,
+                message=ChatMessage(
+                    role="assistant",
+                    content=parsed.content,
+                    reasoning=parsed.reasoning,
+                    tool_calls=parsed.tool_calls,
+                ),
+                logprobs=choice_logprobs,
+                finish_reason=fr,
+            )
+        )
+
+    return ChatCompletionResponse(
+        id=request_id,
+        model=model_name,
+        choices=response_choices,
+        usage=usage,
+        created=created,
+    )
