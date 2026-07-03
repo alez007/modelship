@@ -165,6 +165,7 @@ known-first-party = ["modelship"]
 markers = [
     "integration: tests that require a running Ray cluster and external models",
     "llama_cpp: integration tests that exercise the llama_cpp loader",
+    "llama_server: integration tests that exercise the llama_server loader",
     "vllm: integration tests that exercise the vllm loader",
     "diffusers: integration tests that exercise the diffusers loader",
     "stable_diffusion_cpp: integration tests that exercise the stable_diffusion_cpp loader",

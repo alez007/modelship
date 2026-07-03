@@ -168,6 +168,10 @@ class ModelDeployment:
                 from modelship.infer.llama_cpp.llama_cpp_infer import LlamaCppInfer
 
                 self.infer = LlamaCppInfer(config)
+            elif config.loader == ModelLoader.llama_server:
+                from modelship.infer.llama_server.llama_server_infer import LlamaServerInfer
+
+                self.infer = LlamaServerInfer(config)
             elif config.loader == ModelLoader.stable_diffusion_cpp:
                 from modelship.infer.stable_diffusion_cpp.stable_diffusion_cpp_infer import StableDiffusionCppInfer
 

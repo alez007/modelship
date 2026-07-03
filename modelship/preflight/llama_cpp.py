@@ -130,6 +130,45 @@ class LlamaCppPreflight:
         return {"n_ctx": suggested}
 
 
+class LlamaServerPreflight:
+    """Reuses `LlamaCppPreflight`'s GGUF/RAM-budget math for the `llama_server`
+    loader. That math sizes a single context to the RAM budget; llama-server
+    instead splits its total context (`-c`) across `parallel` slots, so the
+    per-slot `n_ctx` LlamaServerConfig expects is the total budget divided by
+    the slot count (the loader's launch command re-multiplies by `parallel`
+    to reconstruct the RAM-safe total)."""
+
+    def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        rec = LlamaCppPreflight().recommend(config, hw)
+        if "n_ctx" not in rec:
+            return rec
+
+        server_config = config.llama_server_config
+        parallel = server_config.parallel if server_config else 1
+        if parallel <= 1:
+            return rec
+
+        per_slot = (rec["n_ctx"] // parallel // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
+        if per_slot < _MIN_NCTX:
+            logger.warning(
+                "preflight '%s': RAM budget yields n_ctx=%d across %d parallel slots (< %d per slot); "
+                "skipping recommendation",
+                config.name,
+                per_slot,
+                parallel,
+                _MIN_NCTX,
+            )
+            return {}
+        logger.info(
+            "preflight llama_server '%s': dividing total n_ctx budget %d across parallel=%d -> n_ctx=%d",
+            config.name,
+            rec["n_ctx"],
+            parallel,
+            per_slot,
+        )
+        return {"n_ctx": per_slot}
+
+
 class _GGUFMeta:
     __slots__ = ("block_count", "context_length", "head_count_kv", "head_dim")
 

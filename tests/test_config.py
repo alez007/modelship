@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from modelship.infer.infer_config import (
     AutoscalingConfig,
     LlamaCppConfig,
+    LlamaServerConfig,
     ModelLoader,
     ModelshipConfig,
     ModelshipModelConfig,
@@ -168,6 +169,66 @@ class TestLlamaCppConfig:
         )
         assert config.loader == ModelLoader.llama_cpp
         assert config.model == "meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf"
+
+
+class TestLlamaServerConfig:
+    def test_defaults(self):
+        config = LlamaServerConfig()
+        assert config.n_ctx == 2048
+        assert config.n_batch == 512
+        assert config.n_gpu_layers == -1
+        assert config.parallel == 1
+        assert config.chat_template is None
+        assert config.extra_args == []
+
+    def test_custom_values(self):
+        config = LlamaServerConfig(
+            n_ctx=4096,
+            n_batch=1024,
+            n_gpu_layers=33,
+            parallel=4,
+            chat_template="chatml",
+            extra_args=["--flash-attn"],
+        )
+        assert config.n_ctx == 4096
+        assert config.n_batch == 1024
+        assert config.n_gpu_layers == 33
+        assert config.parallel == 4
+        assert config.chat_template == "chatml"
+        assert config.extra_args == ["--flash-attn"]
+
+    def _num_gpus_model(self, num_gpus: float) -> ModelshipModelConfig:
+        return ModelshipModelConfig(
+            name="test-model",
+            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+            num_gpus=num_gpus,
+        )
+
+    def test_num_gpus_integer_allowed(self):
+        config = self._num_gpus_model(1)
+        assert config.num_gpus == 1
+
+    def test_num_gpus_zero_allowed(self):
+        config = self._num_gpus_model(0)
+        assert config.num_gpus == 0
+
+    def test_num_gpus_fractional_rejected(self):
+        with pytest.raises(ValidationError, match="not allowed for the llama_server loader"):
+            self._num_gpus_model(0.5)
+
+    def test_llama_server_model_config(self):
+        config = ModelshipModelConfig(
+            name="llama-3",
+            model="meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+            llama_server_config=LlamaServerConfig(parallel=4),
+        )
+        assert config.loader == ModelLoader.llama_server
+        assert config.llama_server_config is not None
+        assert config.llama_server_config.parallel == 4
 
 
 class TestModelshipModelConfig:

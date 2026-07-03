@@ -44,6 +44,7 @@ class ModelLoader(StrEnum):
     transformers = "transformers"
     diffusers = "diffusers"
     llama_cpp = "llama_cpp"
+    llama_server = "llama_server"
     stable_diffusion_cpp = "stable_diffusion_cpp"
     custom = "custom"
 
@@ -163,6 +164,24 @@ class LlamaCppConfig(BaseModel):
     cache: LlamaCppCacheConfig | None = None
 
 
+class LlamaServerConfig(BaseModel):
+    """Tunables for the ``llama_server`` loader, which drives a `llama-server`
+    subprocess over its native OpenAI-compatible HTTP API rather than binding
+    llama.cpp in-process (that's `llama_cpp`/`LlamaCppConfig`)."""
+
+    n_ctx: int = 2048
+    n_batch: int = 512
+    n_gpu_layers: int = -1
+    # Concurrent request slots. llama-server splits its total context (`-c`)
+    # across slots, so the process is launched with `n_ctx * parallel`.
+    parallel: int = 1
+    # Built-in template name (e.g. "chatml") or a path to a Jinja file;
+    # None lets llama-server use the GGUF's embedded chat template.
+    chat_template: str | None = None
+    # Escape hatch for launch flags not otherwise surfaced, appended verbatim.
+    extra_args: list[str] = Field(default_factory=list)
+
+
 class StableDiffusionCppConfig(BaseModel):
     """Tunables for the CPU-only `stable_diffusion_cpp` image loader
     (stable-diffusion.cpp via stable-diffusion-cpp-python). `sample_steps` and
@@ -258,6 +277,7 @@ class ModelshipModelConfig(BaseModel):
     transformers_config: TransformersConfig | None = None
     diffusers_config: DiffusersConfig | None = None
     llama_cpp_config: LlamaCppConfig | None = None
+    llama_server_config: LlamaServerConfig | None = None
     stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
     # Extra variables forwarded verbatim into the chat-template Jinja render on
@@ -332,10 +352,11 @@ class ModelshipModelConfig(BaseModel):
     @model_validator(mode="after")
     def validate_llama_cpp_num_gpus(self):
         # llama.cpp has no VRAM-fraction knob, so a fractional GPU share can't be
-        # honored — require whole GPUs (or 0 for CPU).
-        if self.loader == ModelLoader.llama_cpp and self.num_gpus != int(self.num_gpus):
+        # honored — require whole GPUs (or 0 for CPU). Applies equally to
+        # llama_server, which drives the same llama.cpp engine out of process.
+        if self.loader in (ModelLoader.llama_cpp, ModelLoader.llama_server) and self.num_gpus != int(self.num_gpus):
             raise ValueError(
-                f"num_gpus={self.num_gpus!r} is not allowed for the llama_cpp loader: "
+                f"num_gpus={self.num_gpus!r} is not allowed for the {self.loader.value} loader: "
                 f"use an integer number of whole GPUs, or 0 for CPU. Fractional GPU "
                 f"sharing isn't supported (llama.cpp has no GPU-memory fraction control)."
             )

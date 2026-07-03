@@ -1,0 +1,316 @@
+"""Tests for the llama_server loader: subprocess lifecycle (fake executable,
+no real llama-server binary in CI) and HTTP request/response projection
+(httpx mocked, no real socket)."""
+
+from __future__ import annotations
+
+import stat
+import sys
+import textwrap
+from unittest.mock import patch
+
+import httpx
+import pytest
+
+from modelship.infer.infer_config import (
+    LlamaServerConfig,
+    ModelLoader,
+    ModelshipModelConfig,
+    ModelUsecase,
+    RawRequestProxy,
+)
+from modelship.infer.llama_server.llama_server_infer import LlamaServerInfer
+from modelship.openai.protocol import ChatCompletionRequest, ErrorResponse
+
+# ---------------------------------------------------------------------------
+# Fake llama-server executables (plain scripts; no real binary needed in CI)
+# ---------------------------------------------------------------------------
+
+_FAKE_HEALTHY_SERVER = textwrap.dedent(
+    """
+    import http.server
+    import socketserver
+    import sys
+
+    def _port():
+        for i, a in enumerate(sys.argv):
+            if a == "--port":
+                return int(sys.argv[i + 1])
+        raise SystemExit("no --port passed")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/health":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt, *args):
+            pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("127.0.0.1", _port()), Handler) as httpd:
+        httpd.serve_forever()
+    """
+)
+
+_FAKE_CRASHING_SERVER = "import sys\nsys.exit(1)\n"
+
+
+def _write_fake_executable(tmp_path, source: str, name: str = "fake-llama-server") -> str:
+    script = tmp_path / name
+    script.write_text(f"#!{sys.executable}\n{source}")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
+def _make_config(**llama_server_kwargs) -> ModelshipModelConfig:
+    cfg = ModelshipModelConfig(
+        name="test-model",
+        model="org/test-model",
+        usecase=ModelUsecase.generate,
+        loader=ModelLoader.llama_server,
+        llama_server_config=LlamaServerConfig(**llama_server_kwargs),
+    )
+    cfg._resolved_path = "/fake/model.gguf"
+    return cfg
+
+
+class TestSubprocessLifecycle:
+    @pytest.mark.asyncio
+    async def test_start_waits_for_health_then_shutdown_terminates(self, tmp_path, monkeypatch):
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        infer = LlamaServerInfer(_make_config())
+        await infer.start()
+        try:
+            assert infer._proc is not None
+            assert infer._proc.poll() is None
+            assert infer.max_context_length == infer.config.n_ctx
+            assert infer._client is not None
+        finally:
+            infer.shutdown()
+
+        assert infer._proc is None
+
+    @pytest.mark.asyncio
+    async def test_missing_binary_raises(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_LLAMA_SERVER_BIN", raising=False)
+        infer = LlamaServerInfer(_make_config())
+        with pytest.raises(ValueError, match="MSHIP_LLAMA_SERVER_BIN"):
+            await infer.start()
+
+    @pytest.mark.asyncio
+    async def test_missing_resolved_path_raises(self, tmp_path, monkeypatch):
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+        config = _make_config()
+        config._resolved_path = None
+        infer = LlamaServerInfer(config)
+        with pytest.raises(ValueError, match="resolved model path"):
+            await infer.start()
+
+    @pytest.mark.asyncio
+    async def test_immediate_crash_retries_then_raises(self, tmp_path, monkeypatch):
+        binary = _write_fake_executable(tmp_path, _FAKE_CRASHING_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+        infer = LlamaServerInfer(_make_config())
+        with (
+            patch("modelship.infer.llama_server.llama_server_infer._LAUNCH_RETRY_LIMIT", 2),
+            pytest.raises(RuntimeError, match="failed to start after"),
+        ):
+            await infer.start()
+
+
+# ---------------------------------------------------------------------------
+# Request/response projection over a mocked httpx transport
+# ---------------------------------------------------------------------------
+
+
+def _infer_with_client(handler) -> LlamaServerInfer:
+    infer = LlamaServerInfer(_make_config())
+    infer._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://test")
+    return infer
+
+
+def _request(**kwargs) -> ChatCompletionRequest:
+    return ChatCompletionRequest(model="test-model", messages=[{"role": "user", "content": "hi"}], **kwargs)
+
+
+class TestNonStreamingProjection:
+    @pytest.mark.asyncio
+    async def test_strips_extension_fields_and_maps_reasoning_and_tools(self):
+        raw = {
+            "id": "chatcmpl-xyz",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "some-gguf",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": "thinking...",
+                        "tool_calls": [
+                            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            "timings": {"predicted_ms": 42.0},  # llama.cpp extension — must not leak
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/chat/completions"
+            return httpx.Response(200, json=raw)
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(), RawRequestProxy(None, {}))
+
+        assert not isinstance(result, ErrorResponse)
+        assert "timings" not in result.model_dump()
+        choice = result.choices[0]
+        assert choice.message.reasoning == "thinking..."
+        assert choice.message.tool_calls[0].function.name == "get_weather"
+        assert choice.finish_reason == "tool_calls"
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.total_tokens == 14
+
+    @pytest.mark.asyncio
+    async def test_forwards_normalized_messages_and_model_name(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}], "usage": {}},
+            )
+
+        infer = _infer_with_client(handler)
+        await infer.create_chat_completion(
+            _request(tools=[{"type": "function", "function": {"name": "f"}}]), RawRequestProxy(None, {})
+        )
+
+        assert captured["payload"]["model"] == "test-model"
+        assert captured["payload"]["stream"] is False
+        assert captured["payload"]["tools"][0]["function"]["name"] == "f"
+
+    @pytest.mark.asyncio
+    async def test_drops_logprobs_fields_not_yet_supported(self):
+        # Regression test: ChatCompletionRequest defaults top_logprobs to 0
+        # (not None), so a naive exclude_none dump still forwards it —
+        # llama-server rejects any request carrying top_logprobs unless
+        # logprobs=true, even when it's the falsy default of 0.
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}], "usage": {}},
+            )
+
+        infer = _infer_with_client(handler)
+        await infer.create_chat_completion(_request(), RawRequestProxy(None, {}))
+
+        assert "logprobs" not in captured["payload"]
+        assert "top_logprobs" not in captured["payload"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsupported_image_content(self):
+        infer = _infer_with_client(lambda request: httpx.Response(500))
+        request = _request()
+        request.messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]
+        result = await infer.create_chat_completion(request, RawRequestProxy(None, {}))
+        assert isinstance(result, ErrorResponse)
+
+    @pytest.mark.asyncio
+    async def test_http_error_becomes_error_response(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"error": {"message": "bad request"}})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(), RawRequestProxy(None, {}))
+        assert isinstance(result, ErrorResponse)
+        assert "bad request" in result.error.message
+
+    @pytest.mark.asyncio
+    async def test_no_client_falls_back_to_not_supported(self):
+        infer = _infer_with_client(lambda request: httpx.Response(200))
+        infer._client = None
+        result = await infer.create_chat_completion(_request(), RawRequestProxy(None, {}))
+        assert isinstance(result, ErrorResponse)
+
+
+class TestStreamingProjection:
+    @pytest.mark.asyncio
+    async def test_streams_deltas_tool_calls_and_final_usage(self):
+        sse_body = (
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",'
+            '"function":{"name":"get_weather","arguments":"{}"}}]},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(stream=True), RawRequestProxy(None, {}))
+
+        chunks = [chunk async for chunk in result]
+        assert chunks[-1] == "data: [DONE]\n\n"
+
+        import json
+
+        content = ""
+        tool_call_seen = False
+        usage_seen = None
+        for raw in chunks[:-1]:
+            payload = json.loads(raw[len("data: ") :])
+            for choice in payload["choices"]:
+                delta = choice["delta"]
+                if delta.get("content"):
+                    content += delta["content"]
+                if delta.get("tool_calls"):
+                    tool_call_seen = True
+                    assert delta["tool_calls"][0]["function"]["name"] == "get_weather"
+            if payload.get("usage"):
+                usage_seen = payload["usage"]
+
+        assert content == "Hello"
+        assert tool_call_seen
+        assert usage_seen is not None
+        assert usage_seen["prompt_tokens"] == 5
+        assert usage_seen["completion_tokens"] == 2
+        assert usage_seen["total_tokens"] == 7
+
+    @pytest.mark.asyncio
+    async def test_stream_http_error_yields_error_chunk(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"error": {"message": "boom"}})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_chat_completion(_request(stream=True), RawRequestProxy(None, {}))
+        chunks = [chunk async for chunk in result]
+        assert any("boom" in c for c in chunks)
+        # A well-behaved SSE stream always terminates with [DONE], even on an
+        # in-band error — clients that wait for it rather than connection
+        # close would otherwise hang.
+        assert chunks[-1] == "data: [DONE]\n\n"

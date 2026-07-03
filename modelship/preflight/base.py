@@ -387,6 +387,13 @@ def _ensure_registered() -> None:
             register(ModelLoader.llama_cpp, LlamaCppPreflight())
         except Exception:
             logger.debug("preflight: LlamaCppPreflight registration skipped", exc_info=True)
+    if ModelLoader.llama_server not in _REGISTRY:
+        try:
+            from modelship.preflight.llama_cpp import LlamaServerPreflight
+
+            register(ModelLoader.llama_server, LlamaServerPreflight())
+        except Exception:
+            logger.debug("preflight: LlamaServerPreflight registration skipped", exc_info=True)
     if ModelLoader.stable_diffusion_cpp not in _REGISTRY:
         try:
             from modelship.preflight.stable_diffusion_cpp import StableDiffusionCppPreflight
