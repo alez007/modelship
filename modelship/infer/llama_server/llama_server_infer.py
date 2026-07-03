@@ -149,7 +149,8 @@ class LlamaServerInfer(BaseInfer):
                 pass  # no running loop or closed loop (e.g. interpreter teardown) — let GC reclaim the socket
 
     def __del__(self):
-        self.shutdown()
+        with contextlib.suppress(BaseException):
+            self.shutdown()
 
     async def start(self) -> None:
         binary = os.environ.get("MSHIP_LLAMA_SERVER_BIN")
