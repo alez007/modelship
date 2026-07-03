@@ -96,7 +96,7 @@ def build_chat_completion_response(
     can have unwanted special tokens (``<|eot_id|>``, ``[INST]``, etc.)
     silently dropped before parsing.
     """
-    parsed = _parse_full(
+    parsed = parse_chat_completion_text(
         text,
         parser_name=parser_name,
         reasoning_parser_name=reasoning_parser_name,
@@ -223,13 +223,20 @@ async def stream_chat_completion(
     yield "data: [DONE]\n\n"
 
 
-def _parse_full(
+def parse_chat_completion_text(
     text: str,
     *,
     parser_name: str | None,
     reasoning_parser_name: str | None,
     noise_specials: tuple[str, ...] = (),
 ) -> ParsedChatOutput:
+    """Run the shared :class:`ChatOutputStreamer` over a full completion text.
+
+    Public because non-streaming loader paths outside this module (e.g.
+    llama_cpp's ``_handle_with_parsers``) parse text themselves and feed
+    the result into :func:`modelship.openai.chat_utils.build_from_parsed`
+    rather than going through :func:`build_chat_completion_response`.
+    """
     streamer = _make_streamer(
         parser_name=parser_name,
         reasoning_parser_name=reasoning_parser_name,

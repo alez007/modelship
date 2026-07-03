@@ -14,14 +14,20 @@ from modelship.infer.llama_cpp.structured import build_llama_grammar
 from modelship.infer.llama_cpp.tool_grammar import build_tool_call_grammar
 from modelship.infer.llama_cpp.utils import LlamaCppToolCallRenderer
 from modelship.logging import TRACE, get_logger
-from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.chat_utils import (
+    ParsedChatOutput,
+    UnsupportedContentError,
+    build_from_parsed,
+    normalize_chat_messages,
+)
 from modelship.openai.parsers.reasoning import get_parser as get_reasoning_parser
-from modelship.openai.parsers.streaming import build_chat_completion_response, stream_chat_completion
+from modelship.openai.parsers.streaming import finish_reason_for, parse_chat_completion_text, stream_chat_completion
 from modelship.openai.parsers.tool_calling import get_parser, request_forces_tool_call, resolve_tools_for_request
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ErrorResponse,
+    UsageInfo,
     create_error_response,
 )
 from modelship.utils import base_request_id
@@ -284,15 +290,25 @@ class OpenAIServingChat(OpenAIServing):
         usage = result.get("usage") or {}
         completion_tokens = int(usage.get("completion_tokens") or renderer.count_tokens(completion_text))
 
-        return build_chat_completion_response(
-            request_id=request_id,
-            model_name=self.model_name,
-            text=completion_text,
+        parsed = parse_chat_completion_text(
+            completion_text,
             parser_name=tool_parser_name,
             reasoning_parser_name=reasoning_parser_name,
-            prompt_tokens=int(usage.get("prompt_tokens") or prompt_tokens),
-            completion_tokens=completion_tokens,
-            max_tokens=max_tokens,
+        )
+        finish_reason = finish_reason_for(parsed, completion_tokens, max_tokens)
+        prompt_tokens_used = int(usage.get("prompt_tokens") or prompt_tokens)
+        return build_from_parsed(
+            request_id=request_id,
+            model_name=self.model_name,
+            choices=[
+                ParsedChatOutput(content=parsed.content, reasoning=parsed.reasoning, tool_calls=parsed.tool_calls)
+            ],
+            usage=UsageInfo(
+                prompt_tokens=prompt_tokens_used,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens_used + completion_tokens,
+            ),
+            finish_reasons=[finish_reason],
             created=int(time.time()),
         )
 

@@ -8,7 +8,7 @@ from typing import ClassVar
 import pytest
 
 from modelship.openai.parsers.output import ChatOutputStreamer
-from modelship.openai.parsers.streaming import _parse_full
+from modelship.openai.parsers.streaming import parse_chat_completion_text
 from modelship.openai.parsers.tool_calling import (
     available_parsers,
     get_parser,
@@ -266,7 +266,7 @@ class TestChatOutputStreamer:
 
 
 class TestParseFullFinalization:
-    """Non-streaming one-shot parsing via ``_parse_full``.
+    """Non-streaming one-shot parsing via ``parse_chat_completion_text``.
 
     Tool-call finalization happens on ``finalize()``, so a single
     ``extract_streaming`` + ``finalize`` pass over the full text must
@@ -278,7 +278,7 @@ class TestParseFullFinalization:
         # must still finalize the call (this is the reported llama_cpp bug).
 
         text = '<tool_call>\n{"name": "HassTurnOff", "arguments": {"area": "Living Room"}}\n</tool_call>'
-        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        parsed = parse_chat_completion_text(text, parser_name="hermes", reasoning_parser_name=None)
         assert parsed.content is None
         assert len(parsed.tool_calls) == 1
         assert parsed.tool_calls[0].function.name == "HassTurnOff"
@@ -286,7 +286,7 @@ class TestParseFullFinalization:
 
     def test_one_shot_matches_incremental_drive(self):
         text = '<tool_call>\n{"name": "HassTurnOff", "arguments": {"area": "Living Room"}}\n</tool_call>'
-        one_shot = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        one_shot = parse_chat_completion_text(text, parser_name="hermes", reasoning_parser_name=None)
 
         streamer = ChatOutputStreamer(HermesToolCallParser())
         cumulative = ""
@@ -304,7 +304,7 @@ class TestParseFullFinalization:
 
     def test_content_only_text_unchanged(self):
         text = "Just a plain answer, no tools here."
-        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        parsed = parse_chat_completion_text(text, parser_name="hermes", reasoning_parser_name=None)
         assert parsed.content == text
         assert parsed.tool_calls == []
 
@@ -313,7 +313,7 @@ class TestParseFullFinalization:
             '<tool_call>\n{"name": "a", "arguments": {"x": 1}}\n</tool_call>'
             '<tool_call>\n{"name": "b", "arguments": {"y": 2}}\n</tool_call>'
         )
-        parsed = _parse_full(text, parser_name="hermes", reasoning_parser_name=None)
+        parsed = parse_chat_completion_text(text, parser_name="hermes", reasoning_parser_name=None)
         assert [tc.function.name for tc in parsed.tool_calls] == ["a", "b"]
         assert parsed.tool_calls[0].id != parsed.tool_calls[1].id
 
