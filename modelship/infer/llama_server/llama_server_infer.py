@@ -238,15 +238,10 @@ class LlamaServerInfer(BaseInfer):
             flag = "--chat-template-file" if os.path.isfile(self.config.chat_template) else "--chat-template"
             args += [flag, self.config.chat_template]
         if self.config.mmproj:
-            from modelship.infer.model_resolver import resolve_model_source
-
-            mmproj_ref = self.config.mmproj
-            try:
-                mmproj_path = await loop.run_in_executor(None, lambda: resolve_model_source(mmproj_ref))
-            except Exception as e:
-                logger.warning("Failed to resolve mmproj %r, using as is: %s", mmproj_ref, e)
-                mmproj_path = mmproj_ref
-            args += ["--mmproj", mmproj_path]
+            # Resolved once on the driver by resolve_all_model_sources (same as
+            # the primary model path, self.model_config._resolved_path) — no
+            # re-resolution here.
+            args += ["--mmproj", self.config.mmproj]
         if self.model_config.usecase == ModelUsecase.embed:
             args += ["--embedding"]
         args += list(self.config.extra_args)

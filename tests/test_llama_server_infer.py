@@ -459,25 +459,27 @@ class TestStreamingProjection:
         binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
         monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
 
+        # mmproj is resolved once on the driver (resolve_all_model_sources), same
+        # as the primary model path — the config already carries the resolved
+        # path by the time the actor launches.
         model_config = ModelshipModelConfig(
             name="test-model",
             model="org/test-model",
             usecase=ModelUsecase.generate,
             loader=ModelLoader.llama_server,
-            llama_server_config=LlamaServerConfig(mmproj="foo/mmproj.gguf"),
+            llama_server_config=LlamaServerConfig(mmproj="/resolved/mmproj.gguf"),
         )
         model_config._resolved_path = "/fake/model.gguf"
 
         infer = LlamaServerInfer(model_config)
 
-        with patch("modelship.infer.model_resolver.resolve_model_source", return_value="/resolved/mmproj.gguf"):
-            await infer.start()
-            try:
-                args = list(infer._proc.args)
-                assert "--mmproj" in args
-                assert "/resolved/mmproj.gguf" in args
-            finally:
-                infer.shutdown()
+        await infer.start()
+        try:
+            args = list(infer._proc.args)
+            assert "--mmproj" in args
+            assert "/resolved/mmproj.gguf" in args
+        finally:
+            infer.shutdown()
 
         # Verify gateway rejection is skipped when mmproj is configured
         def handler(request: httpx.Request) -> httpx.Response:
