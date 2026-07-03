@@ -577,3 +577,48 @@ class TestStreamingProjection:
         assert res.choices[0].logprobs is not None
         assert res.choices[0].logprobs.content[0].token == "hello"
         assert res.choices[0].logprobs.content[0].top_logprobs[1].token == "hi"
+
+    @pytest.mark.asyncio
+    async def test_stage_b4_inline_json_errors_handled(self):
+        # Verify 200 OK with inline error payload in chat completion
+        def chat_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"error": {"message": "inline chat error detail"}},
+            )
+
+        model_config = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.llama_server,
+        )
+        infer_client = LlamaServerInfer(model_config)
+        infer_client._client = httpx.AsyncClient(transport=httpx.MockTransport(chat_handler), base_url="http://test")
+
+        res = await infer_client.create_chat_completion(_request(), RawRequestProxy(None, {}))
+        assert isinstance(res, ErrorResponse)
+        assert res.error.message == "inline chat error detail"
+
+        # Verify 200 OK with inline error payload in embedding
+        def embed_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"error": "inline embedding error detail"},
+            )
+
+        model_config_embed = ModelshipModelConfig(
+            name="test-model",
+            model="org/test-model",
+            usecase=ModelUsecase.embed,
+            loader=ModelLoader.llama_server,
+        )
+        infer_client_embed = LlamaServerInfer(model_config_embed)
+        infer_client_embed._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(embed_handler), base_url="http://test"
+        )
+
+        req = EmbeddingRequest(model="test-model", input="hello")
+        res_embed = await infer_client_embed.create_embedding(req, RawRequestProxy(None, {}))
+        assert isinstance(res_embed, ErrorResponse)
+        assert res_embed.error.message == "inline embedding error detail"

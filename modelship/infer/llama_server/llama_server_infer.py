@@ -382,6 +382,11 @@ class LlamaServerInfer(BaseInfer):
 
         data = resp.json()
         logger.log(TRACE, "embedding response %s: %s", request_id, data)
+        if isinstance(data, dict) and "error" in data:
+            error_data = data["error"] or {}
+            message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
+            logger.warning("embedding request %s failed with inline error: %s", request_id, message)
+            return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
         return _project_embedding_response(data, model_name=self.model_config.name)
 
     async def create_chat_completion(
@@ -426,6 +431,11 @@ class LlamaServerInfer(BaseInfer):
 
         data = resp.json()
         logger.log(TRACE, "chat response %s: %s", request_id, data)
+        if isinstance(data, dict) and "error" in data:
+            error_data = data["error"] or {}
+            message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
+            logger.warning("chat request %s failed with inline error: %s", request_id, message)
+            return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
         return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
 
     async def _stream_chat_completion(self, payload: dict[str, Any], request_id: str) -> AsyncGenerator[str, None]:
