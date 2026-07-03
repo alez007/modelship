@@ -67,12 +67,13 @@ def _write_fake_executable(tmp_path, source: str, name: str = "fake-llama-server
     return str(script)
 
 
-def _make_config(**llama_server_kwargs) -> ModelshipModelConfig:
+def _make_config(num_gpus: float = 0, **llama_server_kwargs) -> ModelshipModelConfig:
     cfg = ModelshipModelConfig(
         name="test-model",
         model="org/test-model",
         usecase=ModelUsecase.generate,
         loader=ModelLoader.llama_server,
+        num_gpus=num_gpus,
         llama_server_config=LlamaServerConfig(**llama_server_kwargs),
     )
     cfg._resolved_path = "/fake/model.gguf"
@@ -113,6 +114,29 @@ class TestSubprocessLifecycle:
         infer = LlamaServerInfer(config)
         with pytest.raises(ValueError, match="resolved model path"):
             await infer.start()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("num_gpus", "config_kwargs", "expected_ngl"),
+        [
+            (0, {}, "0"),  # no reserved GPU: never offload, even with a GPU build
+            (0, {"n_gpu_layers": 24}, "0"),
+            (1, {}, "-1"),  # llama-server auto-fit default
+            (1, {"n_gpu_layers": 24}, "24"),
+            (2, {"n_gpu_layers": -2}, "-2"),  # <= -2 means all layers
+        ],
+    )
+    async def test_ngl_follows_num_gpus(self, tmp_path, monkeypatch, num_gpus, config_kwargs, expected_ngl):
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        infer = LlamaServerInfer(_make_config(num_gpus=num_gpus, **config_kwargs))
+        await infer.start()
+        try:
+            args = list(infer._proc.args)
+            assert args[args.index("-ngl") + 1] == expected_ngl
+        finally:
+            infer.shutdown()
 
     @pytest.mark.asyncio
     async def test_immediate_crash_retries_then_raises(self, tmp_path, monkeypatch):

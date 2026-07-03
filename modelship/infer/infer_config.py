@@ -171,6 +171,8 @@ class LlamaServerConfig(BaseModel):
 
     n_ctx: int = 2048
     n_batch: int = 512
+    # Layers to offload when the deployment reserves GPUs (num_gpus > 0):
+    # -1 auto-fits the offload to free VRAM, <= -2 offloads all layers.
     n_gpu_layers: int = -1
     # Concurrent request slots. llama-server splits its total context (`-c`)
     # across slots, so the process is launched with `n_ctx * parallel`.

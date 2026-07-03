@@ -1500,7 +1500,7 @@ class TestResponsesLlamaServer:
         resp = client.responses.create(
             model="chat-llama-server",
             input="Say hello in one word.",
-            max_output_tokens=256,
+            max_output_tokens=512,
         )
         assert resp.status in {"completed", "incomplete"}
         assert resp.output_text.strip()
@@ -1509,7 +1509,7 @@ class TestResponsesLlamaServer:
         stream = client.responses.create(
             model="chat-llama-server",
             input="Say hello in one word.",
-            max_output_tokens=256,
+            max_output_tokens=512,
             stream=True,
         )
         text_deltas: list[str] = []

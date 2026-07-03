@@ -193,6 +193,12 @@ class LlamaServerInfer(BaseInfer):
             "--api-key",
             self._api_key,
         ]
+        if self.model_config.num_gpus > 0:
+            args += ["-ngl", str(self.config.n_gpu_layers)]
+        else:
+            # Ray only sets CUDA_VISIBLE_DEVICES for actors that reserve GPUs, so
+            # a num_gpus=0 deployment may still see every GPU — force no offload.
+            args += ["-ngl", "0"]
         if self.config.chat_template:
             flag = "--chat-template-file" if os.path.isfile(self.config.chat_template) else "--chat-template"
             args += [flag, self.config.chat_template]
