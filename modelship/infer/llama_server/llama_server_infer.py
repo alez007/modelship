@@ -140,9 +140,12 @@ class LlamaServerInfer(BaseInfer):
             try:
                 loop = asyncio.get_running_loop()
                 task = loop.create_task(client.aclose())
-                _pending_client_closes.add(task)
-                task.add_done_callback(_pending_client_closes.discard)
-            except RuntimeError:
+                if _pending_client_closes is not None:
+                    _pending_client_closes.add(task)
+                    task.add_done_callback(
+                        lambda t: _pending_client_closes.discard(t) if _pending_client_closes is not None else None
+                    )
+            except (RuntimeError, AttributeError, TypeError):
                 pass  # no running loop or closed loop (e.g. interpreter teardown) — let GC reclaim the socket
 
     def __del__(self):
