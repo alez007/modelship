@@ -27,6 +27,13 @@ FINGERPRINT_LEN = 10
 # re-bound with the same app name.
 _FINGERPRINT_EXCLUDED_FIELDS = {"name", "num_replicas", "autoscaling_config"}
 
+# vLLM's CPU backend repurposes gpu_memory_utilization to mean "fraction of
+# HOST RAM to reserve for the KV cache" (not VRAM) — the GPU-oriented 0.9
+# default asks to reserve 90% of node RAM and reliably raises at worker init
+# on a real machine. Used only for num_gpus == 0 vllm deploys (see
+# normalize_num_gpus_and_tp); an explicitly set value always wins.
+_VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION = 0.4
+
 ChatTemplateContentFormatOption = Literal["auto", "string", "openai"]
 
 
@@ -57,7 +64,7 @@ class VllmEngineConfig(BaseModel):
     dtype: str = "auto"
     tokenizer: str | None = None
     trust_remote_code: bool = False
-    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when num_gpus < 1
+    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when num_gpus < 1 (incl. 0, CPU deploys)
     task: str = "auto"
     model_impl: str | None = None
     enable_log_requests: bool | None = False
@@ -390,9 +397,20 @@ class ModelshipModelConfig(BaseModel):
           also set num_gpus, log a warning and use tp x pp (each slot owns a
           whole GPU).
         - When tp = pp = 1 and num_gpus >= 2 is set, auto-derive tp = num_gpus.
+        - num_gpus == 0: a CPU deploy. Lower gpu_memory_utilization's default
+          (see _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION) — same rationale and
+          "explicit value always wins" mechanism as the fractional-GPU case.
         """
         ng = self.num_gpus
-        if ng <= 0 or self.loader != ModelLoader.vllm:
+        if self.loader != ModelLoader.vllm:
+            return self
+
+        if ng == 0:
+            if "gpu_memory_utilization" not in self.vllm_engine_kwargs.model_fields_set:
+                self.vllm_engine_kwargs.gpu_memory_utilization = _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
+                self.vllm_engine_kwargs.model_fields_set.add("gpu_memory_utilization")
+            return self
+        if ng < 0:
             return self
 
         tp = self.vllm_engine_kwargs.tensor_parallel_size

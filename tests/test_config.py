@@ -398,6 +398,30 @@ class TestModelshipModelConfig:
         )
         assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.9
 
+    def test_cpu_num_gpus_lowers_gpu_memory_utilization_default(self):
+        # On vLLM's CPU backend, gpu_memory_utilization means "fraction of host
+        # RAM to reserve," not VRAM — the GPU-oriented 0.9 default reserves 90%
+        # of node RAM and reliably raises at worker init on a real machine.
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0,
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.4
+
+    def test_explicit_gpu_memory_utilization_wins_over_cpu_default(self):
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0,
+            vllm_engine_kwargs={"gpu_memory_utilization": 0.6},
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.6
+
     def test_num_gpus_integer_required_above_one(self):
         with pytest.raises(ValidationError, match="must be integers"):
             ModelshipModelConfig(

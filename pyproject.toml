@@ -61,6 +61,8 @@ cpu = [
     "llama-cpp-python>=0.3.32",
     "stable-diffusion-cpp-python>=0.4.7",
     "onnxruntime>=1.20.1",
+    "vllm==0.24.0",
+    "vllm[audio]==0.24.0",
 ]
 kokoroonnx = ["kokoroonnx"]
 bark = ["bark"]
@@ -107,6 +109,14 @@ name = "llama-cpp-cu130"
 url = "https://abetlen.github.io/llama-cpp-python/whl/cu130"
 explicit = true
 
+# NOTE: this URL embeds the vllm version — a future bump of vllm==0.24.0 above
+# must update this to match, or the cpu extra silently falls back to whatever
+# (if anything) that path resolves to.
+[[tool.uv.index]]
+name = "vllm-cpu"
+url = "https://wheels.vllm.ai/0.24.0/cpu"
+explicit = true
+
 [tool.uv.sources]
 kokoroonnx = { workspace = true }
 bark = { workspace = true }
@@ -122,6 +132,9 @@ torchvision = [
 ]
 llama-cpp-python = [
   { index = "llama-cpp-cu130", extra = "gpu" },
+]
+vllm = [
+  { index = "vllm-cpu", extra = "cpu" },
 ]
 
 [tool.uv]

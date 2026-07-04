@@ -184,7 +184,7 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | `dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`) |
 | `tokenizer` | string | model default | Custom tokenizer path |
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `gpu_memory_utilization` | float | `0.9` | VRAM fraction (overridden by `num_gpus` when `num_gpus < 1`) |
+| `gpu_memory_utilization` | float | `0.9` (`0.4` on CPU deploys) | VRAM fraction on GPU; on CPU it means *host RAM* fraction reserved for the KV cache instead (see [CPU (no GPU required)](#cpu-no-gpu-required) below). Overridden by `num_gpus` when `num_gpus < 1`, including `num_gpus: 0`. |
 | `quantization` | string | — | Quantization method (e.g. `awq`, `gptq`) |
 | `enable_auto_tool_choice` | bool | — | Enable automatic tool/function calling |
 | `tool_call_parser` | string | — | Tool call parser (e.g. `llama3_json`, `hermes`) |
@@ -194,6 +194,40 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 > **GGUF is not supported on the `vllm` loader.** vLLM 0.24 dropped in-tree GGUF, so
 > pointing the vllm loader at a `.gguf` is rejected at startup. Use `loader: llama_cpp`
 > for GGUF models; the vllm loader takes safetensors checkpoints or AWQ/GPTQ/FP8 quants.
+> This is unconditional regardless of GPU vs. CPU — see below.
+
+### CPU (no GPU required)
+
+The `vllm` loader also installs on the `cpu` extra (`num_gpus: 0`). The main use case is
+gemma models, which the llama.cpp-family loaders (`llama_cpp`/`llama_server`) can't
+tool-call — vLLM handles gemma tool-calling correctly, GPU or CPU. This is **not** a way
+to run an existing GGUF gemma file on CPU: the GGUF rejection above applies here too, so
+you need a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/compressed-tensors quant —
+the CPU backend supports AWQ/GPTQ on x86 plus INT8 W8A8).
+
+`gpu_memory_utilization` means something different on CPU: vLLM repurposes it as the
+fraction of **host RAM** to reserve for the KV cache, not VRAM. modelship lowers its
+default to `0.4` for `num_gpus: 0` deploys — the GPU-oriented `0.9` default would try to
+reserve 90% of node RAM and fail at worker init on a real machine — but set it explicitly
+based on what your box can spare. For finer control than a RAM fraction, vLLM also reads
+`VLLM_CPU_KVCACHE_SPACE` (a fixed GiB budget) and `VLLM_CPU_OMP_THREADS_BIND` directly
+from the process environment; these are vLLM-native env vars, not modelship config.
+
+```yaml
+models:
+  - name: gemma-cpu
+    model: org/gemma-3-AWQ  # a real non-GGUF gemma checkpoint
+    usecase: generate
+    loader: vllm
+    num_gpus: 0
+    num_cpus: 4
+    vllm_engine_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: functiongemma
+      gpu_memory_utilization: 0.4
+```
+
+See `config/examples/vllm-cpu.yaml` for a complete example.
 
 ### Chat / Text Generation
 
