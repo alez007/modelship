@@ -40,6 +40,15 @@ def _chunk(delta: DeltaMessage | None = None, *, finish_reason=None, usage=None)
     return ChatCompletionStreamResponse(model="m", choices=choices, usage=usage)
 
 
+def _decode(raw: list[str]) -> list[dict]:
+    out = []
+    for line in raw:
+        # each is "event: <type>\ndata: {json}\n\n"
+        data_line = next(ln for ln in line.splitlines() if ln.startswith("data:"))
+        out.append(json.loads(data_line[len("data:") :].strip()))
+    return out
+
+
 def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
     """Run start -> process(chunks) -> finish and return parsed event payloads."""
     raw: list[str] = []
@@ -47,12 +56,17 @@ def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
     for c in chunks:
         raw.extend(translator.process(c))
     raw.extend(translator.finish())
-    out = []
-    for line in raw:
-        # each is "event: <type>\ndata: {json}\n\n"
-        data_line = next(ln for ln in line.splitlines() if ln.startswith("data:"))
-        out.append(json.loads(data_line[len("data:") :].strip()))
-    return out
+    return _decode(raw)
+
+
+def _events_then_fail(translator: ResponsesStreamTranslator, chunks, message: str) -> list[dict]:
+    """Run start -> process(chunks) -> fail(message) and return parsed event payloads."""
+    raw: list[str] = []
+    raw.extend(translator.start())
+    for c in chunks:
+        raw.extend(translator.process(c))
+    raw.extend(translator.fail(message))
+    return _decode(raw)
 
 
 def _types(events: list[dict]) -> list[str]:
@@ -249,6 +263,40 @@ class TestTerminalStatus:
         events = _events(translator, [_chunk(DeltaMessage(content="x"), finish_reason="content_filter")])
         assert events[-1]["type"] == "response.incomplete"
         assert events[-1]["response"]["incomplete_details"] == {"reason": "content_filter"}
+
+
+class TestFailedStream:
+    def test_fail_before_any_output_emits_bare_failed_event(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events_then_fail(translator, [], "boom")
+        assert _types(events) == ["response.created", "response.in_progress", "response.failed"]
+        failed = events[-1]["response"]
+        assert failed["status"] == "failed"
+        assert failed["error"] == {"message": "boom"}
+        assert failed["output"] == []
+
+    def test_fail_mid_message_closes_the_open_item_with_partial_text(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events_then_fail(translator, [_chunk(DeltaMessage(content="partial"))], "boom")
+        assert _types(events)[-4:] == [
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.failed",
+        ]
+        failed = events[-1]["response"]
+        assert failed["status"] == "failed"
+        assert failed["output"][0]["type"] == "message"
+        assert failed["output"][0]["content"][0]["text"] == "partial"
+
+    def test_fail_mid_tool_call_closes_it_with_partial_arguments(self):
+        translator = ResponsesStreamTranslator(_req())
+        tc = DeltaToolCall(index=0, id="call_1", function=DeltaFunctionCall(name="get_weather", arguments='{"lo'))
+        events = _events_then_fail(translator, [_chunk(DeltaMessage(tool_calls=[tc]))], "boom")
+        failed = events[-1]["response"]
+        assert failed["output"][0]["type"] == "function_call"
+        assert failed["output"][0]["arguments"] == '{"lo'
+        assert failed["output"][0]["status"] == "completed"
 
 
 class TestStreamWrapper:

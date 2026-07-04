@@ -119,7 +119,9 @@ class ResponsesStreamTranslator:
         self._next_oi += 1
         return oi
 
-    def _envelope(self, event_type: str, status: str, output: list[Any], usage, incomplete) -> str:
+    def _envelope(
+        self, event_type: str, status: str, output: list[Any], usage, incomplete, error: Any | None = None
+    ) -> str:
         response = build_response_object(
             self.request,
             status=status,
@@ -129,10 +131,27 @@ class ResponsesStreamTranslator:
             model=self.model,
             response_id=self.response_id,
             created_at=self.created_at,
+            error=error,
         )
         # Pin created_at after the first build so every envelope is identical.
         self.created_at = response.created_at
         return self._event(event_type, {"response": response.model_dump(mode="json")})
+
+    def _close_all(self) -> Iterator[str]:
+        # Close every open item, in output-index (first-seen) order.
+        yield from self._close_reasoning()
+        yield from self._close_message()
+        yield from self._close_tools()
+
+    def _collect_output(self) -> list[Any]:
+        output: list[Any] = []
+        if self._reasoning is not None:
+            output.append(self._reasoning)
+        if self._message is not None:
+            output.append(self._message)
+        for idx in sorted(self._tools):
+            output.append(self._tools[idx])
+        return output
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -157,23 +176,21 @@ class ResponsesStreamTranslator:
                 self.finish_reason = choice.finish_reason
 
     def finish(self) -> Iterator[str]:
-        # Close every open item, in output-index (first-seen) order.
-        yield from self._close_reasoning()
-        yield from self._close_message()
-        yield from self._close_tools()
-
-        output: list[Any] = []
-        if self._reasoning is not None:
-            output.append(self._reasoning)
-        if self._message is not None:
-            output.append(self._message)
-        for idx in sorted(self._tools):
-            output.append(self._tools[idx])
+        yield from self._close_all()
+        output = self._collect_output()
 
         status, incomplete = _status_for(self.finish_reason)
         usage = _usage_from_chat(self.usage) if self.usage is not None else None
         terminal = "response.incomplete" if status == "incomplete" else "response.completed"
         yield self._envelope(terminal, status, output, usage, incomplete)
+
+    def fail(self, message: str) -> Iterator[str]:
+        """Terminal ``response.failed`` event for a mid-stream error (a loader
+        exception, not a normal completion). Still closes any already-open item
+        brackets so a client sees whatever partial content was generated."""
+        yield from self._close_all()
+        output = self._collect_output()
+        yield self._envelope("response.failed", "failed", output, None, None, error={"message": message})
 
     # -- reasoning channel --------------------------------------------------
 

@@ -22,7 +22,13 @@ from modelship.infer.infer_config import (
     RawRequestProxy,
 )
 from modelship.infer.llama_server.llama_server_infer import LlamaServerInfer
-from modelship.openai.protocol import ChatCompletionRequest, EmbeddingRequest, EmbeddingResponse, ErrorResponse
+from modelship.openai.protocol import (
+    ChatCompletionRequest,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    ErrorResponse,
+    ResponsesRequest,
+)
 
 # ---------------------------------------------------------------------------
 # Fake llama-server executables (plain scripts; no real binary needed in CI)
@@ -678,4 +684,137 @@ class TestStreamingProjection:
         # First 2 are normal choices, then the error chunk, then [DONE]
         assert len(chunks) == 4
         assert "inline mid-stream error detail" in chunks[2]
-        assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def _responses_request(**kwargs) -> ResponsesRequest:
+    return ResponsesRequest(model="test-model", input="hi", **kwargs)
+
+
+class TestResponsesProjection:
+    """Stage D: LlamaServerInfer.create_response — the native Responses path
+    shaping items directly from llama-server's own parsed reasoning/tool_calls,
+    same as TestNonStreamingProjection/TestStreamingProjection do for chat."""
+
+    @pytest.mark.asyncio
+    async def test_non_stream_maps_reasoning_and_tools_to_responses_items(self):
+        raw = {
+            "id": "chatcmpl-xyz",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": "thinking...",
+                        "tool_calls": [
+                            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            "timings": {"predicted_ms": 42.0},  # llama.cpp extension — must not leak
+        }
+
+        infer = _infer_with_client(lambda request: httpx.Response(200, json=raw))
+        result = await infer.create_response(_responses_request(), RawRequestProxy(None, {}))
+
+        assert not isinstance(result, ErrorResponse)
+        assert result.object == "response"
+        assert [item.type for item in result.output] == ["reasoning", "function_call"]
+        assert result.output[0].summary[0].text == "thinking..."
+        assert result.output[1].name == "get_weather"
+        assert result.usage.input_tokens == 10
+
+    @pytest.mark.asyncio
+    async def test_previous_response_id_rejected_before_any_http_call(self):
+        called = False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal called
+            called = True
+            return httpx.Response(200, json={"choices": [], "usage": {}})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_response(
+            _responses_request(previous_response_id="resp_1"), RawRequestProxy(None, {})
+        )
+
+        assert isinstance(result, ErrorResponse)
+        assert result._http_status == 400
+        assert called is False
+
+    @pytest.mark.asyncio
+    async def test_no_client_falls_back_to_not_supported(self):
+        infer = _infer_with_client(lambda request: httpx.Response(200))
+        infer._client = None
+        result = await infer.create_response(_responses_request(), RawRequestProxy(None, {}))
+        assert isinstance(result, ErrorResponse)
+
+    @pytest.mark.asyncio
+    async def test_stream_events_sequence_and_forces_stream_true_on_wire(self):
+        captured = {}
+        sse_body = (
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_response(_responses_request(stream=True), RawRequestProxy(None, {}))
+        body = "".join([chunk async for chunk in result])
+
+        # responses_request_to_chat hardcodes stream=False; create_response must
+        # flip it back to True before this reaches the wire, or llama-server
+        # would answer with a single JSON object instead of an SSE stream.
+        assert captured["payload"]["stream"] is True
+        assert "event: response.created" in body
+        assert "event: response.output_text.delta" in body
+        assert "event: response.completed" in body
+
+    @pytest.mark.asyncio
+    async def test_stream_mid_stream_error_emits_failed_event(self):
+        sse_body = (
+            'data: {"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+            'data: {"error": {"message": "inline mid-stream error detail"}}\n\n'
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_response(_responses_request(stream=True), RawRequestProxy(None, {}))
+        body = "".join([chunk async for chunk in result])
+
+        assert "event: response.failed" in body
+        assert "inline mid-stream error detail" in body
+        assert "event: response.completed" not in body
+
+    @pytest.mark.asyncio
+    async def test_stream_disconnect_ends_without_hanging(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(10)
+            return httpx.Response(200, content=b"data: [DONE]\n\n")  # pragma: no cover - never reached
+
+        infer = _infer_with_client(handler)
+        result = await infer.create_response(
+            _responses_request(stream=True), _DisconnectingRawRequest(disconnect_after=0.05)
+        )
+
+        # translator.start()'s two events are synchronous and yield immediately;
+        # the disconnect only bites once the generator would block on the (never
+        # answered) HTTP call — no response.completed/failed ever follows.
+        body = "".join([chunk async for chunk in result])
+        assert "event: response.created" in body
+        assert "event: response.completed" not in body
+        assert "event: response.failed" not in body

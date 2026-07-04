@@ -51,6 +51,7 @@ from modelship.openai.protocol.responses.adapter import (
     build_response_object,
     responses_request_to_chat,
 )
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id, random_uuid
 
@@ -450,10 +451,6 @@ class LlamaServerInfer(BaseInfer):
     ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
         if self._client is None:
             return await super().create_response(request, raw_request)
-        if request.stream:
-            # Native streaming lands in Stage D part 2 (needs a delta-level DTO
-            # this loader doesn't build yet); fall back to the chat-adapted default.
-            return await super().create_response(request, raw_request)
 
         try:
             chat_request = responses_request_to_chat(request)
@@ -472,7 +469,12 @@ class LlamaServerInfer(BaseInfer):
             logger.warning("responses request %s rejected: %s", request_id, e)
             return create_error_response(e)
 
+        chat_request.stream = bool(request.stream)
         payload = _build_payload(chat_request, messages, model_name=self.model_config.name)
+
+        if request.stream:
+            return self._stream_response(payload, request, request_id, raw_request)
+
         try:
             return await self.run_cancellable(self._send_response(payload, request, request_id), raw_request)
         except ClientDisconnectedError:
@@ -535,50 +537,64 @@ class LlamaServerInfer(BaseInfer):
         assert self._client is not None
         buffered: list[str] = []
         try:
-            async with self._client.stream("POST", "/v1/chat/completions", json=payload) as resp:
-                try:
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    await e.response.aread()
-                    detail = _extract_error_detail(e.response)
-                    logger.warning("chat request %s failed: %s", request_id, detail)
-                    yield _encode_error(detail)
-                    yield "data: [DONE]\n\n"
-                    return
-
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[len("data:") :].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        logger.warning("chat request %s: unparseable stream chunk: %r", request_id, data_str)
-                        continue
-                    if not isinstance(data, dict):
-                        logger.warning("chat request %s: skipping non-object stream chunk: %r", request_id, data)
-                        continue
-                    if "error" in data:
-                        error_data = data["error"] or {}
-                        message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
-                        logger.warning("chat request %s failed mid-stream with error: %s", request_id, message)
-                        yield _encode_error(message or "Unknown mid-stream error from llama-server")
-                        yield "data: [DONE]\n\n"
-                        return
-                    chunk = _project_stream_chunk(data, model_name=self.model_config.name, request_id=request_id)
-                    for choice in chunk.choices:
-                        if choice.delta.content:
-                            buffered.append(choice.delta.content)
-                    yield _encode_chunk(chunk)
-                yield "data: [DONE]\n\n"
+            async for chunk in _raw_stream_chunks(
+                self._client, payload, model_name=self.model_config.name, request_id=request_id
+            ):
+                for choice in chunk.choices:
+                    if choice.delta.content:
+                        buffered.append(choice.delta.content)
+                yield _encode_chunk(chunk)
+            yield "data: [DONE]\n\n"
+        except _LlamaServerStreamError as e:
+            yield _encode_error(str(e))
+            yield "data: [DONE]\n\n"
         except httpx.HTTPError as e:
             logger.warning("chat request %s failed mid-stream: %s", request_id, e)
             yield _encode_error(f"llama-server request failed: {e}")
             yield "data: [DONE]\n\n"
         finally:
             logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
+
+    async def _stream_response(
+        self, payload: dict[str, Any], request: ResponsesRequest, request_id: str, raw_request: RawRequestProxy
+    ) -> AsyncGenerator[str, None]:
+        """Race the llama-server SSE stream against the client's disconnect signal —
+        the Responses counterpart of `_stream_chat_completion`."""
+        stream = self._stream_response_body(payload, request, request_id)
+        try:
+            async for chunk in self.run_cancellable_stream(stream, raw_request):
+                yield chunk
+        except ClientDisconnectedError:
+            logger.info("responses request %s aborted: client disconnected", request_id)
+            return
+
+    async def _stream_response_body(
+        self, payload: dict[str, Any], request: ResponsesRequest, request_id: str
+    ) -> AsyncGenerator[str, None]:
+        """Native streaming Responses path: feeds `ResponsesStreamTranslator` directly
+        from `_raw_stream_chunks`'s typed chunks, same source `_stream_chat_completion_body`
+        uses — no chat SSE text round trip like the (unused-by-this-loader) `BaseInfer` default."""
+        assert self._client is not None
+        translator = ResponsesStreamTranslator(request)
+        for event in translator.start():
+            yield event
+        try:
+            async for chunk in _raw_stream_chunks(
+                self._client, payload, model_name=self.model_config.name, request_id=request_id
+            ):
+                for event in translator.process(chunk):
+                    yield event
+        except _LlamaServerStreamError as e:
+            for event in translator.fail(str(e)):
+                yield event
+            return
+        except httpx.HTTPError as e:
+            logger.warning("responses request %s failed mid-stream: %s", request_id, e)
+            for event in translator.fail(f"llama-server request failed: {e}"):
+                yield event
+            return
+        for event in translator.finish():
+            yield event
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +779,57 @@ def _project_stream_chunk(data: dict, *, model_name: str, request_id: str) -> Ch
         choices=choices,
         usage=_project_usage(data["usage"]) if data.get("usage") else None,
     )
+
+
+class _LlamaServerStreamError(Exception):
+    """A llama-server streaming request failed after the response started.
+
+    Raised generically so both the chat and Responses streaming wrappers can
+    encode it in their own wire format (chat SSE error chunk vs a Responses
+    `response.failed` event).
+    """
+
+
+async def _raw_stream_chunks(
+    client: httpx.AsyncClient, payload: dict[str, Any], *, model_name: str, request_id: str
+) -> AsyncGenerator[ChatCompletionStreamResponse, None]:
+    """Open the llama-server SSE stream and yield typed chunks.
+
+    Shared by `_stream_chat_completion_body` (chat) and `_stream_response_body`
+    (Responses) — both need the same parsed chunks, just encoded differently.
+    Raises `_LlamaServerStreamError` for a failure after the connection opens
+    (HTTP error status, inline `error` field); `httpx.HTTPError` propagates
+    uncaught for transport-level failures, same as before this was factored out.
+    """
+    async with client.stream("POST", "/v1/chat/completions", json=payload) as resp:
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            await e.response.aread()
+            detail = _extract_error_detail(e.response)
+            logger.warning("chat request %s failed: %s", request_id, detail)
+            raise _LlamaServerStreamError(detail) from e
+
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data_str = line[len("data:") :].strip()
+            if data_str == "[DONE]":
+                return
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                logger.warning("chat request %s: unparseable stream chunk: %r", request_id, data_str)
+                continue
+            if not isinstance(data, dict):
+                logger.warning("chat request %s: skipping non-object stream chunk: %r", request_id, data)
+                continue
+            if "error" in data:
+                error_data = data["error"] or {}
+                message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
+                logger.warning("chat request %s failed mid-stream with error: %s", request_id, message)
+                raise _LlamaServerStreamError(message or "Unknown mid-stream error from llama-server")
+            yield _project_stream_chunk(data, model_name=model_name, request_id=request_id)
 
 
 def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResponse:

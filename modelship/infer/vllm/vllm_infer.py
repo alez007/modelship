@@ -45,6 +45,8 @@ from vllm.entrypoints.speech_to_text.translation.protocol import (
 )
 from vllm.entrypoints.speech_to_text.translation.serving import OpenAIServingTranslation
 from vllm.exceptions import VLLMValidationError
+from vllm.inputs import EngineInput
+from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 
@@ -87,6 +89,7 @@ from modelship.openai.protocol.responses.adapter import (
     build_response_object,
     responses_request_to_chat,
 )
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id
 
@@ -545,10 +548,6 @@ class VllmInfer(BaseInfer):
     ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
         if not hasattr(self, "openai_serving_render"):
             return await super().create_response(request, raw_request)
-        if request.stream:
-            # Native streaming lands in Stage D part 2 (needs a delta-level DTO
-            # this loader doesn't build yet); fall back to the chat-adapted default.
-            return await super().create_response(request, raw_request)
 
         try:
             chat_request = responses_request_to_chat(request)
@@ -565,9 +564,30 @@ class VllmInfer(BaseInfer):
             )
         except UnsupportedContentError as exc:
             return create_error_response(exc)
+        chat_request.stream = request.stream or False
         vllm_request = engine_ops.build_vllm_request(chat_request, self.model_config.chat_template_kwargs)
 
+        if request.stream:
+            return await self._create_response_stream_or_error(request, vllm_request, raw_request)
         return await self._create_response_no_stream(request, vllm_request, raw_request)
+
+    async def _create_response_stream_or_error(
+        self,
+        request: ResponsesRequest,
+        vllm_request: VllmChatCompletionRequest,
+        raw_request: RawRequestProxy,
+    ) -> ErrorResponse | AsyncGenerator[str, None]:
+        """Render + derive sampling params before committing to a Responses event
+        stream, so a pre-generation failure (e.g. context overflow) can still be
+        returned as a plain `ErrorResponse` instead of a mid-stream `response.failed`."""
+        try:
+            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
+        if isinstance(render_result, VllmErrorResponse):
+            return ErrorResponse.model_validate(render_result.model_dump())
+        engine_input, sampling_params = render_result
+        return self._create_response_stream(request, vllm_request, engine_input, sampling_params, raw_request)
 
     async def _create_response_no_stream(
         self,
@@ -643,6 +663,57 @@ class VllmInfer(BaseInfer):
             incomplete=incomplete,
             model=self.model_config.name,
         )
+
+    async def _create_response_stream(
+        self,
+        request: ResponsesRequest,
+        vllm_request: VllmChatCompletionRequest,
+        engine_input: EngineInput,
+        sampling_params: SamplingParams,
+        raw_request: RawRequestProxy,
+    ) -> AsyncGenerator[str, None]:
+        """Native streaming Responses path: feeds `ResponsesStreamTranslator` directly
+        from `engine_ops.stream_chat_completion`'s typed chunks — no chat SSE text
+        round trip like the (unused-by-this-loader) `BaseInfer` default."""
+        request_id = f"resp-{base_request_id(raw_request)}"
+        tokenizer = self.openai_serving_render.renderer.tokenizer
+        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+
+        stream = engine_ops.stream_chat_completion(
+            self.engine,
+            self.openai_serving_render,
+            vllm_request,
+            engine_input,
+            sampling_params,
+            request_id,
+            self.model_config.name,
+            tokenizer,
+            enable_auto_tools=self._enable_auto_tools,
+            want_logprobs=False,
+            num_output_top_logprobs=None,
+        )
+        translator = ResponsesStreamTranslator(request)
+        for event in translator.start():
+            yield event
+        try:
+            async for chunk in self.run_cancellable_stream(stream, raw_request):
+                for event in translator.process(chunk):
+                    yield event
+        except ClientDisconnectedError:
+            logger.info("responses request %s aborted: client disconnected", request_id)
+            return
+        except VLLMValidationError as exc:
+            base = exc.args[0] if exc.args else str(exc)
+            for event in translator.fail(str(base)):
+                yield event
+            return
+        except Exception:
+            logger.exception("responses request %s failed mid-stream", request_id)
+            for event in translator.fail("Internal error during generation"):
+                yield event
+            return
+        for event in translator.finish():
+            yield event
 
     async def create_embedding(
         self, request: EmbeddingRequest, raw_request: RawRequestProxy

@@ -289,6 +289,7 @@ def build_response_object(
     model: str | None = None,
     response_id: str | None = None,
     created_at: int | None = None,
+    error: Any | None = None,
 ) -> ResponseObject:
     """Build a ``ResponseObject``, echoing the request settings OpenAI returns.
 
@@ -296,6 +297,8 @@ def build_response_object(
     ``response.created`` / ``response.completed`` envelopes and the
     non-streaming body carry an identical shape. ``response_id`` / ``created_at``
     let the streaming translator keep one stable id across all of its events.
+    ``error`` is set only for a ``status="failed"`` terminal event (see
+    ``ResponsesStreamTranslator.fail``); every other caller leaves it ``None``.
     """
     kwargs: dict[str, Any] = {
         "model": model or request.model or "",
@@ -319,6 +322,8 @@ def build_response_object(
         kwargs["id"] = response_id
     if created_at is not None:
         kwargs["created_at"] = created_at
+    if error is not None:
+        kwargs["error"] = error
     return ResponseObject(**kwargs)
 
 
