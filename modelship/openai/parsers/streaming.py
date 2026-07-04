@@ -1,8 +1,7 @@
 """Loader-agnostic chat-completion helpers for parser-aware responses.
 
-Loaders produce text differently — HF ``Pipeline`` for transformers, raw
-``llama.create_completion`` for llama_cpp, async iterators from plugins —
-but the OpenAI response shapes (streaming and non-streaming) are the
+Loaders produce text differently — HF ``Pipeline`` for transformers, async
+iterators from plugins — but the OpenAI response shapes (streaming and non-streaming) are the
 same. This module owns those shapes plus the
 :class:`~modelship.openai.parsers.output.ChatOutputStreamer` driving
 loop, so the loaders only deal in plain text.
@@ -232,10 +231,9 @@ def parse_chat_completion_text(
 ) -> ParsedChatOutput:
     """Run the shared :class:`ChatOutputStreamer` over a full completion text.
 
-    Public because non-streaming loader paths outside this module (e.g.
-    llama_cpp's ``_handle_with_parsers``) parse text themselves and feed
-    the result into :func:`modelship.openai.chat_utils.build_from_parsed`
-    rather than going through :func:`build_chat_completion_response`.
+    Public so a non-streaming loader that parses text itself can feed the
+    result into :func:`modelship.openai.chat_utils.build_from_parsed` rather
+    than going through :func:`build_chat_completion_response`.
     """
     streamer = _make_streamer(
         parser_name=parser_name,

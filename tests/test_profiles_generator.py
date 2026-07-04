@@ -156,9 +156,9 @@ def test_refuse_path_writes_nothing(tmp_path):
 def test_cpu_allocation_never_exceeds_budget_when_scaling_down():
     # Adversarial tiny budget: naive per-term rounding would sum to 0.05 > 0.04.
     specs = [
-        _spec("g", ModelLoader.llama_cpp, ModelUsecase.generate),
+        _spec("g", ModelLoader.llama_server, ModelUsecase.generate),
         _spec("i", ModelLoader.stable_diffusion_cpp, ModelUsecase.image),
-        _spec("e", ModelLoader.llama_cpp, ModelUsecase.embed),
+        _spec("e", ModelLoader.llama_server, ModelUsecase.embed),
     ]
     allocs = _cpu_allocation(specs, 0.04)
     assert round(sum(allocs), 2) <= 0.04
@@ -171,7 +171,7 @@ def test_cpu_allocation_leftover_goes_to_a_single_anchor():
     specs = [
         _spec("g1", ModelLoader.vllm, ModelUsecase.generate),
         _spec("g2", ModelLoader.vllm, ModelUsecase.generate),
-        _spec("e", ModelLoader.llama_cpp, ModelUsecase.embed),
+        _spec("e", ModelLoader.llama_server, ModelUsecase.embed),
     ]
     allocs = _cpu_allocation(specs, 16.0)
     assert sum(allocs) <= 16.0 + 1e-9

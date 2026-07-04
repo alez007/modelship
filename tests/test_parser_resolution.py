@@ -11,7 +11,6 @@ import pytest
 
 from modelship.deploy.config import resolve_all_reasoning_parsers, resolve_all_tool_parsers
 from modelship.infer.infer_config import (
-    LlamaCppConfig,
     ModelLoader,
     ModelshipConfig,
     ModelshipModelConfig,
@@ -132,15 +131,6 @@ class TestResolveToolParsersStoresExplicit:
 
     def test_vllm_opt_out_leaves_none(self):
         cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(enable_auto_tool_choice=False, tool_call_parser="hermes"))
-        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_tool_call_parser is None
-
-    def test_llama_cpp_chat_format_opts_out(self):
-        cfg = _make_cfg(
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(chat_format="chatml-function-calling"),
-        )
-        cfg._resolved_chat_template = "{% if tools %}<tool_call>{% endif %}"
         resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_tool_call_parser is None
 

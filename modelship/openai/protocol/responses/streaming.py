@@ -3,7 +3,7 @@
 The chat loaders all emit Server-Sent Events as ``data: {chunk}\\n\\n`` strings
 (``ChatCompletionStreamResponse`` payloads) terminated by ``data: [DONE]`` — this
 is the one wire shape vLLM and the ``ChatOutputStreamer`` loaders (transformers,
-llama_cpp, plugins) share. The Responses API instead wants a *semantic* event
+plugins) share. The Responses API instead wants a *semantic* event
 protocol: named events (``response.created``, ``response.output_text.delta``, …)
 each carrying a monotonically increasing ``sequence_number`` plus the relevant
 output index, wrapping each output item in explicit added/done brackets.

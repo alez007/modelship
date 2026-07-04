@@ -36,8 +36,8 @@ class TestVllmGgufGuard:
         ):
             resolve_all_model_sources(ModelshipConfig(models=[cfg]))
 
-    def test_llama_cpp_gguf_allowed(self):
-        cfg = _make_cfg(loader=ModelLoader.llama_cpp, num_gpus=0)
+    def test_llama_server_gguf_allowed(self):
+        cfg = _make_cfg(loader=ModelLoader.llama_server, num_gpus=0)
         with patch(
             "modelship.deploy.config.resolve_model_source",
             return_value="/cache/model-Q4_K_M.gguf",

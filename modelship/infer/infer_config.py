@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import re
 import time
 from collections.abc import Callable
 from enum import StrEnum
@@ -8,7 +7,7 @@ from typing import Any, Literal
 
 import ray
 from fastapi import Request
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from ray.exceptions import RayActorError
 from starlette.datastructures import Headers, State
 
@@ -50,7 +49,6 @@ class ModelLoader(StrEnum):
     vllm = "vllm"
     transformers = "transformers"
     diffusers = "diffusers"
-    llama_cpp = "llama_cpp"
     llama_server = "llama_server"
     stable_diffusion_cpp = "stable_diffusion_cpp"
     custom = "custom"
@@ -104,77 +102,9 @@ class DiffusersConfig(BaseModel):
     guidance_scale: float = 7.5
 
 
-_SIZE_UNITS = {
-    "b": 1,
-    "kb": 1000,
-    "mb": 1000**2,
-    "gb": 1000**3,
-    "tb": 1000**4,
-    "kib": 1 << 10,
-    "mib": 1 << 20,
-    "gib": 1 << 30,
-    "tib": 1 << 40,
-}
-_SIZE_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-z]*)\s*$", re.IGNORECASE)
-
-
-def parse_size(value: str | int) -> int:
-    """Parse a human-readable byte size ('2GiB', '512MB', '1.5gb') into bytes.
-    A bare number (or int) is taken as bytes. Decimal units (KB/MB/GB/TB) are
-    powers of 1000; binary units (KiB/MiB/GiB/TiB) powers of 1024."""
-    if isinstance(value, int):
-        size = value
-    else:
-        match = _SIZE_RE.match(value)
-        if not match:
-            raise ValueError(f"invalid size '{value}'; use e.g. '2GiB', '512MB', or a byte count")
-        number, unit = match.groups()
-        multiplier = _SIZE_UNITS.get((unit or "b").lower())
-        if multiplier is None:
-            raise ValueError(f"invalid size unit in '{value}'; expected one of B/KB/MB/GB/TB or KiB/MiB/GiB/TiB")
-        size = int(float(number) * multiplier)
-    if size <= 0:
-        raise ValueError(f"size must be positive, got {size} bytes")
-    return size
-
-
-class LlamaCppCacheConfig(BaseModel):
-    """llama.cpp's native prompt-state cache (via `Llama.set_cache`). Stores the
-    evaluated KV state keyed by prompt prefix, so a later request sharing a prefix
-    skips re-evaluating it. `ram` keeps states in process memory; `disk` persists
-    them under MSHIP_CACHE_DIR (survives replica restarts at the cost of disk I/O)."""
-
-    type: Literal["ram", "disk"] = "ram"
-    # Eviction ceiling for cached states, as a human-readable size ('2GiB',
-    # '512MB') or a bare byte count. Default 2 GiB matches llama-cpp-python.
-    capacity: str | int = "2GiB"
-
-    @field_validator("capacity")
-    @classmethod
-    def _check_capacity(cls, value: str | int) -> str | int:
-        parse_size(value)  # raises on invalid size/unit or non-positive
-        return value
-
-    @property
-    def capacity_bytes(self) -> int:
-        return parse_size(self.capacity)
-
-
-class LlamaCppConfig(BaseModel):
-    n_gpu_layers: int = -1
-    n_ctx: int = 2048
-    n_batch: int = 512
-    chat_format: str | None = None
-    model_kwargs: dict[str, Any] = Field(default_factory=dict)
-    tool_calls_enabled: bool | None = None
-    # llama.cpp's native prompt-state cache; None disables it.
-    cache: LlamaCppCacheConfig | None = None
-
-
 class LlamaServerConfig(BaseModel):
     """Tunables for the ``llama_server`` loader, which drives a `llama-server`
-    subprocess over its native OpenAI-compatible HTTP API rather than binding
-    llama.cpp in-process (that's `llama_cpp`/`LlamaCppConfig`)."""
+    subprocess over its native OpenAI-compatible HTTP API."""
 
     n_ctx: int = 2048
     n_batch: int = 512
@@ -287,14 +217,12 @@ class ModelshipModelConfig(BaseModel):
     vllm_engine_kwargs: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
     transformers_config: TransformersConfig | None = None
     diffusers_config: DiffusersConfig | None = None
-    llama_cpp_config: LlamaCppConfig | None = None
     llama_server_config: LlamaServerConfig | None = None
     stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
     # Extra variables forwarded verbatim into the chat-template Jinja render on
     # every text loader (e.g. `enable_thinking: false` for Qwen3). Only does
-    # something if the model's template branches on the key; ignored on paths
-    # that bypass the template (llama_cpp's native chat-handler fallback).
+    # something if the model's template branches on the key.
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     _resolved_path: str | None = PrivateAttr(default=None)
@@ -338,34 +266,10 @@ class ModelshipModelConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def check_disk_cache_single_replica(self):
-        # llama.cpp's LlamaDiskCache reads/writes/prunes its SQLite store with no
-        # file locking. Replicas of the same model share one cache dir, so >1
-        # replica races into corruption. RAM cache is per-process and always safe.
-        if self.loader != ModelLoader.llama_cpp:
-            return self
-        if self.llama_cpp_config is None or self.llama_cpp_config.cache is None:
-            return self
-        if self.llama_cpp_config.cache.type != "disk":
-            return self
-        multi_replica = self.num_replicas > 1 or (
-            self.autoscaling_config is not None and self.autoscaling_config.max_replicas > 1
-        )
-        if multi_replica:
-            raise ValueError(
-                f"model '{self.name}': llama_cpp_config.cache.type='disk' cannot be combined with "
-                f"multiple replicas (num_replicas > 1 or autoscaling max_replicas > 1) — the disk "
-                f"cache is not process-safe and replicas would corrupt a shared store. Use "
-                f"cache.type='ram' (per-process, safe) or keep a single replica."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_llama_cpp_num_gpus(self):
+    def validate_llama_server_num_gpus(self):
         # llama.cpp has no VRAM-fraction knob, so a fractional GPU share can't be
-        # honored — require whole GPUs (or 0 for CPU). Applies equally to
-        # llama_server, which drives the same llama.cpp engine out of process.
-        if self.loader in (ModelLoader.llama_cpp, ModelLoader.llama_server) and self.num_gpus != int(self.num_gpus):
+        # honored — require whole GPUs (or 0 for CPU).
+        if self.loader == ModelLoader.llama_server and self.num_gpus != int(self.num_gpus):
             raise ValueError(
                 f"num_gpus={self.num_gpus!r} is not allowed for the {self.loader.value} loader: "
                 f"use an integer number of whole GPUs, or 0 for CPU. Fractional GPU "

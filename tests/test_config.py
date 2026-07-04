@@ -5,7 +5,6 @@ from pydantic import ValidationError
 
 from modelship.infer.infer_config import (
     AutoscalingConfig,
-    LlamaCppConfig,
     LlamaServerConfig,
     ModelLoader,
     ModelshipConfig,
@@ -14,161 +13,6 @@ from modelship.infer.infer_config import (
     TransformersConfig,
     VllmEngineConfig,
 )
-
-
-class TestLlamaCppConfig:
-    def test_defaults(self):
-        config = LlamaCppConfig()
-        assert config.n_gpu_layers == -1
-        assert config.n_ctx == 2048
-        assert config.n_batch == 512
-        assert config.chat_format is None
-        assert config.model_kwargs == {}
-        assert config.cache is None
-
-    def test_cache_defaults(self):
-        config = LlamaCppConfig(cache={})
-        assert config.cache is not None
-        assert config.cache.type == "ram"
-        assert config.cache.capacity == "2GiB"
-        assert config.cache.capacity_bytes == 2 << 30
-
-    def test_cache_disk(self):
-        config = LlamaCppConfig(cache={"type": "disk", "capacity": "512MB"})
-        assert config.cache is not None
-        assert config.cache.type == "disk"
-        assert config.cache.capacity_bytes == 512 * 1000**2
-
-    @pytest.mark.parametrize(
-        ("capacity", "expected_bytes"),
-        [
-            ("2GiB", 2 << 30),
-            ("512MB", 512 * 1000**2),
-            ("1.5gb", int(1.5 * 1000**3)),
-            ("100mib", 100 << 20),
-            ("4096", 4096),
-            (1024, 1024),
-        ],
-    )
-    def test_cache_capacity_parsing(self, capacity, expected_bytes):
-        config = LlamaCppConfig(cache={"capacity": capacity})
-        assert config.cache is not None
-        assert config.cache.capacity_bytes == expected_bytes
-
-    def test_cache_rejects_invalid_type(self):
-        with pytest.raises(ValidationError):
-            LlamaCppConfig(cache={"type": "gpu"})
-
-    @pytest.mark.parametrize("capacity", ["0", "-5MB", "2PB", "abc", ""])
-    def test_cache_rejects_invalid_capacity(self, capacity):
-        with pytest.raises(ValidationError):
-            LlamaCppConfig(cache={"capacity": capacity})
-
-    def _disk_cache_model(self, **overrides):
-        return ModelshipModelConfig(
-            name="qwen-gguf",
-            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
-            **overrides,
-        )
-
-    def test_disk_cache_single_replica_allowed(self):
-        config = self._disk_cache_model()
-        assert config.llama_cpp_config.cache.type == "disk"
-
-    def test_disk_cache_rejects_multiple_num_replicas(self):
-        with pytest.raises(ValidationError, match="not process-safe"):
-            self._disk_cache_model(num_replicas=2)
-
-    def test_disk_cache_rejects_autoscaling_above_one(self):
-        with pytest.raises(ValidationError, match="not process-safe"):
-            self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=1, max_replicas=3))
-
-    def test_disk_cache_allows_scale_to_zero_single_max(self):
-        config = self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=0, max_replicas=1))
-        assert config.llama_cpp_config.cache.type == "disk"
-
-    def _num_gpus_model(self, num_gpus):
-        return ModelshipModelConfig(
-            name="qwen-gguf",
-            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            num_gpus=num_gpus,
-        )
-
-    def test_num_gpus_integer_allowed(self):
-        config = self._num_gpus_model(1)
-        assert config.num_gpus == 1
-
-    def test_num_gpus_zero_allowed(self):
-        config = self._num_gpus_model(0)
-        assert config.num_gpus == 0
-
-    def test_num_gpus_fractional_rejected(self):
-        with pytest.raises(ValidationError, match="not allowed for the llama_cpp loader"):
-            self._num_gpus_model(0.5)
-
-    def test_num_gpus_fractional_still_allowed_on_vllm(self):
-        config = ModelshipModelConfig(
-            name="qwen-vllm",
-            model="repo/Qwen",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.vllm,
-            num_gpus=0.5,
-        )
-        assert config.num_gpus == 0.5
-
-    def test_disk_cache_ignored_for_non_llama_cpp_loader(self):
-        # A leftover llama_cpp_config on a different loader is ignored, so the
-        # disk-cache multi-replica guard must not fire.
-        config = ModelshipModelConfig(
-            name="qwen-vllm",
-            model="Qwen/Qwen2.5-7B-Instruct",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.vllm,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
-            num_replicas=2,
-        )
-        assert config.num_replicas == 2
-
-    def test_ram_cache_allows_multiple_replicas(self):
-        config = ModelshipModelConfig(
-            name="qwen-gguf",
-            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "ram"}),
-            num_replicas=4,
-        )
-        assert config.num_replicas == 4
-
-    def test_custom_values(self):
-        config = LlamaCppConfig(
-            n_gpu_layers=33,
-            n_ctx=4096,
-            n_batch=1024,
-            chat_format="llama-3",
-            model_kwargs={"seed": 42},
-        )
-        assert config.n_gpu_layers == 33
-        assert config.n_ctx == 4096
-        assert config.n_batch == 1024
-        assert config.chat_format == "llama-3"
-        assert config.model_kwargs == {"seed": 42}
-
-    def test_llama_cpp_model_config(self):
-        config = ModelshipModelConfig(
-            name="llama-3",
-            model="meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(),
-        )
-        assert config.loader == ModelLoader.llama_cpp
-        assert config.model == "meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf"
 
 
 class TestLlamaServerConfig:
@@ -251,7 +95,7 @@ class TestModelshipModelConfig:
                 "name": "qwen3",
                 "model": "some-org/qwen3",
                 "usecase": ModelUsecase.generate,
-                "loader": ModelLoader.llama_cpp,
+                "loader": ModelLoader.llama_server,
                 "chat_template_kwargs": {"enable_thinking": False},
             }
         )

@@ -136,7 +136,7 @@ class TestVllmConfigureLoggingOptOut:
     get_component_logger_file_path() later dereferences handler.target.baseFilename
     and raises AttributeError, killing the replica's is_allocated() health check.
 
-    This only bites the vLLM loader (llama_cpp etc. never import vllm) and only on
+    This only bites the vLLM loader (other loaders never import vllm) and only on
     the head-restart recovery path: on a cold deploy is_allocated() runs before the
     replica __init__ imports vLLM; on recovery the replica re-imports vLLM first, so
     the nulled target is hit. We set VLLM_CONFIGURE_LOGGING=0 in propagate_lib_log_env

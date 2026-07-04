@@ -334,7 +334,7 @@ def _usage_from_chat(usage: UsageInfo) -> ResponseUsage:
     caching / reasoning models) under the OpenAI-standard ``prompt_tokens_details``
     / ``completion_tokens_details``. Responses uses the same sub-field names, so
     this is a direct field-to-field copy; loaders that report no details
-    (llama_cpp/transformers) leave them at the zero default.
+    (llama_server/transformers) leave them at the zero default.
     """
     prompt_details = usage.prompt_tokens_details
     completion_details = usage.completion_tokens_details

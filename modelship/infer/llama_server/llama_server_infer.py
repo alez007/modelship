@@ -89,12 +89,11 @@ _pending_client_closes: set[asyncio.Task] = set()
 
 class LlamaServerInfer(BaseInfer):
     """Drives a `llama-server` subprocess over its native OpenAI-compatible
-    HTTP API. Unlike `llama_cpp` (in-process `Llama` bindings + modelship's
-    own tool-call/reasoning parsers), llama-server does its own chat
-    templating, tool-call, and reasoning parsing — this loader is a thin,
-    concurrency-safe proxy that projects its responses onto modelship's
-    protocol models (never relaying its JSON/SSE verbatim, which would leak
-    llama.cpp-only extension fields like `timings` to clients)."""
+    HTTP API. llama-server does its own chat templating, tool-call, and
+    reasoning parsing — this loader is a thin, concurrency-safe proxy that
+    projects its responses onto modelship's protocol models (never relaying
+    its JSON/SSE verbatim, which would leak llama.cpp-only extension fields
+    like `timings` to clients)."""
 
     def __init__(self, model_config: ModelshipModelConfig):
         super().__init__(model_config)

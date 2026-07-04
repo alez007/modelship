@@ -1,11 +1,11 @@
-# vLLM loader on CPU — no GPU required (Stage E0).
+# vLLM loader on CPU — no GPU required.
 #
 # The main use case today: gemma models can't be tool-called through the
-# llama.cpp-family loaders (llama_cpp/llama_server), but work fine through
-# vllm. This is NOT a way to run your existing GGUF gemma file on CPU — the
-# vllm loader rejects .gguf unconditionally, GPU or CPU. You need a non-GGUF
-# checkpoint: safetensors, or an AWQ/GPTQ/compressed-tensors quant (CPU
-# backend supports AWQ/GPTQ on x86, plus INT8 W8A8). Look for a
+# llama_server loader (llama.cpp's own parsers don't support it), but work
+# fine through vllm. This is NOT a way to run your existing GGUF gemma file
+# on CPU — the vllm loader rejects .gguf unconditionally, GPU or CPU. You
+# need a non-GGUF checkpoint: safetensors, or an AWQ/GPTQ/compressed-tensors
+# quant (CPU backend supports AWQ/GPTQ on x86, plus INT8 W8A8). Look for a
 # community AWQ/GPTQ repack of the gemma model you want, or use the full
 # safetensors checkpoint if you have the RAM for it.
 #

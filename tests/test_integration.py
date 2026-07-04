@@ -68,34 +68,6 @@ MODEL_CONFIGS: dict[str, dict] = {
             "mm_processor_kwargs": {"min_pixels": 50176, "max_pixels": 200704},
         },
     },
-    "chat-limited": {
-        "name": "chat-limited",
-        "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
-        "usecase": "generate",
-        "loader": "llama_cpp",
-        "num_cpus": 1,
-        "llama_cpp_config": {
-            "tool_calls_enabled": False,
-        },
-    },
-    "chat-llama-mship": {
-        "name": "chat-llama-mship",
-        "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
-        "usecase": "generate",
-        "loader": "llama_cpp",
-        "num_cpus": 1,
-    },
-    "chat-llama-gpu": {
-        "name": "chat-llama-gpu",
-        # Same GGUF as chat-llama-mship, but on a whole GPU to exercise the
-        # cu130-wheel offload path end-to-end (actor GPU allocation,
-        # n_gpu_layers honored, preflight RAM sizing skipped).
-        "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
-        "usecase": "generate",
-        "loader": "llama_cpp",
-        "num_gpus": 1,
-        "num_cpus": 1,
-    },
     "autoscale-llama": {
         "name": "autoscale-llama",
         # Tiny CPU GGUF so the host can hold several replicas (1 cpu each, up to
@@ -105,7 +77,7 @@ MODEL_CONFIGS: dict[str, dict] = {
         # keep the test's poll windows tractable.
         "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
         "usecase": "generate",
-        "loader": "llama_cpp",
+        "loader": "llama_server",
         "num_cpus": 1,
         "autoscaling_config": {
             "min_replicas": 1,
@@ -115,32 +87,16 @@ MODEL_CONFIGS: dict[str, dict] = {
             "downscale_delay_s": 10,
         },
     },
-    "chat-llama-reasoning": {
-        "name": "chat-llama-reasoning",
-        # Qwen3-0.6B in GGUF form: same family as the vLLM `chat-reasoning`
-        # deployment (which uses the safetensors checkpoint), so the
-        # model emits `<think>...</think>` and supports Hermes-style tool
-        # calls in the same chat template. Lets us exercise reasoning,
-        # tools, and reasoning+tools through the llama_cpp loader in one
-        # deployment. Reasoning chains need headroom, so n_ctx is bumped.
-        "model": "lmstudio-community/Qwen3-0.6B-GGUF:*Q4_K_M.gguf",
-        "usecase": "generate",
-        "loader": "llama_cpp",
-        "num_cpus": 1,
-        "llama_cpp_config": {
-            "n_ctx": 4096,
-        },
-    },
     "chat-llama-server": {
         "name": "chat-llama-server",
-        # Same Qwen3-0.6B GGUF as `chat-llama-reasoning`, but through the new
-        # llama_server loader: a llama-server subprocess doing its own chat
-        # templating, tool-call, and reasoning parsing (`--jinja
-        # --reasoning-format auto`) instead of modelship's ChatOutputStreamer.
-        # `parallel: 4` exercises the loader's headline capability over
-        # llama_cpp: true multi-slot concurrency instead of one asyncio.Lock
-        # serializing every request. n_ctx is per-slot (the loader launches
-        # with `-c n_ctx*parallel`), bumped for reasoning headroom.
+        # Qwen3-0.6B GGUF through the llama_server loader: a llama-server
+        # subprocess doing its own chat templating, tool-call, and reasoning
+        # parsing (`--jinja --reasoning-format auto`) instead of modelship's
+        # ChatOutputStreamer. `parallel: 4` exercises the loader's headline
+        # capability: true multi-slot concurrency instead of a single
+        # asyncio.Lock serializing every request. n_ctx is per-slot (the
+        # loader launches with `-c n_ctx*parallel`), bumped for reasoning
+        # headroom.
         "model": "lmstudio-community/Qwen3-0.6B-GGUF:*Q4_K_M.gguf",
         "usecase": "generate",
         "loader": "llama_server",
@@ -152,10 +108,9 @@ MODEL_CONFIGS: dict[str, dict] = {
     },
     "chat-llama-server-plain": {
         "name": "chat-llama-server-plain",
-        # Same non-reasoning Qwen2.5-0.5B GGUF as `chat-llama-mship`, through
-        # the llama_server loader instead of llama_cpp. Used for the
-        # response_format tests mirrored from `TestChatLlamaCpp`, which need
-        # a model that doesn't emit a `<think>...</think>` preamble.
+        # Same non-reasoning Qwen2.5-0.5B GGUF as chat-llama-server, through
+        # the llama_server loader. Used for the response_format tests, which
+        # need a model that doesn't emit a `<think>...</think>` preamble.
         "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
         "usecase": "generate",
         "loader": "llama_server",
@@ -163,9 +118,9 @@ MODEL_CONFIGS: dict[str, dict] = {
     },
     "chat-llama-server-gpu": {
         "name": "chat-llama-server-gpu",
-        # Same GGUF as chat-llama-server-plain, on a whole GPU — mirrors
-        # `chat-llama-gpu`'s coverage of the offload path (actor GPU
-        # allocation, -ngl honored) for the llama_server loader.
+        # Same GGUF as chat-llama-server-plain, on a whole GPU — exercises the
+        # llama_server loader's offload path (actor GPU allocation, -ngl
+        # honored).
         "model": "lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF:*Q4_K_M.gguf",
         "usecase": "generate",
         "loader": "llama_server",
@@ -247,7 +202,7 @@ MODEL_CONFIGS: dict[str, dict] = {
     "chat-transformers-reasoning": {
         "name": "chat-transformers-reasoning",
         # Qwen3-0.6B safetensors — same family as the vLLM `chat-reasoning`
-        # and llama_cpp `chat-llama-reasoning` deployments. Lets us
+        # and llama_server `chat-llama-server` deployments. Lets us
         # exercise reasoning, tools, and reasoning+tools through the
         # transformers loader's `ChatOutputStreamer` wiring on real model
         # output. CPU-only and float32 to match the rest of the
@@ -979,446 +934,13 @@ class TestChatTransformers:
 
 
 @pytest.mark.integration
-@pytest.mark.llama_cpp
-class TestChatLlamaCpp:
-    @pytest.fixture(autouse=True, scope="class")
-    def _deploy(self, model_deployer):
-        model_deployer.deploy("chat-llama-mship")
-
-    def test_tool_calling_llama_cpp_loader(self, client):
-        """Round-trip a Hermes-style tool call through the llama_cpp loader.
-
-        Same Qwen2.5-0.5B-Instruct weights as `chat-capable` (vLLM) and
-        `chat-transformers`, but in GGUF form via llama-cpp-python. Auto-detected
-        hermes parser renders the prompt with `tools=...` and parses the
-        `<tool_call>{...}</tool_call>` markers out of raw completion output.
-        """
-        completion = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=[_WEATHER_TOOL],
-            tool_choice="auto",
-            max_tokens=128,
-        )
-        tool_calls = completion.choices[0].message.tool_calls
-        assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
-        assert tool_calls[0].function.name == "get_weather"
-        assert "Paris" in tool_calls[0].function.arguments
-        assert completion.choices[0].finish_reason == "tool_calls"
-
-    def test_tool_calling_streaming_llama_cpp_loader(self, client):
-        """Stream a tool call through the llama_cpp loader and verify the
-        delta sequence matches the OpenAI streaming contract.
-
-        Same shape as `test_tool_calling_streaming_transformers_loader` —
-        asserts a single name delta, multiple incremental argument deltas,
-        valid JSON on concatenation, and final ``finish_reason="tool_calls"``.
-        """
-        stream = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=[_WEATHER_TOOL],
-            tool_choice="auto",
-            max_tokens=128,
-            stream=True,
-        )
-
-        collected = _collect_streaming_tool_call(stream)
-
-        assert collected["tool_calls"], (
-            f"expected at least one streamed tool call; got content={collected['content']!r}"
-        )
-        call_0 = collected["tool_calls"][0]
-        assert call_0["id"], "expected an id on the first tool-call delta"
-        assert call_0["name"] == "get_weather"
-        assert collected["name_deltas"] == 1, f"expected one name delta, got {collected['name_deltas']}"
-        assert collected["args_deltas"] >= 2, (
-            f"expected arguments to stream incrementally, got {collected['args_deltas']} args delta(s)"
-        )
-        parsed_args = json.loads(call_0["arguments"])
-        assert parsed_args.get("city")
-        assert "Paris" in parsed_args["city"]
-        assert collected["finish_reason"] == "tool_calls"
-
-    def test_response_format_json_object_constrains_unprompted_output(self, client):
-        """Prompt is natural-language; the grammar constraint produces JSON."""
-        completion = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "What is the capital of France?"}],
-            response_format={"type": "json_object"},
-            max_tokens=64,
-        )
-        content = completion.choices[0].message.content
-        assert content
-        parsed = json.loads(content)
-        assert isinstance(parsed, dict)
-
-    def test_response_format_json_schema_constrains_unprompted_output(self, client):
-        """A natural-language question + json_schema → schema-conformant output."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-                "country": {"type": "string"},
-            },
-            "required": ["city", "country"],
-            "additionalProperties": False,
-        }
-        completion = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "location", "schema": schema, "strict": True},
-            },
-            max_tokens=64,
-        )
-        content = completion.choices[0].message.content
-        assert content
-        parsed = json.loads(content)
-        assert set(parsed.keys()) == {"city", "country"}
-        assert isinstance(parsed["city"], str) and parsed["city"]
-        assert isinstance(parsed["country"], str) and parsed["country"]
-
-    def test_response_format_json_schema_streaming_constrains_unprompted_output(self, client):
-        """Same intent on the streaming path."""
-        schema = {
-            "type": "object",
-            "properties": {"answer": {"type": "string"}},
-            "required": ["answer"],
-            "additionalProperties": False,
-        }
-        stream = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "What is the capital of France?"}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "answer", "schema": schema, "strict": True},
-            },
-            max_tokens=64,
-            stream=True,
-        )
-        chunks = []
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                chunks.append(chunk.choices[0].delta.content)
-        content = "".join(chunks)
-        assert content
-        parsed = json.loads(content)
-        assert set(parsed.keys()) == {"answer"}
-        assert isinstance(parsed["answer"], str) and parsed["answer"]
-
-    def test_response_format_coexists_with_tool_choice_none(self, client):
-        """tool_choice='none' is the safe escape valve: tools listed but inert,
-        schema enforced on content output.
-        """
-        schema = {
-            "type": "object",
-            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
-            "required": ["city", "country"],
-            "additionalProperties": False,
-        }
-        completion = client.chat.completions.create(
-            model="chat-llama-mship",
-            messages=[{"role": "user", "content": "Where is the Eiffel Tower located?"}],
-            tools=[_WEATHER_TOOL],
-            tool_choice="none",
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "location", "schema": schema, "strict": True},
-            },
-            max_tokens=64,
-        )
-        assert not completion.choices[0].message.tool_calls
-        content = completion.choices[0].message.content
-        assert content
-        parsed = json.loads(content)
-        assert set(parsed.keys()) == {"city", "country"}
-
-    def test_response_format_with_active_tools_rejected_by_gateway(self):
-        """Protocol-layer validator rejects tools + response_format when
-        tool_choice is anything other than 'none'. The schema grammar would
-        block tool-call markers from being emitted, so we surface the conflict
-        upfront rather than silently breaking tool calling.
-        """
-        response = httpx.post(
-            f"{OPENAI_API_BASE}/chat/completions",
-            json={
-                "model": "chat-llama-mship",
-                "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
-                "tools": [_WEATHER_TOOL],
-                "tool_choice": "auto",
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "unused",
-                        "schema": {"type": "object", "properties": {"x": {"type": "string"}}},
-                        "strict": True,
-                    },
-                },
-            },
-            timeout=30,
-        )
-        assert response.status_code in (400, 422), (
-            f"expected client-error status, got {response.status_code}: {response.text}"
-        )
-        assert "tool_choice='none'" in response.text
-
-
-@pytest.mark.integration
-@pytest.mark.llama_cpp
-class TestChatLlamaCppGpu:
-    """End-to-end GPU offload through the llama_cpp loader.
-
-    Same GGUF and tool-calling shape as `TestChatLlamaCpp` (CPU), but deployed
-    with `num_gpus=1` so the actor gets a whole GPU and the cu130 wheel's
-    `llama_supports_gpu_offload()` gate honors `n_gpu_layers` instead of
-    forcing CPU-only. Proves the offload path end-to-end rather than
-    re-covering the CPU loader's response-format/streaming behavior.
-    """
-
-    @pytest.fixture(autouse=True, scope="class")
-    def _deploy(self, model_deployer):
-        model_deployer.deploy("chat-llama-gpu")
-
-    def test_chat_completion(self, client):
-        completion = client.chat.completions.create(
-            model="chat-llama-gpu",
-            messages=[{"role": "user", "content": "What is the capital of France?"}],
-            max_tokens=32,
-        )
-        content = completion.choices[0].message.content
-        assert content
-        assert "Paris" in content
-
-    def test_tool_calling_llama_cpp_gpu_loader(self, client):
-        completion = client.chat.completions.create(
-            model="chat-llama-gpu",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=[_WEATHER_TOOL],
-            tool_choice="auto",
-            max_tokens=128,
-        )
-        tool_calls = completion.choices[0].message.tool_calls
-        assert tool_calls, f"expected a tool call, got content={completion.choices[0].message.content!r}"
-        assert tool_calls[0].function.name == "get_weather"
-        assert "Paris" in tool_calls[0].function.arguments
-        assert completion.choices[0].finish_reason == "tool_calls"
-
-
-@pytest.mark.integration
-@pytest.mark.llama_cpp
-class TestChatLlamaCppReasoning:
-    """End-to-end reasoning + tool calling through the llama_cpp loader.
-
-    Same Qwen3-0.6B family as the vLLM `chat-reasoning` deployment but
-    in GGUF form, so the modelship-side ``ChatOutputStreamer`` is
-    actually exercised on real model output (vLLM has its own native
-    reasoning parser, llama_cpp does not). One deployment covers
-    three scenarios because Qwen3 emits ``<think>...</think>`` AND
-    supports Hermes-style tool calls in the same chat template.
-    """
-
-    @pytest.fixture(autouse=True, scope="class")
-    def _deploy(self, model_deployer):
-        model_deployer.deploy("chat-llama-reasoning")
-
-    def test_reasoning_completion_llama_cpp(self):
-        """Non-streaming: ``<think>...`` block routes to ``message.reasoning``,
-        the final answer lands in ``message.content``, no marker leakage."""
-        response = httpx.post(
-            f"{OPENAI_API_BASE}/chat/completions",
-            json={
-                "model": "chat-llama-reasoning",
-                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
-                "max_tokens": 1024,
-            },
-            timeout=300,
-        )
-        assert response.status_code == 200, response.text
-        message = response.json()["choices"][0]["message"]
-        assert message.get("reasoning"), f"expected reasoning content, got {message!r}"
-        assert "<think>" not in (message.get("content") or "")
-        assert "</think>" not in (message.get("content") or "")
-        assert "<think>" not in message["reasoning"]
-        assert "</think>" not in message["reasoning"]
-
-    def test_reasoning_streaming_llama_cpp(self):
-        """Streaming: at least one delta carries ``reasoning``; concatenated
-        reasoning is non-empty; markers never leak into either field."""
-        with httpx.stream(
-            "POST",
-            f"{OPENAI_API_BASE}/chat/completions",
-            json={
-                "model": "chat-llama-reasoning",
-                "messages": [{"role": "user", "content": "Briefly: what is 7 times 8?"}],
-                "max_tokens": 1024,
-                "stream": True,
-            },
-            timeout=300,
-        ) as response:
-            assert response.status_code == 200
-            reasoning_parts: list[str] = []
-            content_parts: list[str] = []
-            reasoning_deltas = 0
-            for line in response.iter_lines():
-                if not line.startswith("data: "):
-                    continue
-                payload = line[len("data: ") :]
-                if payload == "[DONE]":
-                    break
-                chunk = json.loads(payload)
-                delta = chunk["choices"][0].get("delta") or {}
-                if delta.get("reasoning"):
-                    reasoning_parts.append(delta["reasoning"])
-                    reasoning_deltas += 1
-                if delta.get("content"):
-                    content_parts.append(delta["content"])
-
-        assert reasoning_deltas >= 1, "expected at least one reasoning delta"
-        assert "".join(reasoning_parts).strip(), "expected non-empty reasoning content"
-        assert "<think>" not in "".join(reasoning_parts)
-        assert "</think>" not in "".join(reasoning_parts)
-        assert "<think>" not in "".join(content_parts)
-        assert "</think>" not in "".join(content_parts)
-
-    def test_reasoning_with_tools_llama_cpp(self, client):
-        """Reasoning + tool calling in one round-trip.
-
-        Asserts that when a reasoning model also emits a tool call, the
-        single-pass ``ChatOutputStreamer`` populates BOTH
-        ``message.reasoning`` and ``message.tool_calls``, and that
-        ``finish_reason="tool_calls"``.
-        """
-        completion = client.chat.completions.create(
-            model="chat-llama-reasoning",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=[_WEATHER_TOOL],
-            tool_choice="auto",
-            max_tokens=1024,
-        )
-        message = completion.choices[0].message
-        # The OpenAI Python SDK exposes unknown fields via ``model_extra``.
-        reasoning = getattr(message, "reasoning", None) or message.model_extra.get("reasoning")
-        assert reasoning, f"expected reasoning, got message={message!r}"
-        assert "<think>" not in reasoning
-        tool_calls = message.tool_calls
-        assert tool_calls, f"expected a tool call, got content={message.content!r}, reasoning={reasoning!r}"
-        assert tool_calls[0].function.name == "get_weather"
-        assert "Paris" in tool_calls[0].function.arguments
-        assert completion.choices[0].finish_reason == "tool_calls"
-
-    def test_tool_markers_inside_reasoning_not_double_counted(self, client):
-        """Tool-call markers emitted *inside* ``<think>`` must route to
-        reasoning, never become real tool calls.
-
-        Coaxes the model into illustrating tool-call syntax inside its
-        reasoning and then making one actual call. The single-pass
-        ``ChatOutputStreamer`` must:
-
-        - Surface the illustrative ``<tool_call>...</tool_call>`` text
-          inside ``message.reasoning`` (proving it was treated as
-          reasoning bytes, not a real call).
-        - Emit exactly ONE ``tool_calls`` entry (the actual post-
-          reasoning call), not multiples.
-
-        Real models are non-deterministic; if the prompt fails to
-        produce literal markers in reasoning, we skip the
-        marker-routing assertion rather than flake — the
-        single-tool-call assertion still has value either way. The
-        deterministic equivalent is exercised in unit tests
-        (``tests/test_reasoning.py::TestComposition``).
-        """
-        completion = client.chat.completions.create(
-            model="chat-llama-reasoning",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an assistant with access to tools. When you think inside "
-                        "<think>...</think>, FIRST quote one example of tool-call syntax "
-                        "verbatim inside angle brackets — e.g. write the literal text "
-                        '<tool_call>{"name":"example","arguments":{}}</tool_call> as part '
-                        "of your reasoning to remind yourself of the format. THEN decide "
-                        "which real tool to call."
-                    ),
-                },
-                {"role": "user", "content": "What is the weather in Paris?"},
-            ],
-            tools=[_WEATHER_TOOL],
-            tool_choice="auto",
-            max_tokens=1024,
-        )
-        message = completion.choices[0].message
-        reasoning = getattr(message, "reasoning", None) or message.model_extra.get("reasoning") or ""
-        tool_calls = message.tool_calls or []
-
-        # Hard assertions: regardless of prompt compliance, the streamer
-        # must produce exactly one real tool call for the weather query.
-        assert tool_calls, (
-            f"expected exactly one real tool call, got content={message.content!r}, reasoning={reasoning!r}"
-        )
-        assert len(tool_calls) == 1, (
-            f"expected exactly one tool call (markers inside <think> must not be double-counted); "
-            f"got {len(tool_calls)} calls={[tc.function.name for tc in tool_calls]}"
-        )
-        assert tool_calls[0].function.name == "get_weather"
-        assert completion.choices[0].finish_reason == "tool_calls"
-
-        # Soft assertion: only meaningful if the model actually quoted
-        # the marker syntax inside its reasoning.
-        if "<tool_call>" in reasoning:
-            # Reasoning carries the literal marker text — confirms the
-            # streamer routed it to the reasoning view rather than
-            # parsing it as a real call (which would have shown up as a
-            # second tool_calls entry).
-            assert "</tool_call>" in reasoning, (
-                f"reasoning has an unmatched <tool_call> marker (open without close): {reasoning!r}"
-            )
-
-    def test_response_format_with_reasoning_deployment_rejected(self):
-        """A JSON grammar would exclude the `<` token, breaking the reasoning
-        parser's `<think>...` emission. The loader rejects the combination at
-        request time rather than producing malformed output.
-        """
-        response = httpx.post(
-            f"{OPENAI_API_BASE}/chat/completions",
-            json={
-                "model": "chat-llama-reasoning",
-                "messages": [{"role": "user", "content": "What is 2+2?"}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "answer",
-                        "schema": {
-                            "type": "object",
-                            "properties": {"answer": {"type": "string"}},
-                            "required": ["answer"],
-                        },
-                        "strict": True,
-                    },
-                },
-                "max_tokens": 256,
-            },
-            timeout=60,
-        )
-        assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
-        assert "reasoning" in response.text.lower()
-
-
-@pytest.mark.integration
 @pytest.mark.llama_server
 class TestChatLlamaServer:
     """End-to-end chat, tool calling, reasoning, and concurrency through the
-    new `llama_server` loader (a `llama-server` subprocess proxied over its
-    native OpenAI-compatible HTTP API, rather than in-process llama-cpp-python
-    bindings + modelship's own parsers).
-
-    Same Qwen3-0.6B-GGUF weights as `TestChatLlamaCppReasoning`'s
-    `chat-llama-reasoning` deployment, so these tests double as a parity check
-    between the two loaders on identical model output — except reasoning and
-    tool-call parsing is llama-server's own (`--jinja --reasoning-format
-    auto`), not modelship's `ChatOutputStreamer`.
+    `llama_server` loader (a `llama-server` subprocess proxied over its
+    native OpenAI-compatible HTTP API). Reasoning and tool-call parsing is
+    llama-server's own (`--jinja --reasoning-format auto`), not modelship's
+    `ChatOutputStreamer`.
     """
 
     @pytest.fixture(autouse=True, scope="class")
@@ -1427,9 +949,9 @@ class TestChatLlamaServer:
 
     def test_chat_completion(self, client):
         # This deployment is Qwen3-0.6B (reasoning-capable), unlike
-        # `chat-llama-mship`'s plain Qwen2.5 — it always emits a `<think>...`
-        # preamble before content, so the token budget needs headroom for
-        # reasoning to finish, not just the answer itself.
+        # `chat-llama-server-plain`'s plain Qwen2.5 — it always emits a
+        # `<think>...` preamble before content, so the token budget needs
+        # headroom for reasoning to finish, not just the answer itself.
         completion = client.chat.completions.create(
             model="chat-llama-server",
             messages=[{"role": "user", "content": "What is the capital of France?"}],
@@ -1458,7 +980,7 @@ class TestChatLlamaServer:
     def test_tool_calling_streaming_llama_server_loader(self, client):
         """Stream a tool call through llama-server and verify the delta
         sequence matches the OpenAI streaming contract, same shape as the
-        llama_cpp/transformers loader streaming tests."""
+        transformers loader streaming tests."""
         stream = client.chat.completions.create(
             model="chat-llama-server",
             messages=[{"role": "user", "content": "What is the weather in Paris?"}],
@@ -1564,12 +1086,10 @@ class TestChatLlamaServer:
         assert completion.choices[0].finish_reason == "tool_calls"
 
     def test_tool_markers_inside_reasoning_not_double_counted_llama_server(self, client):
-        """Mirrors `TestChatLlamaCppReasoning.test_tool_markers_inside_reasoning_not_double_counted`,
-        but for llama-server's own parser instead of modelship's
-        `ChatOutputStreamer` — the bug pattern (a `<tool_call>...</tool_call>`
-        illustration quoted inside `<think>` reasoning getting parsed as a
-        second, real call) is plausible for any single-pass parser, not just
-        modelship's.
+        """Verifies llama-server's own parser doesn't double-count a
+        `<tool_call>...</tool_call>` illustration quoted inside `<think>`
+        reasoning as a second, real call — a bug pattern plausible for any
+        single-pass parser, not just modelship's `ChatOutputStreamer`.
 
         Coaxes the model into illustrating tool-call syntax inside its
         reasoning before making one actual call, and asserts exactly one real
@@ -1618,9 +1138,7 @@ class TestChatLlamaServer:
             )
 
     def test_response_format_with_reasoning_llama_server(self, client):
-        """Free win vs. `llama_cpp` (which rejects this combo outright — see
-        `TestChatLlamaCppReasoning.test_response_format_with_reasoning_deployment_rejected`):
-        llama-server handles a JSON-schema `response_format` combined with
+        """llama-server handles a JSON-schema `response_format` combined with
         reasoning natively, routing `<think>...</think>` to `message.reasoning`
         and the schema-conforming JSON to `message.content`."""
         completion = client.chat.completions.create(
@@ -1690,11 +1208,11 @@ class TestChatLlamaServer:
         assert message.content, f"expected the free-text branch to stay reachable, got message={message!r}"
 
     def test_concurrent_requests_are_not_serialized(self, client):
-        """The loader's headline win over llama_cpp: llama-server's
-        `--parallel` slots let several requests run concurrently instead of
-        being serialized behind a single `asyncio.Lock` (as `LlamaCppInfer`
-        is). Time one request, then several at once, and assert the
-        concurrent batch finishes well under what full serialization would take.
+        """The loader's headline capability: llama-server's `--parallel` slots
+        let several requests run concurrently instead of being serialized
+        behind a single lock. Time one request, then several at once, and
+        assert the concurrent batch finishes well under what full
+        serialization would take.
         """
         prompt = {
             "model": "chat-llama-server",
@@ -1714,7 +1232,7 @@ class TestChatLlamaServer:
                 future.result()
         concurrent_elapsed = time.monotonic() - start
 
-        # Full serialization (llama_cpp's single-lock behavior) would take
+        # Full serialization (a single-lock loader's behavior) would take
         # roughly concurrency * baseline; llama-server's parallel slots should
         # keep this well under that.
         assert concurrent_elapsed < baseline * (concurrency - 0.5), (
@@ -1726,8 +1244,8 @@ class TestChatLlamaServer:
 @pytest.mark.integration
 @pytest.mark.llama_server
 class TestResponsesLlamaServer:
-    """The /v1/responses adapter is loader-agnostic: same smoke test as
-    `TestResponsesLlamaCpp`, run over the llama_server loader."""
+    """The /v1/responses adapter is loader-agnostic: same smoke test shape
+    as vLLM's, run over the llama_server loader."""
 
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
@@ -1767,12 +1285,11 @@ class TestResponsesLlamaServer:
 @pytest.mark.integration
 @pytest.mark.llama_server
 class TestChatLlamaServerResponseFormat:
-    """Mirrors `TestChatLlamaCpp`'s response_format cluster for the
-    llama_server loader. Uses `chat-llama-server-plain` (non-reasoning
-    Qwen2.5-0.5B) rather than `chat-llama-server` (Qwen3, always emits a
-    `<think>...` preamble) so these tests read the same as their llama_cpp
-    counterparts — response_format + reasoning together is covered
-    separately by `TestChatLlamaServer.test_response_format_with_reasoning_llama_server`.
+    """response_format tests for the llama_server loader. Uses
+    `chat-llama-server-plain` (non-reasoning Qwen2.5-0.5B) rather than
+    `chat-llama-server` (Qwen3, always emits a `<think>...` preamble) —
+    response_format + reasoning together is covered separately by
+    `TestChatLlamaServer.test_response_format_with_reasoning_llama_server`.
     """
 
     @pytest.fixture(autouse=True, scope="class")
@@ -1780,8 +1297,7 @@ class TestChatLlamaServerResponseFormat:
         model_deployer.deploy("chat-llama-server-plain")
 
     def test_response_format_json_object_without_schema_is_unconstrained(self, client):
-        """Real gap vs. `llama_cpp`, discovered while mirroring this test: llama-server's
-        own docs claim bare `{"type": "json_object"}` (no `schema` key) produces
+        """llama-server's own docs claim bare `{"type": "json_object"}` (no `schema` key) produces
         "plain JSON output" like other OpenAI-inspired providers, but verified
         directly against the b9859 binary (`curl` straight to `/v1/chat/completions`,
         bypassing modelship) this isn't enforced — the model answers in free
@@ -1896,7 +1412,7 @@ class TestChatLlamaServerGpu:
     Same GGUF and tool-calling shape as `TestChatLlamaServerResponseFormat`
     (CPU), but deployed with `num_gpus=1` so the actor gets a whole GPU and
     the loader passes `-ngl` for real offload instead of the forced `-ngl 0`
-    it uses when `num_gpus` is `0`. Mirrors `TestChatLlamaCppGpu`.
+    it uses when `num_gpus` is `0`.
     """
 
     @pytest.fixture(autouse=True, scope="class")
@@ -1950,8 +1466,8 @@ class TestChatTransformersLlama3Json:
     auto-detector picks ``llama3_json`` from the chat template's
     ``<|python_tag|>`` reference. This class is the first end-to-end
     exercise of the ``llama3_json`` parser on real model output (vLLM
-    has its own native parser; transformers/llama_cpp run through the
-    cross-loader registry).
+    has its own native parser; transformers runs through the cross-loader
+    registry).
     """
 
     @pytest.fixture(autouse=True, scope="class")
@@ -2174,8 +1690,7 @@ class TestChatTransformersReasoning:
     def test_reasoning_with_tools_transformers(self, client):
         """Reasoning + tool calling in one round-trip through transformers.
 
-        Mirrors ``TestChatLlamaCppReasoning.test_reasoning_with_tools_llama_cpp``:
-        the single-pass ``ChatOutputStreamer`` must populate BOTH
+        The single-pass ``ChatOutputStreamer`` must populate BOTH
         ``message.reasoning`` and ``message.tool_calls``.
         """
         completion = client.chat.completions.create(
@@ -2194,30 +1709,6 @@ class TestChatTransformersReasoning:
         assert tool_calls[0].function.name == "get_weather"
         assert "Paris" in tool_calls[0].function.arguments
         assert completion.choices[0].finish_reason == "tool_calls"
-
-
-@pytest.mark.integration
-@pytest.mark.llama_cpp
-class TestChatLimited:
-    @pytest.fixture(autouse=True, scope="class")
-    def _deploy(self, model_deployer):
-        model_deployer.deploy("chat-limited")
-
-    def test_tool_calling_explicit_opt_out(self, client):
-        """Verifies that ``tool_calls_enabled: false`` disables tools even when the model's chat template supports them."""
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-                },
-            }
-        ]
-        completion = client.chat.completions.create(
-            model="chat-limited", messages=[{"role": "user", "content": "Weather in London?"}], tools=tools
-        )
-        assert not completion.choices[0].message.tool_calls
 
 
 @pytest.mark.integration
@@ -2503,7 +1994,7 @@ class TestChatTransformersFunctionGemma:
         # character (transformers/generation/streamers.py: ``text.rfind(" ")+1``),
         # and FunctionGemma's args body contains no internal spaces, so the
         # whole body arrives in a single chunk and produces exactly one args
-        # delta. vLLM / llama_cpp loaders emit per-token and still satisfy >= 2.
+        # delta. vLLM / llama_server loaders emit per-token and still satisfy >= 2.
         assert collected["args_deltas"] >= 1, f"expected at least one args delta, got {collected['args_deltas']}"
         parsed_args = json.loads(call_0["arguments"])
         assert parsed_args.get("city")
@@ -2695,46 +2186,6 @@ class TestResponsesReasoning:
         assert reasoning_items, "expected a reasoning output item in the completed response"
 
 
-@pytest.mark.integration
-@pytest.mark.llama_cpp
-class TestResponsesLlamaCpp:
-    """The adapter is loader-agnostic: /v1/responses works over the llama_cpp
-    chat pipeline with no loader-side changes, same as it does over vLLM."""
-
-    @pytest.fixture(autouse=True, scope="class")
-    def _deploy(self, model_deployer):
-        model_deployer.deploy("chat-llama-mship")
-
-    def test_basic_response_through_llama_cpp(self, client):
-        resp = client.responses.create(
-            model="chat-llama-mship",
-            input="Say hello in one word.",
-            max_output_tokens=20,
-        )
-        assert resp.status in {"completed", "incomplete"}
-        assert resp.output_text.strip()
-
-    def test_streaming_response_through_llama_cpp(self, client):
-        # The streaming translator is loader-agnostic too: it consumes the same
-        # chat SSE chunk stream llama_cpp emits.
-        stream = client.responses.create(
-            model="chat-llama-mship",
-            input="Say hello in one word.",
-            max_output_tokens=20,
-            stream=True,
-        )
-        text_deltas: list[str] = []
-        completed = None
-        for event in stream:
-            if event.type == "response.output_text.delta":
-                text_deltas.append(event.delta)
-            elif event.type == "response.completed":
-                completed = event.response
-        assert "".join(text_deltas).strip()
-        assert completed is not None
-        assert completed.status in {"completed", "incomplete"}
-
-
 def _running_replicas(model_name: str) -> int:
     """Count RUNNING replicas of the deployment serving `model_name`, read from
     the Serve REST status API. The app name is `<model_name>-<fingerprint>`, so
@@ -2779,7 +2230,7 @@ def _hammer(client: OpenAI, model: str, stop: threading.Event, errors: list) -> 
 
 
 @pytest.mark.integration
-@pytest.mark.llama_cpp
+@pytest.mark.llama_server
 @pytest.mark.autoscaling
 class TestAutoscaling:
     """End-to-end check that a model's autoscaling_config actually drives Ray
@@ -2840,7 +2291,7 @@ def _poll(predicate, deadline_s: float) -> bool:
 
 
 @pytest.mark.integration
-@pytest.mark.llama_cpp
+@pytest.mark.llama_server
 @pytest.mark.gateway_ha
 class TestGatewayReplicaConsistency:
     """With 2 gateway replicas (the session starts --gateway-replicas 2), a deployed
@@ -2854,18 +2305,18 @@ class TestGatewayReplicaConsistency:
             client.models.list()
 
         # Deploy: the model becomes routable on every replica.
-        model_deployer.deploy("chat-limited")
-        assert _poll(lambda: _model_in_all_samples(client, "chat-limited"), deadline_s=60), (
+        model_deployer.deploy("chat-llama-server-plain")
+        assert _poll(lambda: _model_in_all_samples(client, "chat-llama-server-plain"), deadline_s=60), (
             "deployed model did not become routable on all gateway replicas"
         )
         completion = client.chat.completions.create(
-            model="chat-limited", messages=[{"role": "user", "content": "hi"}], max_tokens=5
+            model="chat-llama-server-plain", messages=[{"role": "user", "content": "hi"}], max_tokens=5
         )
         assert completion.choices[0].message.content is not None
 
-        # Reconcile to a different model — chat-limited is removed everywhere.
-        model_deployer.deploy("chat-llama-mship")
-        assert _poll(lambda: _model_in_no_samples(client, "chat-limited"), deadline_s=60), (
+        # Reconcile to a different model — chat-llama-server-plain is removed everywhere.
+        model_deployer.deploy("chat-llama-server")
+        assert _poll(lambda: _model_in_no_samples(client, "chat-llama-server-plain"), deadline_s=60), (
             "removed model still routable on some gateway replica"
         )
 
@@ -2876,5 +2327,5 @@ class TestGatewayReplicaConsistency:
         for _ in range(20):
             with pytest.raises(openai.NotFoundError):
                 client.chat.completions.create(
-                    model="chat-limited", messages=[{"role": "user", "content": "hi"}], max_tokens=5
+                    model="chat-llama-server-plain", messages=[{"role": "user", "content": "hi"}], max_tokens=5
                 )

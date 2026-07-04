@@ -25,21 +25,11 @@ def _is_explicit_tool_opt_out(cfg) -> bool:
 
     - vllm: ``enable_auto_tool_choice: false`` — user disabled tool calling.
     - transformers: ``tool_calls_enabled: false`` — user disabled tool calling.
-    - llama_cpp: ``tool_calls_enabled: false`` (disabled) OR ``chat_format`` set
-      (user wants llama-cpp-python's own function-calling handler — we must not
-      also wire up our parser).
     """
     if cfg.loader == ModelLoader.vllm:
         return cfg.vllm_engine_kwargs is not None and cfg.vllm_engine_kwargs.enable_auto_tool_choice is False
     if cfg.loader == ModelLoader.transformers:
         return cfg.transformers_config is not None and cfg.transformers_config.tool_calls_enabled is False
-    if cfg.loader == ModelLoader.llama_cpp:
-        if cfg.llama_cpp_config is None:
-            return False
-        if cfg.llama_cpp_config.tool_calls_enabled is False:
-            return True
-        if cfg.llama_cpp_config.chat_format is not None:
-            return True
     return False
 
 
@@ -166,13 +156,15 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
 
         # GGUF is not supported on the vllm loader: vLLM 0.24 moved GGUF out of
         # tree, and the only external plugin is incompatible with 0.24's
-        # quantization API. Reject early with a pointer to llama_cpp instead of
-        # letting vLLM misparse the .gguf as a config.json deep in engine init.
+        # quantization API. Reject early with a pointer to llama_server instead
+        # of letting vLLM misparse the .gguf as a config.json deep in engine init.
         if cfg.loader == ModelLoader.vllm and cfg._resolved_path.lower().endswith(".gguf"):
             raise ValueError(
                 f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
-                f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_cpp` for GGUF models, or point "
-                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant)."
+                f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_server` for GGUF models, or point "
+                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant — this is "
+                f"also the supported path for gemma models, whose tool calling llama.cpp's parsers can't "
+                f"handle; see config/examples/vllm-cpu.yaml)."
             )
 
 
@@ -184,7 +176,8 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     onto `_resolved_tool_call_parser` so loader code has a single source of
     truth and never re-implements the precedence.
 
-    Auto-detection runs for vllm, transformers, and llama_cpp. diffusers has
+    Auto-detection runs for vllm and transformers. llama_server does its own
+    tool-call detection internally, unrelated to this registry; diffusers has
     no chat path; custom is plugin-managed.
 
     Behavior per model:
@@ -198,7 +191,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     """
     registered = set(available_parsers())
     for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
+        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers):
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue
@@ -298,7 +291,7 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
     - Not detected: leaves None (reasoning disabled).
     """
     for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
+        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers):
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue

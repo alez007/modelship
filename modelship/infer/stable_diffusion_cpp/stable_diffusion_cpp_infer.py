@@ -23,7 +23,7 @@ class StableDiffusionCppInfer(BaseInfer):
     """CPU-only image-generation loader backed by stable-diffusion.cpp (via the
     stable-diffusion-cpp-python bindings). Loads GGUF-quantized single-file
     diffusion checkpoints (SD1.5/SDXL/SD-Turbo, all-in-one Flux) and serves the
-    OpenAI images endpoints. Structurally mirrors the llama_cpp loader."""
+    OpenAI images endpoints."""
 
     def __init__(self, model_config: ModelshipModelConfig):
         super().__init__(model_config)
@@ -40,7 +40,7 @@ class StableDiffusionCppInfer(BaseInfer):
         merged = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
         self.config = user_config.model_copy(update=merged)
 
-        # Verbose native logging when MSHIP_LOG_LEVEL is TRACE (mirrors llama_cpp).
+        # Verbose native logging when MSHIP_LOG_LEVEL is TRACE.
         mship_log_level = os.environ.get("MSHIP_LOG_LEVEL", "INFO").upper()
         self._verbose = mship_log_level == "TRACE"
 

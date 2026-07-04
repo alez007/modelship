@@ -4,7 +4,7 @@ Loaders that hand a chat template a list of OpenAI messages plus a list of
 tool schemas use these helpers to interpret the request's ``tool_choice``:
 ``resolve_tools_for_request`` shapes the tools list passed into the prompt and
 ``request_forces_tool_call`` reports whether the request mandates a tool call.
-Enforcement of that mandate is the loader's job (e.g. the llama_cpp tool-call
+Enforcement of that mandate is the loader's job (e.g. a constrained-decoding
 grammar) — these helpers only express intent.
 """
 

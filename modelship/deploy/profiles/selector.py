@@ -35,7 +35,7 @@ from modelship.logging import get_logger
 logger = get_logger("deploy.profiles.selector")
 
 # Fraction of free RAM a stack may occupy — headroom for the OS, page cache, and
-# KV-cache growth. Matches the llama_cpp preflight's RAM util.
+# KV-cache growth. Matches the llama_server preflight's RAM util.
 _UTILIZATION = 0.8
 
 # Absolute floor: below this we refuse outright (the user's "don't even try").

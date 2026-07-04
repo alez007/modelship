@@ -26,10 +26,6 @@ If you previously used the old `/root/.cache/huggingface` mount path, switch to 
 
 Ray's object store needs shared memory. Always pass `--shm-size=8g` (or larger for big models). Without it, you'll see Ray worker crashes or silent hangs during deployment.
 
-## `n_gpu_layers` ignored with llama_cpp loader
-
-`n_gpu_layers` is honored on the GPU build (`MSHIP_VARIANT=gpu`) when the model's `num_gpus` is set to `1` or more (a whole integer — fractional `num_gpus` is rejected at config time, since llama.cpp has no VRAM-fraction knob). It's forced to `0` and a warning is logged when either `num_gpus` is `0`, or the installed `llama-cpp-python` was built without GPU support (e.g. the CPU image's plain PyPI wheel).
-
 ## arm64 vs amd64 image selection
 
 Both `ghcr.io/alez007/modelship:latest` and `:latest-cpu` are multi-arch since v0.1.25. Docker picks the right one automatically for your host. If you need to force an arch (e.g. cross-building), use `--platform linux/arm64` or `linux/amd64`.

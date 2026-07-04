@@ -54,7 +54,6 @@ _LIB_LOGGERS = (
     "vllm",
     "transformers",
     "diffusers",
-    "llama_cpp",
     "flashinfer",
     "huggingface_hub",
 )
