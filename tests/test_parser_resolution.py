@@ -15,7 +15,6 @@ from modelship.infer.infer_config import (
     ModelshipConfig,
     ModelshipModelConfig,
     ModelUsecase,
-    TransformersConfig,
     VllmEngineConfig,
 )
 from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning
@@ -116,14 +115,6 @@ class TestResolveToolParsersStoresExplicit:
         resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_tool_call_parser == "hermes"
 
-    def test_transformers_explicit_stored(self):
-        cfg = _make_cfg(
-            loader=ModelLoader.transformers,
-            transformers_config=TransformersConfig(tool_call_parser="hermes"),
-        )
-        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_tool_call_parser == "hermes"
-
     def test_unknown_explicit_raises(self):
         cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="not-a-real-parser"))
         with pytest.raises(ValueError, match="not-a-real-parser"):
@@ -138,11 +129,11 @@ class TestResolveToolParsersStoresExplicit:
 class TestResolveSkipSpecialTokens:
     """``_resolved_skip_special_tokens`` is pinned by the parser's flag.
 
-    The transformers loader reads this at startup to decide whether to
-    flip ``TextIteratorStreamer(skip_special_tokens=False)``. ``None``
-    means "loader keeps its own default (True)"; ``False`` means "the
-    parser's marker is registered as a special token and would be
-    stripped — keep specials in the stream and noise-strip the rest."
+    Loaders that detokenize raw model output read this at startup to
+    decide whether to flip ``skip_special_tokens=False``. ``None`` means
+    "loader keeps its own default (True)"; ``False`` means "the parser's
+    marker is registered as a special token and would be stripped — keep
+    specials in the stream and noise-strip the rest."
     """
 
     def test_hermes_leaves_skip_specials_default(self):
@@ -158,9 +149,6 @@ class TestResolveSkipSpecialTokens:
     def test_mistral_pins_skip_specials_false(self):
         # Mistral parser's marker is a special added token; loader must
         # keep specials so the parser sees `[TOOL_CALLS]`.
-        cfg = _make_cfg(
-            loader=ModelLoader.transformers,
-            transformers_config=TransformersConfig(tool_call_parser="mistral"),
-        )
+        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="mistral"))
         resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_skip_special_tokens is False

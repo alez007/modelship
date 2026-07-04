@@ -136,7 +136,7 @@ class FunctionGemmaToolCallParser(Gemma4ToolCallParser):
     The envelope and string-delim tokens (``<start_function_call>``,
     ``<end_function_call>``, ``<escape>``) are registered as special tokens
     on the FunctionGemma tokenizer, so ``markers_are_specials = True`` so
-    the transformers loader keeps them visible to the parser.
+    loaders that detokenize raw output keep them visible to the parser.
     """
 
     name = "function_gemma"

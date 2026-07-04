@@ -32,29 +32,10 @@ conflicts = [[
 
 [manifest]
 members = [
-    "bark",
     "kokoroonnx",
     "modelship",
     "orpheus",
     "whispercpp",
-]
-
-[[package]]
-name = "accelerate"
-version = "1.13.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "psutil" },
-    { name = "pyyaml" },
-    { name = "safetensors" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/14/787e5498cd062640f0f3d92ef4ae4063174f76f9afd29d13fc52a319daae/accelerate-1.13.0.tar.gz", hash = "sha256:d631b4e0f5b3de4aff2d7e9e6857d164810dfc3237d54d017f075122d057b236", size = 402835, upload-time = "2026-03-04T19:34:12.359Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/46/02ac5e262d4af18054b3e922b2baedbb2a03289ee792162de60a865defc5/accelerate-1.13.0-py3-none-any.whl", hash = "sha256:cf1a3efb96c18f7b152eb0fa7490f3710b19c3f395699358f08decca2b8b62e0", size = 383744, upload-time = "2026-03-04T19:34:10.313Z" },
 ]
 
 [[package]]
@@ -261,11 +242,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/7d/6b/d52e42361e1aa0070
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b8/3fe70c75fe32afc4bb507f75563d39bc5642255d1d94f1f23604725780bf/babel-2.17.0-py3-none-any.whl", hash = "sha256:4d0b53093fdfb4b21c92b5213dba5a1b23885afa8383709427046b21c366e5f2", size = 10182537, upload-time = "2025-02-01T15:17:37.39Z" },
 ]
-
-[[package]]
-name = "bark"
-version = "0.1.0"
-source = { editable = "plugins/bark" }
 
 [[package]]
 name = "bitsandbytes"
@@ -1668,12 +1644,8 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-bark = [
-    { name = "bark" },
-]
 cpu = [
     { name = "onnxruntime" },
-    { name = "sentence-transformers" },
     { name = "stable-diffusion-cpp-python" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
@@ -1691,13 +1663,11 @@ dev = [
     { name = "ruff" },
 ]
 gpu = [
-    { name = "accelerate" },
     { name = "bitsandbytes" },
     { name = "diffusers" },
     { name = "flashinfer-python" },
     { name = "nvidia-ml-py" },
     { name = "onnxruntime-gpu" },
-    { name = "sentence-transformers" },
     { name = "stable-diffusion-cpp-python" },
     { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
     { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -1720,10 +1690,8 @@ whispercpp = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=1.6.0" },
     { name = "argparse", specifier = ">=1.4.0" },
     { name = "asyncio", specifier = ">=4.0.0" },
-    { name = "bark", marker = "extra == 'bark'", editable = "plugins/bark" },
     { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.49.0" },
     { name = "diffusers", marker = "extra == 'gpu'", specifier = ">=0.31.0" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.36.2" },
@@ -1754,8 +1722,6 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "scipy", specifier = ">=1.16.1" },
-    { name = "sentence-transformers", marker = "extra == 'cpu'", specifier = ">=3.0.0" },
-    { name = "sentence-transformers", marker = "extra == 'gpu'", specifier = ">=3.0.0" },
     { name = "soundfile", specifier = ">=0.13.0" },
     { name = "stable-diffusion-cpp-python", marker = "extra == 'cpu'", specifier = ">=0.4.7" },
     { name = "stable-diffusion-cpp-python", marker = "extra == 'gpu'", specifier = ">=0.4.7" },
@@ -1771,7 +1737,7 @@ requires-dist = [
     { name = "vllm", extras = ["audio"], marker = "extra == 'gpu'", specifier = "==0.24.0" },
     { name = "whispercpp", marker = "extra == 'whispercpp'", editable = "plugins/whispercpp" },
 ]
-provides-extras = ["gpu", "cpu", "kokoroonnx", "bark", "orpheus", "whispercpp", "otel", "dev"]
+provides-extras = ["gpu", "cpu", "kokoroonnx", "orpheus", "whispercpp", "otel", "dev"]
 
 [[package]]
 name = "mpmath"
@@ -3485,27 +3451,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9b/4c/25e499df952528004ff3f7f8e1e63d20773ed30141ed17c285adb5446f55/segments-2.3.0.tar.gz", hash = "sha256:381143f66f59eaf45398f5bb57f899d6501be011048ec5f92754c9b24b181615", size = 18193, upload-time = "2025-02-20T07:55:42.273Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/18/cb614939ccd46d336013cab705f1e11540ec9c68b08ecbb854ab893fc480/segments-2.3.0-py2.py3-none-any.whl", hash = "sha256:30a5656787071430cd22422e04713b2a9beabe1a97d2ebf37f716a56f90577a3", size = 15705, upload-time = "2025-02-20T07:55:39.755Z" },
-]
-
-[[package]]
-name = "sentence-transformers"
-version = "5.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "tqdm" },
-    { name = "transformers" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/19/b0/fcc810aa1747e96eb2e342e16173dbebbff85b8ccd079f35b32874c5f6ce/sentence_transformers-5.4.0.tar.gz", hash = "sha256:ef0c129d653f736df5fd74d46af11a2234328a32cddb1d91a1975c5f6cccc194", size = 428330, upload-time = "2026-04-09T13:34:12.642Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/d4/58f3e1308c8d15cae83407bd651542b62155a2b3248e0290a724e80fd124/sentence_transformers-5.4.0-py3-none-any.whl", hash = "sha256:4e5ac9a19244153f3f4074d898e664990408d7b077fb1d1d0dc9cb8a9316feac", size = 570836, upload-time = "2026-04-09T13:34:11.298Z" },
 ]
 
 [[package]]

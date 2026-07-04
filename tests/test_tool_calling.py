@@ -543,8 +543,9 @@ class TestMarkersAreSpecialsFlag:
         assert Llama3JsonToolCallParser().markers_are_specials is False
 
     def test_mistral_marker_is_a_special_token(self):
-        # Drives the transformers loader to flip ``skip_special_tokens=False``
-        # at startup so ``[TOOL_CALLS]`` survives detokenization.
+        # Drives loaders that detokenize raw output to flip
+        # ``skip_special_tokens=False`` at startup so ``[TOOL_CALLS]``
+        # survives detokenization.
         assert MistralToolCallParser().markers_are_specials is True
 
 

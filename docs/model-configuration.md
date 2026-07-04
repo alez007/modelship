@@ -112,7 +112,7 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `name` | string | Model identifier used in API requests |
 | `model` | string | HuggingFace repo ID, local path, or `repo:filename` (see [Model source](#model-source)). Required for built-in loaders; optional for `loader: custom` |
 | `usecase` | string | `generate`, `embed`, `transcription`, `translation`, `tts`, or `image` |
-| `loader` | string | `vllm`, `transformers`, `diffusers`, `llama_server`, `stable_diffusion_cpp`, or `custom` |
+| `loader` | string | `vllm`, `diffusers`, `llama_server`, `stable_diffusion_cpp`, or `custom` |
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
@@ -120,12 +120,11 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `autoscaling_config` | object | Autoscale replicas with load instead of a fixed `num_replicas` (see [Autoscaling](#autoscaling)). Mutually exclusive with `num_replicas`. |
 | `max_ongoing_requests` | int | Per-replica Ray Serve concurrency cap (default: Ray Serve's own default of `100`). Streaming requests hold a slot for the whole generation, so a low cap throttles upstream of the engine; raise it for high-concurrency models. Omit to inherit the default. |
 | `vllm_engine_kwargs` | object | Passed directly to the vLLM engine (see below) |
-| `transformers_config` | object | Transformers loader options (see below) |
 | `diffusers_config` | object | Diffusers pipeline options (see below) |
 | `llama_server_config` | object | llama-server loader options (see below) |
 | `stable_diffusion_cpp_config` | object | stable-diffusion.cpp loader options (see below) |
 | `plugin_config` | object | Plugin-specific options passed through to the plugin |
-| `chat_template_kwargs` | object | Extra variables forwarded into the chat-template render on text loaders (`vllm`, `transformers`) — e.g. `enable_thinking: false` for Qwen3. Only has an effect if the model's template branches on the key. A per-request `chat_template_kwargs` overrides the model default on `vllm`. |
+| `chat_template_kwargs` | object | Extra variables forwarded into the chat-template render on text loaders (`vllm`) — e.g. `enable_thinking: false` for Qwen3. Only has an effect if the model's template branches on the key. A per-request `chat_template_kwargs` overrides the model default on `vllm`. |
 
 ## Model source
 
@@ -308,94 +307,6 @@ models:
       trust_remote_code: true
 ```
 
-## Transformers Loader
-
-The `transformers` loader uses PyTorch with HuggingFace Transformers. Supports chat/generation, embeddings, transcription, translation, and TTS. Unlike the vLLM loader, it can run entirely on CPU — making it ideal for smaller models, development, or environments without a GPU.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `device` | string | `cpu` | Device to run on (`cpu`, `cuda`, `cuda:0`, etc.) |
-| `torch_dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`, `float32`) |
-| `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the model constructor |
-| `pipeline_kwargs` | object | `{}` | Extra keyword arguments passed to the pipeline at inference time |
-| `tool_call_parser` | string | auto | Parser used to turn raw model output into OpenAI `tool_calls`. Currently supported: `hermes` (Hermes-2-Pro / Qwen2.5-Instruct / many community fine-tunes that emit `<tool_call>{...}</tool_call>` markers), `qwen3_coder` (Qwen3-Coder family — same `<tool_call>` envelope but an XML body of `<function=name><parameter=key>value</parameter></function>`; parameter values are returned as strings), `mistral` (Mistral 7B Instruct v0.3+ / Mistral Small/Large that emit `[TOOL_CALLS][...]`), `llama3_json` (Llama-3.1 / Llama-3.2 Instruct emitting bare `{"name": "...", "parameters": {...}}`). Auto-detected from the chat template when omitted. |
-
-### Chat / Text Generation (CPU)
-
-```yaml
-models:
-  - name: qwen
-    model: Qwen/Qwen3-0.6B
-    usecase: generate
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### Chat with Tool Calling (CPU)
-
-The transformers loader renders `tools` into the prompt via the model's chat
-template and parses the output back into OpenAI `tool_calls`. The model must
-have been trained on a Hermes-style tool format (Qwen2.5-Instruct, Hermes-2,
-many community fine-tunes); the parser is selected via `tool_call_parser`.
-
-```yaml
-models:
-  - name: qwen-tools
-    model: Qwen/Qwen2.5-0.5B-Instruct
-    usecase: generate
-    loader: transformers
-    num_cpus: 2
-    transformers_config:
-      device: "cpu"
-      tool_call_parser: hermes  # this is the default; shown for clarity
-```
-
-### Speech-to-Text (CPU)
-
-Audio is automatically decoded and resampled to the model's expected sample rate (e.g. 16kHz for Whisper).
-
-```yaml
-models:
-  - name: whisper
-    model: openai/whisper-small
-    usecase: transcription
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### Embeddings (CPU)
-
-Uses `sentence-transformers` under the hood.
-
-```yaml
-models:
-  - name: embeddings
-    model: sentence-transformers/all-MiniLM-L6-v2
-    usecase: embed
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### TTS (GPU)
-
-```yaml
-models:
-  - name: my-tts
-    model: some-org/some-tts-model
-    usecase: tts
-    loader: transformers
-    num_gpus: 0.20
-    transformers_config:
-      device: "cuda:0"
-```
-
 ## Diffusers Loader
 
 The `diffusers` loader uses HuggingFace Diffusers for image generation. Any model supported by `AutoPipelineForText2Image` works out of the box.
@@ -521,7 +432,6 @@ The `custom` loader delegates to a plugin module. The `plugin` field is required
 
 See each plugin's README for configuration details:
 - [Kokoro ONNX TTS](../plugins/kokoroonnx/README.md)
-- [Bark TTS](../plugins/bark/README.md)
 - [Orpheus TTS](../plugins/orpheus/README.md)
 - [whisper.cpp STT](../plugins/whispercpp/README.md)
 

@@ -24,12 +24,9 @@ def _is_explicit_tool_opt_out(cfg) -> bool:
     that excludes our parser:
 
     - vllm: ``enable_auto_tool_choice: false`` — user disabled tool calling.
-    - transformers: ``tool_calls_enabled: false`` — user disabled tool calling.
     """
     if cfg.loader == ModelLoader.vllm:
         return cfg.vllm_engine_kwargs is not None and cfg.vllm_engine_kwargs.enable_auto_tool_choice is False
-    if cfg.loader == ModelLoader.transformers:
-        return cfg.transformers_config is not None and cfg.transformers_config.tool_calls_enabled is False
     return False
 
 
@@ -139,10 +136,7 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
         if cfg.loader == ModelLoader.custom:
             continue
         assert cfg.model is not None  # validator guarantees this for built-in loaders
-        trust_remote_code = bool(
-            (cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)
-            or (cfg.transformers_config and cfg.transformers_config.trust_remote_code)
-        )
+        trust_remote_code = bool(cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)
         logger.info("Resolving model source for '%s': %s", cfg.name, cfg.model)
         cfg._resolved_path = resolve_model_source(cfg.model, trust_remote_code=trust_remote_code)
         logger.info("Resolved '%s' -> %s", cfg.name, cfg._resolved_path)
@@ -176,9 +170,9 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     onto `_resolved_tool_call_parser` so loader code has a single source of
     truth and never re-implements the precedence.
 
-    Auto-detection runs for vllm and transformers. llama_server does its own
-    tool-call detection internally, unrelated to this registry; diffusers has
-    no chat path; custom is plugin-managed.
+    Auto-detection runs for vllm. llama_server does its own tool-call
+    detection internally, unrelated to this registry; diffusers has no chat
+    path; custom is plugin-managed.
 
     Behavior per model:
     - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): leaves
@@ -191,7 +185,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     """
     registered = set(available_parsers())
     for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers):
+        if cfg.loader != ModelLoader.vllm:
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue
@@ -199,11 +193,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             logger.info("Tool-call resolution skipped for '%s' (explicit opt-out).", cfg.name)
             continue
 
-        explicit = None
-        if cfg.loader == ModelLoader.transformers and cfg.transformers_config:
-            explicit = cfg.transformers_config.tool_call_parser
-        elif cfg.loader == ModelLoader.vllm and cfg.vllm_engine_kwargs:
-            explicit = cfg.vllm_engine_kwargs.tool_call_parser
+        explicit = cfg.vllm_engine_kwargs.tool_call_parser if cfg.vllm_engine_kwargs else None
 
         if explicit is not None:
             if explicit not in registered:
@@ -291,7 +281,7 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
     - Not detected: leaves None (reasoning disabled).
     """
     for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers):
+        if cfg.loader != ModelLoader.vllm:
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue

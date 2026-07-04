@@ -4,10 +4,10 @@
 
 Modelship is built on [Ray Serve](https://docs.ray.io/en/latest/serve/) for deployment orchestration and a **FastAPI gateway** that exposes an OpenAI-compatible API. Multiple inference backends are supported:
 
-- **[vLLM](https://github.com/vllm-project/vllm)** — high-throughput GPU inference with continuous batching and PagedAttention
-- **[HuggingFace Transformers](https://github.com/huggingface/transformers)** — CPU and lightweight GPU inference for chat, embeddings, transcription, and TTS
+- **[vLLM](https://github.com/vllm-project/vllm)** — high-throughput inference with continuous batching and PagedAttention, on GPU or CPU
+- **llama-server** — a proxied `llama-server` subprocess for quantized GGUF chat, embeddings, and vision on CPU or GPU
 - **[HuggingFace Diffusers](https://github.com/huggingface/diffusers)** — image generation via `AutoPipelineForText2Image`
-- **Plugin system** — custom TTS and STT backends (Kokoro ONNX, Bark, Orpheus, whisper.cpp)
+- **Plugin system** — custom TTS and STT backends (Kokoro ONNX, Orpheus, whisper.cpp)
 
 ## Request Lifecycle
 
@@ -15,7 +15,7 @@ Modelship is built on [Ray Serve](https://docs.ray.io/en/latest/serve/) for depl
 2. The gateway identifies the target model from the request body
 3. A `RequestWatcher` begins monitoring the client connection for disconnects
 4. The request is forwarded to the model's Ray Serve deployment via a `RawRequestProxy` (serializable headers + cancellation event)
-5. The model deployment runs inference (vLLM, transformers, or plugin)
+5. The model deployment runs inference (vLLM, llama-server, diffusers, or plugin)
 6. Response streams back as JSON or SSE
 7. If the client disconnects mid-inference, the watcher fires the cancellation event, freeing GPU resources immediately
 
@@ -38,12 +38,11 @@ Each deployment uses one of the following loaders:
 |--------|---------|-----------|--------------|
 | `vllm` | vLLM engine | Chat/generation, embeddings, transcription, translation | No — installs on GPU or CPU |
 | `llama_server` | llama-server subprocess | Chat/generation, embeddings, vision (GGUF models) | No — runs on CPU or GPU (GGUF offload) |
-| `transformers` | PyTorch + HuggingFace | Chat/generation, embeddings, transcription, translation, TTS | No — runs on CPU or GPU |
 | `diffusers` | HuggingFace Diffusers | Image generation (any `AutoPipelineForText2Image` model) | Yes |
 | `stable_diffusion_cpp` | stable-diffusion.cpp | Image generation (GGUF models: SD1.5/SDXL/SD-Turbo, all-in-one Flux) | No — currently CPU-only |
-| `custom` | Plugin system | TTS backends (Kokoro ONNX, Bark, Orpheus), STT backends (whisper.cpp) | No |
+| `custom` | Plugin system | TTS backends (Kokoro ONNX, Orpheus), STT backends (whisper.cpp) | No |
 
-The `transformers` loader is ideal for CPU-only deployments, smaller models, or development/testing without a GPU. It uses HuggingFace `pipeline()` under the hood and handles audio resampling automatically for speech-to-text models. The `llama_server` loader provides high-efficiency inference for quantized GGUF models on CPU or GPU (`n_gpu_layers` offload, whole GPUs only — fractional `num_gpus` is rejected) by proxying a `llama-server` subprocess's own OpenAI-compatible API. The `vllm` loader provides higher throughput with continuous batching and PagedAttention, on GPU or CPU.
+The `llama_server` loader provides high-efficiency inference for quantized GGUF models on CPU or GPU (`n_gpu_layers` offload, whole GPUs only — fractional `num_gpus` is rejected) by proxying a `llama-server` subprocess's own OpenAI-compatible API. The `vllm` loader provides higher throughput with continuous batching and PagedAttention, on GPU or CPU.
 
 ## Responses API (`/v1/responses`)
 
@@ -54,7 +53,7 @@ The `transformers` loader is ideal for CPU-only deployments, smaller models, or 
 
 **Supported:** text, reasoning (as a first-class `reasoning` output item), and client-driven tool calling (`function_call` / `function_call_output` round-trip), streaming and non-streaming — on the `vllm` and `llama_server` loaders.
 
-**404s on other loaders** (`transformers`, `diffusers`, `custom`) — there is no generic fallback; a loader must implement `create_response` itself.
+**404s on other loaders** (`diffusers`, `custom`) — there is no generic fallback; a loader must implement `create_response` itself.
 
 **Rejected with a clear 400** (rather than silently dropped): `previous_response_id`, `background`, and hosted built-in tools (e.g. `web_search`). These require server-side conversation state, which `/v1/responses` does not yet keep — `store` is accepted but never persisted (the response echoes `store: false`). Encrypted reasoning (`reasoning.encrypted_content`) is also not implemented.
 
@@ -101,7 +100,7 @@ See [Plugin Development](plugins.md) for details.
 | `modelship/infer/model_deployment.py` | Ray Serve deployment actor |
 | `modelship/infer/infer_config.py` | Pydantic config models and protocols |
 | `modelship/infer/vllm/vllm_infer.py` | vLLM engine wrapper |
-| `modelship/infer/transformers/transformers_infer.py` | Transformers pipeline wrapper (CPU/GPU) |
+| `modelship/infer/llama_server/llama_server_infer.py` | llama-server subprocess proxy (GGUF chat/embed/vision) |
 | `modelship/infer/diffusers/diffusers_infer.py` | Diffusers pipeline wrapper |
 | `modelship/infer/stable_diffusion_cpp/stable_diffusion_cpp_infer.py` | stable-diffusion.cpp wrapper (CPU image gen) |
 | `modelship/plugins/base_plugin.py` | Plugin base classes |

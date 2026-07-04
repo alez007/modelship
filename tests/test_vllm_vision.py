@@ -91,7 +91,7 @@ def _make_infer(*, supports_image: bool) -> VllmInfer:
 @pytest.mark.asyncio
 async def test_image_part_rejected_on_text_only_model_with_400():
     """A text-only model receiving image_url returns a 400 BadRequest with
-    our error envelope — same shape transformers and llama.cpp produce."""
+    our error envelope — same shape llama.cpp produces."""
     infer = _make_infer(supports_image=False)
     request = ChatCompletionRequest(
         model="llm",

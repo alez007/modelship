@@ -69,7 +69,7 @@ The Docker image's `CMD` is `uv run --no-sync mship_deploy.py` (against the venv
 - `modelship/openai/api.py` — FastAPI gateway. Uses `RequestWatcher` + a single shared `DisconnectRegistry` Ray actor (keyed by request id) to propagate client disconnects across process boundaries.
 - `modelship/infer/model_deployment.py` — the single `@serve.deployment` actor class; lazily imports the right backend based on `config.loader`.
 - `modelship/infer/infer_config.py` — pydantic config schemas **and** `RawRequestProxy` / `DisconnectRegistry`. `RawRequestProxy` exists because FastAPI `Request` cannot cross Ray process boundaries; any new attribute vLLM reads from `raw_request` must be added there.
-- `modelship/infer/{vllm,transformers,diffusers,custom}/` — one subdir per loader. Each has an `*_infer.py` and (for non-custom) an `openai/` adapter subpackage. `modelship/infer/llama_server/llama_server_infer.py` is a flat file with no `openai/` subpackage — it proxies a `llama-server` subprocess's own OpenAI-compatible HTTP API rather than parsing output in-process.
+- `modelship/infer/{vllm,diffusers,custom}/` — one subdir per loader. Each has an `*_infer.py` and (for non-custom) an `openai/` adapter subpackage. `modelship/infer/llama_server/llama_server_infer.py` is a flat file with no `openai/` subpackage — it proxies a `llama-server` subprocess's own OpenAI-compatible HTTP API rather than parsing output in-process.
 - `modelship/plugins/base_plugin.py` — `BasePlugin` ABC that plugin packages subclass as `ModelPlugin`.
 - `plugins/*` — workspace packages, each opt-in via a root extra. The plugin module name and the extra name must match (`ensure_plugin()` calls `importlib.import_module(config.plugin)` and the error message says `uv sync --extra <plugin>`).
 

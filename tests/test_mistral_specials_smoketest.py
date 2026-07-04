@@ -3,8 +3,11 @@
 Background
 ----------
 The ``MistralToolCallParser`` declares ``start_marker = "[TOOL_CALLS]"``.
-The transformers loader streams generation through ``TextIteratorStreamer``
-with ``skip_special_tokens=True`` ([modelship/infer/transformers/openai/serving_chat.py:221]).
+A loader that detokenizes raw model output with ``skip_special_tokens=True``
+would strip that marker before it reaches our parser if the tokenizer
+registers it as a special token — this is exactly why
+``_resolved_skip_special_tokens`` gets pinned to ``False`` for the mistral
+parser (see ``resolve_all_tool_parsers``).
 
 If a Mistral tokenizer registers ``[TOOL_CALLS]`` as an *additional special
 token*, then on a real Mistral model run, the marker would be stripped from
@@ -19,8 +22,8 @@ This file confirms or rejects the hypothesis in two parts:
    string, decode with each ``skip_special_tokens`` setting, and verify
    that the stripping behavior is what we feared. This tests the HF
    contract, not Mistral specifically — it tells us whether *any* tokenizer
-   that registers the marker as special would lose it on the transformers
-   loader path.
+   that registers the marker as special would lose it when a loader
+   detokenizes with specials skipped.
 
 2. **Real Mistral** (skipped if the tokenizer can't be loaded): load a
    real Mistral tokenizer and check whether ``[TOOL_CALLS]`` actually
@@ -75,13 +78,12 @@ class TestSyntheticAdditionalSpecialTokenStripping:
     def test_roundtrip_strips_marker_when_skip_special_tokens_true(self, tokenizer_with_tool_calls_special):
         """The hypothesis: when ``[TOOL_CALLS]`` is an additional special
         token, ``skip_special_tokens=True`` removes it from the decoded
-        text — which is exactly what the transformers loader does today.
+        text.
 
-        If this assertion holds, the just-merged Mistral parser cannot
-        activate on the transformers loader for any tokenizer that
-        registers the marker as special. The fix is loader-side
-        (per-parser flag flip + noise stripper, deferred from the
-        ``llama3_json`` PR).
+        If this assertion holds, the Mistral parser cannot activate on a
+        loader that detokenizes with specials skipped, for any tokenizer
+        that registers the marker as special. The fix is loader-side
+        (per-parser flag flip + noise stripper).
         """
         text = _sample_tool_call_text()
         ids = tokenizer_with_tool_calls_special.encode(text, add_special_tokens=False)
@@ -89,7 +91,7 @@ class TestSyntheticAdditionalSpecialTokenStripping:
         assert "[TOOL_CALLS]" not in decoded, (
             "expected `[TOOL_CALLS]` to be stripped by skip_special_tokens=True; "
             f"got decoded={decoded!r}. If this assertion fails, the hypothesis is wrong "
-            "and Mistral on the transformers loader is fine as-is."
+            "and Mistral is fine as-is without the skip-specials pin."
         )
 
 

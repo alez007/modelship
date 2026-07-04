@@ -106,9 +106,9 @@ class TestFunctionGemmaToolCallParser:
 
     def test_markers_are_specials_is_true(self):
         # FunctionGemma's envelope and string-delim tokens are registered
-        # specials on the tokenizer; the transformers loader keys off this
-        # flag to switch ``skip_special_tokens=False`` and keep the markers
-        # visible to the parser.
+        # specials on the tokenizer; loaders that detokenize raw output
+        # key off this flag to switch ``skip_special_tokens=False`` and
+        # keep the markers visible to the parser.
         assert FunctionGemmaToolCallParser.markers_are_specials is True
 
     def test_accepts_space_separator_instead_of_colon(self):

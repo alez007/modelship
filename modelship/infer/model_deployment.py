@@ -157,10 +157,6 @@ class ModelDeployment:
                 from modelship.infer.vllm.vllm_infer import VllmInfer
 
                 self.infer = VllmInfer(config)
-            elif config.loader == ModelLoader.transformers:
-                from modelship.infer.transformers.transformers_infer import TransformersInfer
-
-                self.infer = TransformersInfer(config)
             elif config.loader == ModelLoader.diffusers:
                 from modelship.infer.diffusers.diffusers_infer import DiffusersInfer
 

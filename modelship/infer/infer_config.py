@@ -47,7 +47,6 @@ class ModelUsecase(StrEnum):
 
 class ModelLoader(StrEnum):
     vllm = "vllm"
-    transformers = "transformers"
     diffusers = "diffusers"
     llama_server = "llama_server"
     stable_diffusion_cpp = "stable_diffusion_cpp"
@@ -82,18 +81,6 @@ class VllmEngineConfig(BaseModel):
     # Per-model multimodal processor knobs (e.g. min_pixels / max_pixels for
     # Qwen2.5-VL). Forwarded verbatim to the HF processor.
     mm_processor_kwargs: dict[str, Any] | None = None
-
-
-class TransformersConfig(BaseModel):
-    device: str = "cpu"
-    torch_dtype: str = "auto"
-    trust_remote_code: bool = False
-    model_kwargs: dict[str, Any] = Field(default_factory=dict)
-    pipeline_kwargs: dict[str, Any] = Field(default_factory=dict)
-    tool_call_parser: str | None = None
-    # Explicit opt-out from auto-detected tool calling. None -> auto-detect; False -> disabled
-    # even if the model's chat template advertises tools; True is a no-op (auto runs anyway).
-    tool_calls_enabled: bool | None = None
 
 
 class DiffusersConfig(BaseModel):
@@ -215,7 +202,6 @@ class ModelshipModelConfig(BaseModel):
     # Ray Serve's per-replica concurrency cap.
     max_ongoing_requests: int | None = None
     vllm_engine_kwargs: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
-    transformers_config: TransformersConfig | None = None
     diffusers_config: DiffusersConfig | None = None
     llama_server_config: LlamaServerConfig | None = None
     stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
@@ -231,8 +217,8 @@ class ModelshipModelConfig(BaseModel):
     _resolved_chat_template: str | None = PrivateAttr(default=None)
     # Pinned at startup from the resolved tool-call parser's
     # ``markers_are_specials`` flag. Loaders that detokenize raw model
-    # output (transformers' ``TextIteratorStreamer``) consult this to
-    # decide whether to flip ``skip_special_tokens=False`` — required for
+    # output consult this to decide whether to flip
+    # ``skip_special_tokens=False`` — required for
     # parsers like Mistral whose ``[TOOL_CALLS]`` marker is registered as a
     # special token in the tokenizer and would otherwise be stripped before
     # the parser sees it. ``None`` means the loader should keep its own

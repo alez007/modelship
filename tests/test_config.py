@@ -10,7 +10,6 @@ from modelship.infer.infer_config import (
     ModelshipConfig,
     ModelshipModelConfig,
     ModelUsecase,
-    TransformersConfig,
     VllmEngineConfig,
 )
 
@@ -349,8 +348,8 @@ class TestModelshipModelConfig:
         assert any("redundant" in rec.message for rec in caplog.records)
 
     def test_non_vllm_loader_skips_tp_derivation(self):
-        # transformers has no parallelism config; num_gpus stays as-is for the
-        # loader to interpret directly (whole GPUs are fine for that path).
+        # Non-vllm loaders have no parallelism config; num_gpus stays as-is
+        # for the loader to interpret directly.
         config = ModelshipModelConfig(
             name="test-tts",
             model="some-model",
@@ -509,7 +508,8 @@ class TestFingerprint:
 
     def test_changes_when_loader_differs(self):
         assert (
-            self._cfg(loader=ModelLoader.vllm).fingerprint() != self._cfg(loader=ModelLoader.transformers).fingerprint()
+            self._cfg(loader=ModelLoader.vllm).fingerprint()
+            != self._cfg(loader=ModelLoader.llama_server, num_gpus=0).fingerprint()
         )
 
     def test_deployment_name_combines_name_and_fingerprint(self):
@@ -525,83 +525,6 @@ class TestFingerprint:
         assert cfg.deployment_name("gw-a") != cfg.deployment_name("gw-b")
         # No gateway == the gateway-independent config hash.
         assert cfg.fingerprint() == cfg.fingerprint("")
-
-
-class TestTransformersConfig:
-    def test_defaults(self):
-        config = TransformersConfig()
-        assert config.device == "cpu"
-        assert config.torch_dtype == "auto"
-        assert config.trust_remote_code is False
-        assert config.model_kwargs == {}
-        assert config.pipeline_kwargs == {}
-
-    def test_custom_values(self):
-        config = TransformersConfig(
-            device="cuda:0",
-            torch_dtype="float16",
-            trust_remote_code=True,
-            model_kwargs={"attn_implementation": "flash_attention_2"},
-        )
-        assert config.device == "cuda:0"
-        assert config.torch_dtype == "float16"
-        assert config.trust_remote_code is True
-        assert config.model_kwargs == {"attn_implementation": "flash_attention_2"}
-
-    def test_transformers_generate_model(self):
-        config = ModelshipModelConfig(
-            name="llm-cpu",
-            model="meta-llama/Llama-3.2-1B-Instruct",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.transformers,
-            num_cpus=4,
-            transformers_config=TransformersConfig(torch_dtype="float32"),
-        )
-        assert config.loader == ModelLoader.transformers
-        assert config.usecase == ModelUsecase.generate
-        assert config.transformers_config.torch_dtype == "float32"
-
-    def test_transformers_embed_model(self):
-        config = ModelshipModelConfig(
-            name="embed",
-            model="nomic-ai/nomic-embed-text-v1.5",
-            usecase=ModelUsecase.embed,
-            loader=ModelLoader.transformers,
-            num_cpus=2,
-            transformers_config=TransformersConfig(trust_remote_code=True),
-        )
-        assert config.usecase == ModelUsecase.embed
-        assert config.transformers_config.trust_remote_code is True
-
-    def test_transformers_transcription_model(self):
-        config = ModelshipModelConfig(
-            name="whisper-cpu",
-            model="openai/whisper-base",
-            usecase=ModelUsecase.transcription,
-            loader=ModelLoader.transformers,
-            num_cpus=2,
-        )
-        assert config.usecase == ModelUsecase.transcription
-        assert config.transformers_config is None
-
-    def test_transformers_tts_model(self):
-        config = ModelshipModelConfig(
-            name="tts",
-            model="microsoft/speecht5_tts",
-            usecase=ModelUsecase.tts,
-            loader=ModelLoader.transformers,
-            num_cpus=1,
-        )
-        assert config.usecase == ModelUsecase.tts
-
-    def test_transformers_config_not_required(self):
-        config = ModelshipModelConfig(
-            name="test",
-            model="some-model",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.transformers,
-        )
-        assert config.transformers_config is None
 
 
 class TestNumReplicas:

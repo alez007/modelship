@@ -48,9 +48,9 @@ class ToolCallParser(ABC):
     # (``added_tokens_decoder`` with ``special=True``). Loaders that decode
     # with ``skip_special_tokens=True`` by default would otherwise strip the
     # marker before this parser ever sees it, leaving the parser permanently
-    # idle. The transformers loader reads this flag at startup, flips its
-    # streamer's ``skip_special_tokens`` to ``False`` when set, and noise-
-    # strips every OTHER registered special from chunks itself. Hermes and
+    # idle. Loaders that detokenize raw output read this flag at startup,
+    # flip ``skip_special_tokens`` to ``False`` when set, and noise-strip
+    # every OTHER registered special from chunks themselves. Hermes and
     # llama3_json keep the default — their markers are regular text.
     markers_are_specials: bool = False
     # Delimiter token wrapping string values in custom-syntax (non-JSON) call
