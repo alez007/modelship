@@ -1,21 +1,8 @@
-"""Cross-loader parser toolkit: reasoning + tool calls.
+"""Chat-template parser-name detection, shared by driver preflight and the vllm loader.
 
-Loaders import streaming helpers and the unified streamer/result
-classes from this package; the per-family parsers live under the
-``reasoning`` and ``tool_calling`` subpackages.
+``tool_calling.py`` / ``reasoning.py`` classify a model's chat template into the
+vLLM-native tool-call / reasoning parser name it needs; ``utils.py`` reads chat
+templates off disk and renders minimal generation prompts. All three are consumed
+directly by module path (``modelship.openai.parsers.{tool_calling,reasoning,utils}``)
+rather than re-exported here.
 """
-
-from modelship.openai.parsers.output import ChatOutputStreamer, ParsedChatOutput
-from modelship.openai.parsers.streaming import (
-    build_chat_completion_response,
-    finish_reason_for,
-    stream_chat_completion,
-)
-
-__all__ = [
-    "ChatOutputStreamer",
-    "ParsedChatOutput",
-    "build_chat_completion_response",
-    "finish_reason_for",
-    "stream_chat_completion",
-]

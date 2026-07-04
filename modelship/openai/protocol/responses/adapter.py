@@ -1,21 +1,19 @@
-"""Stateless translation between the Responses API and chat completions.
+"""Translation between the Responses API and chat completions.
 
-Two directions:
+:func:`responses_request_to_chat` — ``ResponsesRequest`` → ``ChatCompletionRequest``.
+Translates the structurally different bits (``input``/``instructions`` →
+``messages``, flattened tools → nested, ``text.format`` → ``response_format``,
+``max_output_tokens`` → ``max_completion_tokens``) and rejects features not yet
+supported (``previous_response_id``, ``background``, hosted built-in tools) with
+an explicit error rather than dropping them silently. Every loader's
+``create_response`` calls into this for the request side; ``vllm``/``llama_server``
+then shape the response natively from their own parsed output rather than going
+back through a chat-completion object (see ``chat_utils.build_responses_items_from_parsed``)
+— ``build_response_object``/``_usage_from_chat``/``_status_for`` below are the shared
+envelope helpers both that native path and the streaming translator build on.
 
-- :func:`responses_request_to_chat` — ``ResponsesRequest`` → ``ChatCompletionRequest``.
-  Translates the structurally different bits (``input``/``instructions`` →
-  ``messages``, flattened tools → nested, ``text.format`` → ``response_format``,
-  ``max_output_tokens`` → ``max_completion_tokens``) and rejects features Phase A
-  cannot honor (``previous_response_id``, ``background``, hosted built-in tools)
-  with an explicit error rather than dropping them silently.
-- :func:`chat_response_to_responses` — ``ChatCompletionResponse`` → ``ResponseObject``.
-  Maps the parsed message into Responses ``output[]`` items (reasoning / message /
-  function_call) and remaps token usage.
-
-Phase A is text + reasoning + (client-driven) tool calling, non-streaming.
 ``store`` is accepted but never persisted — the response echoes ``store=False``.
-Image/audio input parts are reduced to their text for now (vision over
-``/v1/responses`` is out of Phase A scope).
+Image/audio input parts are reduced to their text for now.
 
 Imports come from the sibling ``schemas`` submodule and the ``chat`` submodule,
 never from the top-level ``modelship.openai.protocol`` package — that package
@@ -24,19 +22,13 @@ imports this one, so reaching back into it would create an import cycle.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any, Literal
 
-from modelship.openai.protocol.chat import ChatCompletionRequest, ChatCompletionResponse
+from modelship.openai.protocol.chat import ChatCompletionRequest
 from modelship.openai.protocol.responses.schemas import (
-    ResponseFunctionToolCall,
     ResponseInputTokensDetails,
     ResponseObject,
-    ResponseOutputMessage,
-    ResponseOutputText,
     ResponseOutputTokensDetails,
-    ResponseReasoningItem,
-    ResponseReasoningSummary,
     ResponsesRequest,
     ResponseUsage,
 )
@@ -44,7 +36,7 @@ from modelship.openai.protocol.usage import UsageInfo
 
 
 class UnsupportedResponsesFeatureError(ValueError):
-    """A Responses request used a feature Phase A does not implement.
+    """A Responses request used a feature that is not supported.
 
     Subclasses ``ValueError`` so ``create_error_response`` maps it to an
     OpenAI-style 400 ``invalid_request_error``.
@@ -228,55 +220,9 @@ def _response_format_from_text(text: dict[str, Any] | None) -> dict[str, Any] | 
 
 
 # ---------------------------------------------------------------------------
-# Response: chat → Responses
+# Response envelope: shared by every loader's native create_response and by
+# the streaming translator.
 # ---------------------------------------------------------------------------
-
-
-def chat_response_to_responses(chat: ChatCompletionResponse, request: ResponsesRequest) -> ResponseObject:
-    """Translate a non-streaming ``ChatCompletionResponse`` into a ``ResponseObject``."""
-    choice = chat.choices[0]
-    message = choice.message
-
-    output: list[Any] = []
-    # OpenAI emits reasoning first, then the assistant message / tool calls.
-    if message.reasoning:
-        output.append(ResponseReasoningItem(summary=[ResponseReasoningSummary(text=message.reasoning)]))
-    if message.content:
-        output.append(ResponseOutputMessage(content=[ResponseOutputText(text=message.content)]))
-    for call in message.tool_calls:
-        output.append(
-            ResponseFunctionToolCall(
-                call_id=call.id,
-                name=call.function.name,
-                arguments=call.function.arguments,
-            )
-        )
-
-    status, incomplete = _status_for(choice.finish_reason)
-
-    return build_response_object(
-        request,
-        status=status,
-        output=output,
-        usage=_usage_from_chat(chat.usage),
-        incomplete=incomplete,
-        model=chat.model,
-    )
-
-
-async def responses_from_chat(response_gen: AsyncIterator[Any], request: ResponsesRequest) -> AsyncIterator[Any]:
-    """Adapt a non-streaming chat response generator into Responses output.
-
-    Lets ``/v1/responses`` reuse ``_handle_response`` unchanged: chat response
-    objects are translated to ``ResponseObject`` while errors and Ray exceptions
-    pass through to the same handling as every other endpoint. The streaming
-    counterpart is ``responses_stream_from_chat`` in :mod:`.streaming`.
-    """
-    async for item in response_gen:
-        if isinstance(item, ChatCompletionResponse):
-            yield chat_response_to_responses(item, request)
-        else:
-            yield item
 
 
 def build_response_object(

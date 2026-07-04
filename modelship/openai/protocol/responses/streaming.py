@@ -1,12 +1,12 @@
-"""Streaming translation: chat-completion SSE → Responses event stream.
+"""Streaming translation: typed chat chunks → Responses event stream.
 
-The chat loaders all emit Server-Sent Events as ``data: {chunk}\\n\\n`` strings
-(``ChatCompletionStreamResponse`` payloads) terminated by ``data: [DONE]`` — this
-is the one wire shape vLLM and the ``ChatOutputStreamer`` loaders (transformers,
-plugins) share. The Responses API instead wants a *semantic* event
-protocol: named events (``response.created``, ``response.output_text.delta``, …)
-each carrying a monotonically increasing ``sequence_number`` plus the relevant
-output index, wrapping each output item in explicit added/done brackets.
+``vllm``/``llama_server`` feed :class:`ResponsesStreamTranslator` directly with
+typed ``ChatCompletionStreamResponse`` chunks (the same DTO their chat streaming
+path produces) — no SSE text round-trip. The Responses API wants a *semantic*
+event protocol instead: named events (``response.created``,
+``response.output_text.delta``, …) each carrying a monotonically increasing
+``sequence_number`` plus the relevant output index, wrapping each output item
+in explicit added/done brackets.
 
 :class:`ResponsesStreamTranslator` consumes the parsed chat chunks and brackets
 them. Design choices that matter:
@@ -32,7 +32,7 @@ cycle (that package imports this one).
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 from modelship.openai.protocol.base import random_uuid
@@ -55,23 +55,6 @@ from modelship.openai.protocol.responses.schemas import (
 def _sse(event_type: str, payload: dict[str, Any]) -> str:
     """Format one Responses SSE event (named event line + JSON data line)."""
     return f"event: {event_type}\ndata: {json.dumps({'type': event_type, **payload})}\n\n"
-
-
-def _parse_chat_sse(raw: str) -> Iterator[ChatCompletionStreamResponse]:
-    """Parse chat ``data: {...}`` SSE messages into stream chunks.
-
-    A single ``raw`` string may bundle several SSE messages (e.g. from
-    buffering or batching). Yields a chunk for every ``data:`` line, skipping
-    the ``[DONE]`` sentinel and any non-data lines.
-    """
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[len("data:") :].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        yield ChatCompletionStreamResponse.model_validate_json(payload)
 
 
 class ResponsesStreamTranslator:
@@ -342,33 +325,3 @@ class ResponsesStreamTranslator:
                 "response.output_item.done",
                 {"output_index": oi, "item": item.model_dump(mode="json")},
             )
-
-
-async def responses_stream_from_chat(response_gen: AsyncIterator[Any], request: ResponsesRequest) -> AsyncIterator[Any]:
-    """Adapt a streaming chat response generator into Responses SSE events.
-
-    Lets ``/v1/responses`` reuse ``_handle_response`` unchanged. The first item
-    decides the path: an early ``ErrorResponse`` (loader rejected before
-    streaming) is passed through so the gateway renders the proper HTTP error
-    instead of a ``200`` event stream; chat SSE strings start the event stream.
-    """
-    translator = ResponsesStreamTranslator(request)
-    started = False
-    async for item in response_gen:
-        if not isinstance(item, str):
-            if not started:
-                # Pre-stream error/object — let _handle_response handle it.
-                yield item
-                return
-            # A non-string mid-stream is unexpected; skip rather than corrupt the stream.
-            continue
-        if not started:
-            started = True
-            for event in translator.start():
-                yield event
-        for chunk in _parse_chat_sse(item):
-            for event in translator.process(chunk):
-                yield event
-    if started:
-        for event in translator.finish():
-            yield event

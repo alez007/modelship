@@ -17,7 +17,8 @@ from modelship.infer.infer_config import (
     ModelUsecase,
     VllmEngineConfig,
 )
-from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning
+from modelship.openai.parsers.reasoning import classify_template as classify_reasoning
+from modelship.openai.parsers.tool_calling import classify_template as classify_tool_calling
 
 
 def _make_cfg(**overrides) -> ModelshipModelConfig:
@@ -29,6 +30,49 @@ def _make_cfg(**overrides) -> ModelshipModelConfig:
     }
     base.update(overrides)
     return ModelshipModelConfig(**base)
+
+
+class TestClassifyToolTemplate:
+    """``classify_template`` must return names that match vLLM's own
+    ``ToolParserManager`` registry exactly — ``resolve_all_tool_parsers``
+    validates auto-detected names against it directly."""
+
+    def test_no_tool_markers_returns_none(self):
+        assert classify_tool_calling("plain template with no markers") is None
+
+    def test_gemma4_marker(self):
+        assert classify_tool_calling("{% if tools %}<|tool_call>{% endif %}") == "gemma4"
+
+    def test_function_gemma_marker_matches_vllm_name(self):
+        # Regression: vLLM registers this parser as "functiongemma" (no
+        # underscore); modelship's own class used to be named "function_gemma"
+        # and this detector returned that mismatched name, which would fail
+        # validation against vLLM's real registry (or, worse, be handed
+        # straight to vLLM's OpenAIServingRender and fail there instead).
+        assert classify_tool_calling("{% if tools %}<start_function_call>{% endif %}") == "functiongemma"
+
+    def test_qwen3_coder_function_marker_routes_ahead_of_hermes(self):
+        # The chat template mentions tools (gating clause) and contains
+        # ``<function=`` — must not fall through to Hermes.
+        template = "{% if tools %}<tool_call>\n<function={{ name }}>{% endif %}"
+        assert classify_tool_calling(template) == "qwen3_coder"
+
+    def test_qwen3_coder_parameter_marker(self):
+        template = "{% if tools %}<parameter={{ key }}>value</parameter>{% endif %}"
+        assert classify_tool_calling(template) == "qwen3_coder"
+
+    def test_hermes_template_without_function_marker_stays_hermes(self):
+        template = '{% if tools %}<tool_call>{"name": "x"}</tool_call>{% endif %}'
+        assert classify_tool_calling(template) == "hermes"
+
+    def test_mistral_marker(self):
+        assert classify_tool_calling("{% if tools %}[TOOL_CALLS]{% endif %}") == "mistral"
+
+    def test_llama3_json_marker(self):
+        assert classify_tool_calling("{% if tools %}<|python_tag|>{% endif %}") == "llama3_json"
+
+    def test_unrecognized_markers_returns_unknown(self):
+        assert classify_tool_calling("{% if tools %}some tool syntax{% endif %}") == "unknown"
 
 
 class TestClassifyReasoningTemplate:
@@ -124,31 +168,3 @@ class TestResolveToolParsersStoresExplicit:
         cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(enable_auto_tool_choice=False, tool_call_parser="hermes"))
         resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
         assert cfg._resolved_tool_call_parser is None
-
-
-class TestResolveSkipSpecialTokens:
-    """``_resolved_skip_special_tokens`` is pinned by the parser's flag.
-
-    Loaders that detokenize raw model output read this at startup to
-    decide whether to flip ``skip_special_tokens=False``. ``None`` means
-    "loader keeps its own default (True)"; ``False`` means "the parser's
-    marker is registered as a special token and would be stripped — keep
-    specials in the stream and noise-strip the rest."
-    """
-
-    def test_hermes_leaves_skip_specials_default(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="hermes"))
-        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_skip_special_tokens is None
-
-    def test_llama3_json_leaves_skip_specials_default(self):
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="llama3_json"))
-        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_skip_special_tokens is None
-
-    def test_mistral_pins_skip_specials_false(self):
-        # Mistral parser's marker is a special added token; loader must
-        # keep specials so the parser sees `[TOOL_CALLS]`.
-        cfg = _make_cfg(vllm_engine_kwargs=VllmEngineConfig(tool_call_parser="mistral"))
-        resolve_all_tool_parsers(ModelshipConfig(models=[cfg]))
-        assert cfg._resolved_skip_special_tokens is False

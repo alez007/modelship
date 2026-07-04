@@ -8,10 +8,8 @@ from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsecase
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
-from modelship.openai.parsers.reasoning.registry import get_parser as get_reasoning_parser
-from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning_template
-from modelship.openai.parsers.tool_calling.registry import available_parsers, get_parser
-from modelship.openai.parsers.tool_calling.utils import classify_template
+from modelship.openai.parsers.reasoning import classify_template as classify_reasoning_template
+from modelship.openai.parsers.tool_calling import classify_template
 from modelship.openai.parsers.utils import read_chat_template
 
 logger = get_logger("startup")
@@ -171,24 +169,28 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     truth and never re-implements the precedence.
 
     Auto-detection runs for vllm. llama_server does its own tool-call
-    detection internally, unrelated to this registry; diffusers has no chat
-    path; custom is plugin-managed.
+    detection internally; diffusers has no chat path; custom is plugin-managed.
 
     Behavior per model:
     - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): leaves
       `_resolved_tool_call_parser` as None.
-    - Explicit parser name configured: validated against the registry,
-      stored on `_resolved_tool_call_parser`. Raises if unknown.
+    - Explicit parser name configured: validated against vLLM's own
+      `ToolParserManager`, stored on `_resolved_tool_call_parser`. Raises if
+      unknown.
     - Auto-detected, registered: stored on `_resolved_tool_call_parser`.
     - Auto-detected as `unknown` / known-but-unregistered: warn, leave None.
     - Not detected: leave None (no template tool-call affordance).
     """
-    registered = set(available_parsers())
-    for cfg in yml_conf.models:
-        if cfg.loader != ModelLoader.vllm:
-            continue
-        if cfg.usecase != ModelUsecase.generate:
-            continue
+    vllm_generate_cfgs = [
+        cfg for cfg in yml_conf.models if cfg.loader == ModelLoader.vllm and cfg.usecase == ModelUsecase.generate
+    ]
+    if not vllm_generate_cfgs:
+        return
+
+    from vllm.tool_parsers import ToolParserManager
+
+    registered = set(ToolParserManager.list_registered())
+    for cfg in vllm_generate_cfgs:
         if _is_explicit_tool_opt_out(cfg):
             logger.info("Tool-call resolution skipped for '%s' (explicit opt-out).", cfg.name)
             continue
@@ -202,7 +204,6 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
                     f"which is not registered. Available: {sorted(registered) or '(none)'}."
                 )
             cfg._resolved_tool_call_parser = explicit
-            _merge_skip_specials(cfg, explicit, is_reasoning=False)
             logger.info("Using explicit tool_call_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -230,31 +231,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             )
             continue
         cfg._resolved_tool_call_parser = detected
-        _merge_skip_specials(cfg, detected, is_reasoning=False)
         logger.info("Auto-detected tool_call_parser=%r for '%s'", detected, cfg.name)
-
-
-def _skip_specials_for(parser_name: str, is_reasoning: bool = False) -> bool | None:
-    """Resolve the ``skip_special_tokens`` setting a loader should use.
-
-    Returns ``False`` when the parser declares ``markers_are_specials``
-    (its marker is registered as a special token and would be stripped by
-    the loader's default detokenization) — the loader must keep specials
-    in the stream and noise-strip the rest itself. Returns ``None``
-    otherwise so the loader keeps its own default (``True``).
-    """
-    get_fn = get_reasoning_parser if is_reasoning else get_parser
-    return False if get_fn(parser_name).markers_are_specials else None
-
-
-def _merge_skip_specials(cfg, parser_name: str, is_reasoning: bool = False) -> None:
-    """Update ``_resolved_skip_special_tokens`` if the parser requires it.
-
-    Once set to ``False`` (keep specials), it is never reset to ``None``.
-    """
-    if cfg._resolved_skip_special_tokens is False:
-        return
-    cfg._resolved_skip_special_tokens = _skip_specials_for(parser_name, is_reasoning=is_reasoning)
 
 
 def _is_explicit_reasoning_opt_out(cfg) -> bool:
@@ -295,7 +272,6 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
 
         if explicit is not None:
             cfg._resolved_reasoning_parser = explicit
-            _merge_skip_specials(cfg, explicit, is_reasoning=True)
             logger.info("Using explicit reasoning_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -312,5 +288,4 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
         if detected is None:
             continue
         cfg._resolved_reasoning_parser = detected
-        _merge_skip_specials(cfg, detected, is_reasoning=True)
         logger.info("Auto-detected reasoning_parser=%r for '%s'", detected, cfg.name)

@@ -1,13 +1,11 @@
-"""Tests for the streaming Responses <-> chat-completions translator (Phase A2).
+"""Tests for the streaming Responses <-> chat-completions translator.
 
-The translator consumes the chat SSE chunk stream every loader emits and emits
+The translator consumes typed chat stream chunks every loader emits and emits
 the Responses event protocol. These tests drive it directly with synthesized
 chat chunks (no Ray, no loader) and assert the event sequence/shape.
 """
 
 import json
-
-import pytest
 
 from modelship.openai.protocol import (
     ChatCompletionResponseStreamChoice,
@@ -18,11 +16,7 @@ from modelship.openai.protocol import (
     ResponsesRequest,
     UsageInfo,
 )
-from modelship.openai.protocol.responses.streaming import (
-    ResponsesStreamTranslator,
-    _parse_chat_sse,
-    responses_stream_from_chat,
-)
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -71,30 +65,6 @@ def _events_then_fail(translator: ResponsesStreamTranslator, chunks, message: st
 
 def _types(events: list[dict]) -> list[str]:
     return [e["type"] for e in events]
-
-
-class TestSseParsing:
-    def test_parses_data_chunk(self):
-        chunk = _chunk(DeltaMessage(content="hi"))
-        raw = f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
-        parsed = list(_parse_chat_sse(raw))
-        assert len(parsed) == 1
-        assert parsed[0].choices[0].delta.content == "hi"
-
-    def test_done_sentinel_yields_nothing(self):
-        assert list(_parse_chat_sse("data: [DONE]\n\n")) == []
-
-    def test_non_data_line_yields_nothing(self):
-        assert list(_parse_chat_sse(": keep-alive\n\n")) == []
-
-    def test_bundled_messages_all_parsed(self):
-        # A single raw string may bundle several SSE messages; every data line
-        # must be parsed (not just the first), [DONE] skipped.
-        a = json.dumps(_chunk(DeltaMessage(content="a")).model_dump(mode="json"))
-        b = json.dumps(_chunk(DeltaMessage(content="b")).model_dump(mode="json"))
-        raw = f"data: {a}\n\ndata: {b}\n\ndata: [DONE]\n\n"
-        parsed = list(_parse_chat_sse(raw))
-        assert [c.choices[0].delta.content for c in parsed] == ["a", "b"]
 
 
 class TestTextStream:
@@ -297,31 +267,3 @@ class TestFailedStream:
         assert failed["output"][0]["type"] == "function_call"
         assert failed["output"][0]["arguments"] == '{"lo'
         assert failed["output"][0]["status"] == "completed"
-
-
-class TestStreamWrapper:
-    @pytest.mark.asyncio
-    async def test_wraps_chat_sse_strings_into_events(self):
-        async def gen():
-            yield f"data: {json.dumps(_chunk(DeltaMessage(content='hi')).model_dump(mode='json'))}\n\n"
-            yield f"data: {json.dumps(_chunk(finish_reason='stop').model_dump(mode='json'))}\n\n"
-            yield "data: [DONE]\n\n"
-
-        out = [e async for e in responses_stream_from_chat(gen(), _req())]
-        assert all(isinstance(e, str) for e in out)
-        assert out[0].startswith("event: response.created")
-        assert "event: response.completed" in out[-1]
-
-    @pytest.mark.asyncio
-    async def test_pre_stream_error_object_passes_through(self):
-        from modelship.openai.protocol import create_error_response
-
-        err = create_error_response("nope")
-
-        async def gen():
-            yield err
-
-        out = [e async for e in responses_stream_from_chat(gen(), _req())]
-        # Passed straight through (not turned into a 200 event stream) so
-        # _handle_response can render the proper HTTP error.
-        assert out == [err]

@@ -91,10 +91,9 @@ MODEL_CONFIGS: dict[str, dict] = {
         "name": "chat-llama-server",
         # Qwen3-0.6B GGUF through the llama_server loader: a llama-server
         # subprocess doing its own chat templating, tool-call, and reasoning
-        # parsing (`--jinja --reasoning-format auto`) instead of modelship's
-        # ChatOutputStreamer. `parallel: 4` exercises the loader's headline
-        # capability: true multi-slot concurrency instead of a single
-        # asyncio.Lock serializing every request. n_ctx is per-slot (the
+        # parsing (`--jinja --reasoning-format auto`). `parallel: 4` exercises
+        # the loader's headline capability: true multi-slot concurrency
+        # instead of a single asyncio.Lock serializing every request. n_ctx is per-slot (the
         # loader launches with `-c n_ctx*parallel`), bumped for reasoning
         # headroom.
         "model": "lmstudio-community/Qwen3-0.6B-GGUF:*Q4_K_M.gguf",
@@ -785,8 +784,7 @@ class TestChatLlamaServer:
     """End-to-end chat, tool calling, reasoning, and concurrency through the
     `llama_server` loader (a `llama-server` subprocess proxied over its
     native OpenAI-compatible HTTP API). Reasoning and tool-call parsing is
-    llama-server's own (`--jinja --reasoning-format auto`), not modelship's
-    `ChatOutputStreamer`.
+    llama-server's own (`--jinja --reasoning-format auto`).
     """
 
     @pytest.fixture(autouse=True, scope="class")
@@ -935,7 +933,7 @@ class TestChatLlamaServer:
         """Verifies llama-server's own parser doesn't double-count a
         `<tool_call>...</tool_call>` illustration quoted inside `<think>`
         reasoning as a second, real call — a bug pattern plausible for any
-        single-pass parser, not just modelship's `ChatOutputStreamer`.
+        single-pass parser.
 
         Coaxes the model into illustrating tool-call syntax inside its
         reasoning before making one actual call, and asserts exactly one real

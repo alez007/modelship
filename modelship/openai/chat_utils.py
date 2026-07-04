@@ -250,7 +250,6 @@ def build_from_parsed(
         elif isinstance(finish_reasons, str):
             fr = finish_reasons
         else:
-            # Fallback derivation logic similar to finish_reason_for
             fr = "tool_calls" if parsed.has_tool_calls else "stop"
 
         choice_logprobs = None

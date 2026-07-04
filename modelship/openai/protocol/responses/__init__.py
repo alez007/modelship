@@ -1,23 +1,23 @@
-"""Responses API (``/v1/responses``) schemas and the stateless chat adapter.
+"""Responses API (``/v1/responses``) schemas and the request-side chat adapter.
 
-Phase A implements ``/v1/responses`` as a stateless adapter over the existing
-chat-completion pipeline rather than a new inference path: the request is
-translated to a :class:`ChatCompletionRequest`, run through the unchanged
-``handle.generate`` deployment method, and the chat result is translated back
-into a Responses :class:`ResponseObject`.
+Each loader implements its own ``create_response`` natively (shaping straight
+from its parsed chat output — see ``chat_utils.build_responses_items_from_parsed``),
+non-streaming and streaming alike; there is no generic response-side fallback.
+The one thing every loader shares is the request-side translation: an incoming
+``ResponsesRequest`` is turned into a ``ChatCompletionRequest`` via
+``responses_request_to_chat`` before the loader re-derives its own chat request
+internally.
 
 Thin re-exporter over the leaf submodules (mirrors the parent ``protocol``
 package): :mod:`.schemas` holds the pydantic models, :mod:`.adapter` the
-non-streaming translation, :mod:`.streaming` the streaming translator. The
-submodules import cleanly — ``adapter`` pulls in ``schemas``, ``streaming``
-pulls in ``adapter`` + ``schemas``, and none reach back into the top-level
-``protocol`` package — so no import cycle exists here.
+request-side translation plus the shared response-envelope helpers, :mod:`.streaming`
+the streaming translator. The submodules import cleanly — ``adapter`` pulls in
+``schemas``, ``streaming`` pulls in ``adapter`` + ``schemas``, and none reach back
+into the top-level ``protocol`` package — so no import cycle exists here.
 """
 
 from modelship.openai.protocol.responses.adapter import (
     UnsupportedResponsesFeatureError,
-    chat_response_to_responses,
-    responses_from_chat,
     responses_request_to_chat,
 )
 from modelship.openai.protocol.responses.schemas import (
@@ -35,10 +35,7 @@ from modelship.openai.protocol.responses.schemas import (
     ResponsesRequest,
     ResponseUsage,
 )
-from modelship.openai.protocol.responses.streaming import (
-    ResponsesStreamTranslator,
-    responses_stream_from_chat,
-)
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 
 __all__ = [
     "ResponseFunctionToolCall",
@@ -56,8 +53,5 @@ __all__ = [
     "ResponsesRequest",
     "ResponsesStreamTranslator",
     "UnsupportedResponsesFeatureError",
-    "chat_response_to_responses",
-    "responses_from_chat",
     "responses_request_to_chat",
-    "responses_stream_from_chat",
 ]
