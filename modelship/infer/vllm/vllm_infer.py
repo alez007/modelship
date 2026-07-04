@@ -5,6 +5,7 @@ from http import HTTPStatus
 from typing import Any, ClassVar, cast
 
 from fastapi import UploadFile
+from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import Response
 from vllm.config.model import ModelDType
@@ -53,7 +54,12 @@ from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.logging import TRACE, get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
-from modelship.openai.chat_utils import UnsupportedContentError, build_from_parsed, normalize_chat_messages
+from modelship.openai.chat_utils import (
+    UnsupportedContentError,
+    build_from_parsed,
+    build_responses_items_from_parsed,
+    normalize_chat_messages,
+)
 from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
 from modelship.openai.parsers.utils import render_generation_prompt
 from modelship.openai.protocol import (
@@ -63,6 +69,8 @@ from modelship.openai.protocol import (
     EmbeddingCompletionRequest,
     EmbeddingRequest,
     ErrorResponse,
+    ResponseObject,
+    ResponsesRequest,
     TranscriptionRequest,
     TranscriptionResponse,
     TranscriptionResponseVerbose,
@@ -71,6 +79,13 @@ from modelship.openai.protocol import (
     TranslationResponseVerbose,
     UsageInfo,
     create_error_response,
+)
+from modelship.openai.protocol.responses.adapter import (
+    UnsupportedResponsesFeatureError,
+    _status_for,
+    _usage_from_chat,
+    build_response_object,
+    responses_request_to_chat,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id
@@ -96,6 +111,13 @@ def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
         status_code=HTTPStatus.BAD_REQUEST,
         param=exc.parameter,
     )
+
+
+def _responses_validation_error(exc: ValidationError) -> ErrorResponse:
+    # Same shape as _validation_error, for pydantic ValidationErrors surfaced by
+    # responses_request_to_chat (e.g. a bad reasoning.effort value).
+    base = exc.args[0] if exc.args else str(exc)
+    return create_error_response(message=base, err_type="invalid_request_error", status_code=HTTPStatus.BAD_REQUEST)
 
 
 class VllmInfer(BaseInfer):
@@ -516,6 +538,110 @@ class VllmInfer(BaseInfer):
             ),
             finish_reasons=finish_reasons,
             logprobs=logprobs_list,
+        )
+
+    async def create_response(
+        self, request: ResponsesRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+        if not hasattr(self, "openai_serving_render"):
+            return await super().create_response(request, raw_request)
+        if request.stream:
+            # Native streaming lands in Stage D part 2 (needs a delta-level DTO
+            # this loader doesn't build yet); fall back to the chat-adapted default.
+            return await super().create_response(request, raw_request)
+
+        try:
+            chat_request = responses_request_to_chat(request)
+        except UnsupportedResponsesFeatureError as e:
+            return create_error_response(e)
+        except ValidationError as e:
+            return _responses_validation_error(e)
+
+        try:
+            chat_request.messages = normalize_chat_messages(
+                chat_request.messages,
+                supports_image=self._caps.supports_image,
+                supports_audio=self._caps.supports_audio,
+            )
+        except UnsupportedContentError as exc:
+            return create_error_response(exc)
+        vllm_request = engine_ops.build_vllm_request(chat_request, self.model_config.chat_template_kwargs)
+
+        return await self._create_response_no_stream(request, vllm_request, raw_request)
+
+    async def _create_response_no_stream(
+        self,
+        request: ResponsesRequest,
+        vllm_request: VllmChatCompletionRequest,
+        raw_request: RawRequestProxy,
+    ) -> ErrorResponse | ResponseObject:
+        """Non-stream Responses path via `engine_ops`, shaping items directly from
+        `ParsedChatOutput` instead of round-tripping through a `ChatCompletionResponse`."""
+        try:
+            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
+        if isinstance(render_result, VllmErrorResponse):
+            return ErrorResponse.model_validate(render_result.model_dump())
+        engine_input, sampling_params = render_result
+
+        tokenizer = self.openai_serving_render.renderer.tokenizer
+        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+
+        parser = engine_ops.make_parsers(
+            self.openai_serving_render, tokenizer, vllm_request, vllm_request.chat_template_kwargs, n=1
+        )[0]
+        prompt_token_ids = engine_ops.extract_prompt_token_ids(self.openai_serving_render, engine_input)
+        reasoning_ended = engine_ops.derive_reasoning_ended(vllm_request, parser, prompt_token_ids)
+
+        request_id = f"resp-{base_request_id(raw_request)}"
+        try:
+            final_res = await self.run_cancellable(
+                engine_ops.consume_final_output(
+                    self.engine,
+                    engine_input,
+                    sampling_params,
+                    request_id,
+                    reasoning_ended=reasoning_ended,
+                    parser=parser,
+                    chat_template_kwargs=vllm_request.chat_template_kwargs,
+                ),
+                raw_request,
+            )
+        except ClientDisconnectedError:
+            return create_error_response("Client disconnected")
+        except VLLMValidationError as exc:
+            return _validation_error(exc)
+
+        choices, finish_reasons, _logprobs_list = engine_ops.build_choices(
+            final_res,
+            vllm_request,
+            parser,
+            tokenizer,
+            enable_auto_tools=self._enable_auto_tools,
+            want_logprobs=False,
+            num_output_top_logprobs=None,
+        )
+
+        if final_res.prompt_token_ids is None:
+            return create_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
+        prompt_tokens = len(final_res.prompt_token_ids)
+        completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
+
+        status, incomplete = _status_for(finish_reasons[0])
+        return build_response_object(
+            request,
+            status=status,
+            output=build_responses_items_from_parsed(choices[0]),
+            usage=_usage_from_chat(
+                UsageInfo(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+            ),
+            incomplete=incomplete,
+            model=self.model_config.name,
         )
 
     async def create_embedding(

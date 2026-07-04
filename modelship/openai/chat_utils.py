@@ -12,6 +12,14 @@ from modelship.openai.protocol import (
     ToolCall,
     UsageInfo,
 )
+from modelship.openai.protocol.responses.schemas import (
+    ResponseFunctionToolCall,
+    ResponseOutputItem,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+    ResponseReasoningSummary,
+)
 
 logger = get_logger("openai.chat_utils")
 
@@ -270,3 +278,26 @@ def build_from_parsed(
         usage=usage,
         created=created,
     )
+
+
+def build_responses_items_from_parsed(parsed: ParsedChatOutput) -> list[ResponseOutputItem]:
+    """Shape one parsed choice into Responses ``output[]`` items.
+
+    Sibling to `build_from_parsed`: same DTO in, Responses items out instead
+    of a `ChatCompletionResponse`. Order matches OpenAI's own: reasoning
+    first, then the assistant message, then one `function_call` per tool call.
+    """
+    output: list[ResponseOutputItem] = []
+    if parsed.reasoning:
+        output.append(ResponseReasoningItem(summary=[ResponseReasoningSummary(text=parsed.reasoning)]))
+    if parsed.content:
+        output.append(ResponseOutputMessage(content=[ResponseOutputText(text=parsed.content)]))
+    for call in parsed.tool_calls:
+        output.append(
+            ResponseFunctionToolCall(
+                call_id=call.id,
+                name=call.function.name,
+                arguments=call.function.arguments,
+            )
+        )
+    return output

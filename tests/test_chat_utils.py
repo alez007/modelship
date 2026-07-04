@@ -3,6 +3,7 @@
 from modelship.openai.chat_utils import (
     ParsedChatOutput,
     build_from_parsed,
+    build_responses_items_from_parsed,
     normalize_chat_messages,
 )
 from modelship.openai.protocol import FunctionCall, ToolCall, UsageInfo
@@ -174,3 +175,26 @@ def test_build_from_parsed_multi_choice_and_dto():
     )
     assert res3.choices[0].finish_reason == "length"
     assert res3.choices[1].finish_reason == "stop"
+
+
+def test_build_responses_items_from_parsed_orders_reasoning_message_tools():
+    parsed = ParsedChatOutput(
+        content="Hello!",
+        reasoning="Thinking...",
+        tool_calls=[ToolCall(id="call_1", type="function", function=FunctionCall(name="get_weather", arguments="{}"))],
+    )
+
+    output = build_responses_items_from_parsed(parsed)
+
+    assert [item.type for item in output] == ["reasoning", "message", "function_call"]
+    assert output[0].summary[0].text == "Thinking..."
+    assert output[1].content[0].text == "Hello!"
+    assert output[2].call_id == "call_1"
+    assert output[2].name == "get_weather"
+    assert output[2].arguments == "{}"
+
+
+def test_build_responses_items_from_parsed_skips_empty_fields():
+    parsed = ParsedChatOutput(content=None, reasoning=None, tool_calls=[])
+
+    assert build_responses_items_from_parsed(parsed) == []

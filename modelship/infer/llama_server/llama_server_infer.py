@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from modelship.infer.base_infer import BaseInfer, ClientDisconnectedError
 from modelship.infer.infer_config import LlamaServerConfig, ModelshipModelConfig, ModelUsecase, RawRequestProxy
@@ -20,6 +21,7 @@ from modelship.openai.chat_utils import (
     ParsedChatOutput,
     UnsupportedContentError,
     build_from_parsed,
+    build_responses_items_from_parsed,
     normalize_chat_messages,
 )
 from modelship.openai.protocol import (
@@ -36,9 +38,18 @@ from modelship.openai.protocol import (
     EmbeddingResponseData,
     ErrorResponse,
     FunctionCall,
+    ResponseObject,
+    ResponsesRequest,
     ToolCall,
     UsageInfo,
     create_error_response,
+)
+from modelship.openai.protocol.responses.adapter import (
+    UnsupportedResponsesFeatureError,
+    _status_for,
+    _usage_from_chat,
+    build_response_object,
+    responses_request_to_chat,
 )
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id, random_uuid
@@ -429,6 +440,55 @@ class LlamaServerInfer(BaseInfer):
     async def _send_chat_completion(
         self, payload: dict[str, Any], request_id: str
     ) -> ErrorResponse | ChatCompletionResponse:
+        data = await self._post_chat(payload, request_id)
+        if isinstance(data, ErrorResponse):
+            return data
+        return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
+
+    async def create_response(
+        self, request: ResponsesRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+        if self._client is None:
+            return await super().create_response(request, raw_request)
+        if request.stream:
+            # Native streaming lands in Stage D part 2 (needs a delta-level DTO
+            # this loader doesn't build yet); fall back to the chat-adapted default.
+            return await super().create_response(request, raw_request)
+
+        try:
+            chat_request = responses_request_to_chat(request)
+        except UnsupportedResponsesFeatureError as e:
+            return create_error_response(e)
+        except ValidationError as e:
+            return _responses_validation_error(e)
+
+        request_id = f"resp-{base_request_id(raw_request)}"
+        supports_image = bool(self.config.mmproj)
+        try:
+            messages = normalize_chat_messages(
+                chat_request.messages, supports_image=supports_image, supports_audio=False
+            )
+        except UnsupportedContentError as e:
+            logger.warning("responses request %s rejected: %s", request_id, e)
+            return create_error_response(e)
+
+        payload = _build_payload(chat_request, messages, model_name=self.model_config.name)
+        try:
+            return await self.run_cancellable(self._send_response(payload, request, request_id), raw_request)
+        except ClientDisconnectedError:
+            logger.info("responses request %s aborted: client disconnected", request_id)
+            return create_error_response("Client disconnected")
+
+    async def _send_response(
+        self, payload: dict[str, Any], request: ResponsesRequest, request_id: str
+    ) -> ErrorResponse | ResponseObject:
+        data = await self._post_chat(payload, request_id)
+        if isinstance(data, ErrorResponse):
+            return data
+        return _project_response(data, request, model_name=self.model_config.name)
+
+    async def _post_chat(self, payload: dict[str, Any], request_id: str) -> ErrorResponse | dict:
+        """POST `/v1/chat/completions` and return the parsed JSON body, or an `ErrorResponse`."""
         assert self._client is not None
         try:
             resp = await self._client.post("/v1/chat/completions", json=payload)
@@ -451,7 +511,7 @@ class LlamaServerInfer(BaseInfer):
             message = error_data.get("message") if isinstance(error_data, dict) else str(error_data)
             logger.warning("chat request %s failed with inline error: %s", request_id, message)
             return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
-        return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
+        return data
 
     async def _stream_chat_completion(
         self, payload: dict[str, Any], request_id: str, raw_request: RawRequestProxy
@@ -527,6 +587,13 @@ class LlamaServerInfer(BaseInfer):
 # ---------------------------------------------------------------------------
 
 
+def _responses_validation_error(exc: ValidationError) -> ErrorResponse:
+    # Pydantic ValidationErrors surfaced by responses_request_to_chat (e.g. a
+    # bad reasoning.effort value) — same 400 shape as every other rejection here.
+    base = exc.args[0] if exc.args else str(exc)
+    return create_error_response(message=base, err_type="invalid_request_error")
+
+
 def _redact(args: list[str]) -> list[str]:
     redacted = list(args)
     for i, arg in enumerate(redacted):
@@ -595,10 +662,18 @@ def _project_usage(raw_usage: dict | None) -> UsageInfo:
     )
 
 
-def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> ChatCompletionResponse:
-    choices = []
-    finish_reasons = []
-    logprobs_list = []
+def _parsed_choices_from_data(
+    data: dict,
+) -> tuple[list[ParsedChatOutput], list[str | None], list[ChatCompletionLogProbs | None]]:
+    """Parse every `choices[]` entry in a llama-server response into `ParsedChatOutput`.
+
+    Shared by both `/v1/chat/completions` and `/v1/responses` projection —
+    llama-server's own parsers already did the reasoning/tool-call parsing,
+    this just extracts it into modelship's loader-agnostic DTO.
+    """
+    choices: list[ParsedChatOutput] = []
+    finish_reasons: list[str | None] = []
+    logprobs_list: list[ChatCompletionLogProbs | None] = []
     for choice in data.get("choices", []):
         message = choice.get("message") or {}
         dto = ParsedChatOutput(
@@ -617,6 +692,11 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
                 logger.warning("Failed to validate choice logprobs: %s", e)
         logprobs_list.append(choice_logprobs)
 
+    return choices, finish_reasons, logprobs_list
+
+
+def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> ChatCompletionResponse:
+    choices, finish_reasons, logprobs_list = _parsed_choices_from_data(data)
     return build_from_parsed(
         request_id=data.get("id") or request_id,
         model_name=model_name,
@@ -625,6 +705,19 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
         finish_reasons=finish_reasons,
         created=data.get("created"),
         logprobs=logprobs_list,
+    )
+
+
+def _project_response(data: dict, request: ResponsesRequest, *, model_name: str) -> ResponseObject:
+    choices, finish_reasons, _logprobs_list = _parsed_choices_from_data(data)
+    status, incomplete = _status_for(finish_reasons[0] if finish_reasons else None)
+    return build_response_object(
+        request,
+        status=status,
+        output=build_responses_items_from_parsed(choices[0]) if choices else [],
+        usage=_usage_from_chat(_project_usage(data.get("usage"))),
+        incomplete=incomplete,
+        model=model_name,
     )
 
 

@@ -18,6 +18,8 @@ from modelship.openai.protocol import (
     ImageGenerationResponse,
     ImageVariationRequest,
     RawSpeechResponse,
+    ResponseObject,
+    ResponsesRequest,
     SpeechRequest,
     TranscriptionRequest,
     TranscriptionResponse,
@@ -184,6 +186,11 @@ class BaseInfer(ABC):
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
+        return _NOT_SUPPORTED
+
+    async def create_response(
+        self, request: ResponsesRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
         return _NOT_SUPPORTED
 
     async def create_embedding(self, request: EmbeddingRequest, raw_request: RawRequestProxy) -> ErrorResponse:
