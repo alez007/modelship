@@ -22,6 +22,7 @@ from modelship.openai.chat_utils import (
     UnsupportedContentError,
     build_from_parsed,
     build_responses_items_from_parsed,
+    encode_chat_sse_chunk,
     normalize_chat_messages,
 )
 from modelship.openai.protocol import (
@@ -382,6 +383,14 @@ class LlamaServerInfer(BaseInfer):
         payload["model"] = self.model_config.name
 
         try:
+            return await self.run_cancellable(self._send_embedding(payload, request_id), raw_request)
+        except ClientDisconnectedError:
+            logger.info("embedding request %s aborted: client disconnected", request_id)
+            return create_error_response("Client disconnected")
+
+    async def _send_embedding(self, payload: dict[str, Any], request_id: str) -> ErrorResponse | EmbeddingResponse:
+        assert self._client is not None
+        try:
             resp = await self._client.post("/v1/embeddings", json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -536,15 +545,17 @@ class LlamaServerInfer(BaseInfer):
 
     async def _stream_chat_completion_body(self, payload: dict[str, Any], request_id: str) -> AsyncGenerator[str, None]:
         assert self._client is not None
+        trace = logger.isEnabledFor(TRACE)
         buffered: list[str] = []
         try:
             async for chunk in _raw_stream_chunks(
                 self._client, payload, model_name=self.model_config.name, request_id=request_id
             ):
-                for choice in chunk.choices:
-                    if choice.delta.content:
-                        buffered.append(choice.delta.content)
-                yield _encode_chunk(chunk)
+                if trace:
+                    for choice in chunk.choices:
+                        if choice.delta.content:
+                            buffered.append(choice.delta.content)
+                yield encode_chat_sse_chunk(chunk)
             yield "data: [DONE]\n\n"
         except _LlamaServerStreamError as e:
             yield _encode_error(str(e))
@@ -554,7 +565,8 @@ class LlamaServerInfer(BaseInfer):
             yield _encode_error(f"llama-server request failed: {e}")
             yield "data: [DONE]\n\n"
         finally:
-            logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
+            if trace:
+                logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
 
     async def _stream_response(
         self, payload: dict[str, Any], request: ResponsesRequest, request_id: str, raw_request: RawRequestProxy
@@ -842,12 +854,7 @@ def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResp
                 index=item.get("index", 0), embedding=item.get("embedding", []), object=item.get("object", "embedding")
             )
         )
-    raw_usage = data.get("usage") or {}
-    usage = UsageInfo(
-        prompt_tokens=raw_usage.get("prompt_tokens", 0) or 0,
-        completion_tokens=raw_usage.get("completion_tokens", 0) or 0,
-        total_tokens=raw_usage.get("total_tokens", 0) or 0,
-    )
+    usage = _project_usage(data.get("usage"))
     created = data.get("created")
     if created is None:
         created = int(time.time())
@@ -859,10 +866,6 @@ def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResp
         data=projected_data,
         usage=usage,
     )
-
-
-def _encode_chunk(chunk: ChatCompletionStreamResponse) -> str:
-    return f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
 
 
 def _encode_error(detail: str) -> str:

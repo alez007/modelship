@@ -122,8 +122,12 @@ class BaseInfer(ABC):
         the in-flight `__anext__()` call delivers `CancelledError` straight into
         `work`'s currently-suspended frame (and transitively into whatever it's
         awaiting, e.g. an engine's own generator), the same way cancelling a
-        plain task does for `run_cancellable`. `aclose()` afterward is a defensive
-        no-op when the generator already self-terminated on that exception.
+        plain task does for `run_cancellable`. The `finally` block's `aclose()`
+        is what actually guarantees `work` is closed on every exit path —
+        including the consumer closing *this* generator early (`GeneratorExit`
+        propagating out of the `yield`), which the disconnect branch's own
+        `aclose()` above doesn't cover. It's a defensive no-op wherever `work`
+        already self-terminated.
         """
         watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
         try:
@@ -147,6 +151,7 @@ class BaseInfer(ABC):
             watch.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watch
+            await work.aclose()
 
     async def on_generation_aborted(self) -> None:
         """Hook for loaders whose engine needs cleanup beyond task cancellation
