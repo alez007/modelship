@@ -54,6 +54,7 @@ from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer, ClientDisconnecte
 from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
 from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
+from modelship.infer.vllm.parsing.detect import resolve_reasoning_parser, resolve_tool_parser
 from modelship.logging import TRACE, get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.chat_utils import (
@@ -62,8 +63,6 @@ from modelship.openai.chat_utils import (
     build_responses_items_from_parsed,
     normalize_chat_messages,
 )
-from modelship.openai.parsers.reasoning import resolve_active_reasoning_parser
-from modelship.openai.parsers.utils import render_generation_prompt
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -303,22 +302,12 @@ class VllmInfer(BaseInfer):
             base_model_paths=[BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)],
         )
 
-        # Driver-side `resolve_all_{tool,reasoning}_parsers` populated these
-        # with the final parser name (explicit user setting or auto-detected),
-        # or left them None to signal "disabled". Don't redo the precedence here.
-        tool_parser_name = self.model_config._resolved_tool_call_parser
+        # get_chat_template isn't in vLLM's TokenizerLike protocol (it's a plain
+        # HF PreTrainedTokenizer method the real tokenizer always has).
+        template = cast(Any, self.engine.get_tokenizer()).get_chat_template()
+        tool_parser_name = resolve_tool_parser(self.model_config, template)
         enable_tools = tool_parser_name is not None
-        # Confirm the capability-detected reasoning parser against the real render: a
-        # deployment that suppressed reasoning via chat_template_kwargs downgrades to
-        # None. vLLM owns reasoning parsing, so this mainly keeps reported state honest.
-        template = self.model_config._resolved_chat_template
-        reasoning_parser_name = (
-            resolve_active_reasoning_parser(
-                self.model_config._resolved_reasoning_parser,
-                lambda: render_generation_prompt(template or "", self.model_config.chat_template_kwargs),
-            )
-            or ""
-        )
+        reasoning_parser_name = resolve_reasoning_parser(self.model_config, template) or ""
 
         self._enable_auto_tools = enable_tools
         self.openai_serving_render = OpenAIServingRender(

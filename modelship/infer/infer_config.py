@@ -212,9 +212,6 @@ class ModelshipModelConfig(BaseModel):
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     _resolved_path: str | None = PrivateAttr(default=None)
-    _resolved_tool_call_parser: str | None = PrivateAttr(default=None)
-    _resolved_reasoning_parser: str | None = PrivateAttr(default=None)
-    _resolved_chat_template: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="before")
     @classmethod
