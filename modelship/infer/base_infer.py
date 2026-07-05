@@ -122,10 +122,23 @@ class BaseInfer(ABC):
         the in-flight `__anext__()` call delivers `CancelledError` straight into
         `work`'s currently-suspended frame (and transitively into whatever it's
         awaiting, e.g. an engine's own generator), the same way cancelling a
-        plain task does for `run_cancellable`. `aclose()` afterward is a defensive
-        no-op when the generator already self-terminated on that exception.
+        plain task does for `run_cancellable`. The `finally` block's `aclose()`
+        is what actually guarantees `work` is closed on every exit path —
+        including the consumer closing *this* generator early (`GeneratorExit`
+        propagating out of the `yield`), which the disconnect branch's own
+        `aclose()` above doesn't cover. It's a defensive no-op wherever `work`
+        already self-terminated.
+
+        `next_item` is tracked outside the loop so `finally` can reach it: if
+        this generator is torn down (cancelled or `aclose()`d) while suspended
+        in the `asyncio.wait` below rather than at the `yield`, `next_item`'s
+        `__anext__()` call is still in flight and still owns `work`'s frame —
+        calling `work.aclose()` before that settles raises `RuntimeError:
+        aclose(): asynchronous generator is already running`. It must be
+        cancelled and awaited first, same as the disconnect branch above does.
         """
         watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
+        next_item: asyncio.Task[T] | None = None
         try:
             while True:
                 next_item = asyncio.ensure_future(work.__anext__())
@@ -147,6 +160,11 @@ class BaseInfer(ABC):
             watch.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watch
+            if next_item is not None and not next_item.done():
+                next_item.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await next_item
+            await work.aclose()
 
     async def on_generation_aborted(self) -> None:
         """Hook for loaders whose engine needs cleanup beyond task cancellation

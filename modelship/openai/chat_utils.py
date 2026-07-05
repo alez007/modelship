@@ -8,6 +8,7 @@ from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
+    ChatCompletionStreamResponse,
     ChatMessage,
     ToolCall,
     UsageInfo,
@@ -277,6 +278,11 @@ def build_from_parsed(
         usage=usage,
         created=created,
     )
+
+
+def encode_chat_sse_chunk(chunk: ChatCompletionStreamResponse) -> str:
+    """Encode one chat-completion stream chunk as an SSE `data:` line."""
+    return f"data: {chunk.model_dump_json()}\n\n"
 
 
 def build_responses_items_from_parsed(parsed: ParsedChatOutput) -> list[ResponseOutputItem]:

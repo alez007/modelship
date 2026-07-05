@@ -199,3 +199,67 @@ async def test_stream_disconnect_poll_interval_does_not_starve_fast_stream():
 
     assert items == [0, 1, 2, 3, 4]
     assert elapsed < _DISCONNECT_POLL_INTERVAL_S
+
+
+@pytest.mark.asyncio
+async def test_consumer_closing_outer_generator_early_closes_work():
+    """If the consumer stops iterating (e.g. Starlette aclose()s the response
+    generator mid-stream) before any disconnect is detected, `work` must still
+    be closed — not left for the event loop to finalize whenever it gets
+    around to it."""
+    work_closed = asyncio.Event()
+
+    async def gen():
+        try:
+            for i in range(5):
+                yield i
+                await asyncio.sleep(10)
+        finally:
+            work_closed.set()
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)
+
+    outer = infer.run_cancellable_stream(gen(), raw_request)
+    first = await outer.__anext__()
+    assert first == 0
+
+    await outer.aclose()
+
+    assert work_closed.is_set()
+    assert infer.aborted is False
+
+
+@pytest.mark.asyncio
+async def test_task_cancelled_while_suspended_in_asyncio_wait_does_not_raise():
+    """If the task driving this generator is cancelled while suspended in the
+    internal `asyncio.wait` (rather than at the `yield`), the loop's `next_item`
+    task is still in flight and still owns `work`'s frame. Calling
+    `work.aclose()` before cancelling and awaiting `next_item` first raises
+    `RuntimeError: aclose(): asynchronous generator is already running`
+    instead of letting `CancelledError` propagate cleanly."""
+    work_closed = asyncio.Event()
+
+    async def gen():
+        try:
+            yield "first"
+            await asyncio.sleep(10)
+            yield "unreachable"  # pragma: no cover - never reached
+        finally:
+            work_closed.set()
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)
+
+    outer = infer.run_cancellable_stream(gen(), raw_request)
+    first = await outer.__anext__()
+    assert first == "first"
+
+    task = asyncio.ensure_future(outer.__anext__())
+    await asyncio.sleep(0.01)  # let it create next_item and suspend in asyncio.wait
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert work_closed.is_set()

@@ -68,12 +68,12 @@ from modelship.openai.chat_utils import (
     UnsupportedContentError,
     build_from_parsed,
     build_responses_items_from_parsed,
+    encode_chat_sse_chunk,
     normalize_chat_messages,
 )
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ChatCompletionStreamResponse,
     EmbeddingCompletionRequest,
     EmbeddingRequest,
     ErrorResponse,
@@ -100,10 +100,6 @@ from modelship.preflight import discover_hardware, merge_with_user_overrides, ru
 from modelship.utils import base_request_id
 
 logger = get_logger("infer.vllm")
-
-
-def _encode_chunk(chunk: ChatCompletionStreamResponse) -> str:
-    return f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
 
 
 def _encode_error(error: ErrorResponse) -> str:
@@ -441,13 +437,15 @@ class VllmInfer(BaseInfer):
             want_logprobs=bool(request.logprobs),
             num_output_top_logprobs=request.top_logprobs,
         )
+        trace = logger.isEnabledFor(TRACE)
         buffered: list[str] = []
         try:
             async for chunk in self.run_cancellable_stream(stream, raw_request):
-                for choice in chunk.choices:
-                    if choice.delta.content:
-                        buffered.append(choice.delta.content)
-                yield _encode_chunk(chunk)
+                if trace:
+                    for choice in chunk.choices:
+                        if choice.delta.content:
+                            buffered.append(choice.delta.content)
+                yield encode_chat_sse_chunk(chunk)
         except ClientDisconnectedError:
             logger.info("chat request %s aborted: client disconnected", request_id)
             return
@@ -463,7 +461,8 @@ class VllmInfer(BaseInfer):
             yield "data: [DONE]\n\n"
             return
         finally:
-            logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
+            if trace:
+                logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
         yield "data: [DONE]\n\n"
 
     async def _create_chat_completion_no_stream(
