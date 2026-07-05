@@ -37,8 +37,6 @@ from modelship.deploy.config import (  # noqa: E402
     load_raw_models,
     resolve_all_model_sources,
     resolve_all_plugin_wheels,
-    resolve_all_reasoning_parsers,
-    resolve_all_tool_parsers,
 )
 from modelship.deploy.effective_config import (  # noqa: E402
     deployment_names,
@@ -169,8 +167,6 @@ def main(argv: list[str] | None = None) -> None:
         # missing-file errors here instead of inside an UNHEALTHY replica. Runs
         # AFTER the gateway is up so /health and /readyz answer during downloads.
         resolve_all_model_sources(yml_conf)
-        resolve_all_tool_parsers(yml_conf)
-        resolve_all_reasoning_parsers(yml_conf)
 
         seed_expected_models(coordinator, gateway_name, yml_conf)
 
