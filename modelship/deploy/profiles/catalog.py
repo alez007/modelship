@@ -96,7 +96,7 @@ PROFILES: dict[str, tuple[ModelUsecase, ...]] = {
 _GENERATE_CPU = (
     ModelSpec(
         model="bartowski/Qwen2.5-1.5B-Instruct-GGUF:*Q4_K_M.gguf",
-        loader=ModelLoader.llama_cpp,
+        loader=ModelLoader.llama_server,
         usecase=ModelUsecase.generate,
         footprint_bytes=int(1.5 * _GiB),
         req_min=_req(1, 1.8, 18),
@@ -104,7 +104,7 @@ _GENERATE_CPU = (
     ),
     ModelSpec(
         model="bartowski/Llama-3.2-3B-Instruct-GGUF:*Q4_K_M.gguf",
-        loader=ModelLoader.llama_cpp,
+        loader=ModelLoader.llama_server,
         usecase=ModelUsecase.generate,
         footprint_bytes=int(3.0 * _GiB),
         req_min=_req(2, 3.0, 30),
@@ -112,7 +112,7 @@ _GENERATE_CPU = (
     ),
     ModelSpec(
         model="bartowski/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf",
-        loader=ModelLoader.llama_cpp,
+        loader=ModelLoader.llama_server,
         usecase=ModelUsecase.generate,
         footprint_bytes=int(6.0 * _GiB),
         req_min=_req(4, 5.0, 45),
@@ -120,7 +120,7 @@ _GENERATE_CPU = (
     ),
     ModelSpec(
         model="bartowski/Qwen2.5-14B-Instruct-GGUF:*Q4_K_M.gguf",
-        loader=ModelLoader.llama_cpp,
+        loader=ModelLoader.llama_server,
         usecase=ModelUsecase.generate,
         footprint_bytes=int(11.0 * _GiB),
         req_min=_req(6, 9.5, 70),
@@ -226,7 +226,7 @@ _IMAGE_GPU = (
 _EMBED = (
     ModelSpec(
         model="nomic-ai/nomic-embed-text-v1.5-GGUF:*f16.gguf",
-        loader=ModelLoader.llama_cpp,
+        loader=ModelLoader.llama_server,
         usecase=ModelUsecase.embed,
         footprint_bytes=int(0.6 * _GiB),
         req_min=_req(0.5, 0.6, 7),

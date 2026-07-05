@@ -37,7 +37,7 @@ _CORES_SATELLITE = 1.0
 
 # Maps a built-in loader to the models.yaml field its inner config lives under.
 _LOADER_CONFIG_FIELD = {
-    ModelLoader.llama_cpp: "llama_cpp_config",
+    ModelLoader.llama_server: "llama_server_config",
     ModelLoader.stable_diffusion_cpp: "stable_diffusion_cpp_config",
     ModelLoader.diffusers: "diffusers_config",
     ModelLoader.vllm: "vllm_engine_kwargs",

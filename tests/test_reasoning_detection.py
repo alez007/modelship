@@ -1,7 +1,6 @@
-"""Render-based reasoning detection and the tool_choice force signal."""
+"""Render-based reasoning suppression detection."""
 
-from modelship.openai.parsers.reasoning.utils import reasoning_active_in_render, resolve_active_reasoning_parser
-from modelship.openai.parsers.tool_calling import request_forces_tool_call
+from modelship.openai.parsers.reasoning import reasoning_active_in_render, resolve_active_reasoning_parser
 from modelship.openai.parsers.utils import render_generation_prompt
 
 # Qwen3-style: prefills a closed <think></think> only when enable_thinking is false.
@@ -67,18 +66,16 @@ class TestResolveActiveReasoningParser:
 
         assert resolve_active_reasoning_parser("deepseek_r1", boom) == "deepseek_r1"
 
+    def test_unknown_candidate_skips_probe(self):
+        # An explicitly configured vLLM reasoning parser modelship doesn't
+        # auto-detect (no known start/end markers) — nothing to probe against,
+        # so the candidate is trusted as-is and the render is never called.
+        called = False
 
-class TestRequestForcesToolCall:
-    def test_required(self):
-        assert request_forces_tool_call("required") is True
+        def render():
+            nonlocal called
+            called = True
+            return ""
 
-    def test_named_function(self):
-        assert request_forces_tool_call({"type": "function", "function": {"name": "f"}}) is True
-
-    def test_named_function_without_name(self):
-        assert request_forces_tool_call({"type": "function", "function": {}}) is False
-
-    def test_auto_and_none(self):
-        assert request_forces_tool_call("auto") is False
-        assert request_forces_tool_call("none") is False
-        assert request_forces_tool_call(None) is False
+        assert resolve_active_reasoning_parser("qwen3", render) == "qwen3"
+        assert called is False

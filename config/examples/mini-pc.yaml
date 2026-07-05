@@ -1,5 +1,5 @@
 # Low-resource home-assistant stack for a mini-PC (e.g. Intel N100, 16 GB RAM).
-# CPU-only: quantized chat via llama.cpp, Kokoro ONNX TTS, whisper.cpp STT.
+# CPU-only: quantized chat via llama-server, Kokoro ONNX TTS, whisper.cpp STT.
 # Note: kokoroonnx needs espeak-ng on the host (apt-get install -y espeak-ng).
 
 models:
@@ -7,9 +7,9 @@ models:
   - name: "qwen"
     model: "lmstudio-community/Qwen2.5-3B-Instruct-GGUF:*Q4_K_M.gguf"
     usecase: "generate"
-    loader: "llama_cpp"
+    loader: "llama_server"
     num_cpus: 2
-    llama_cpp_config:
+    llama_server_config:
       n_ctx: 4096
 
   # TTS — Kokoro on CPU via ONNX.

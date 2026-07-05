@@ -72,7 +72,7 @@ secrets:
   # Comma-separated keys; when non-empty the gateway requires Authorization.
   apiKeys: ""
 
-# -- Shared model-weight cache. vLLM/transformers/diffusers download weights here.
+# -- Shared model-weight cache. vLLM/diffusers download weights here.
 # Multi-node clusters REQUIRE ReadWriteMany so every worker shares one copy;
 # a single-node cluster can use ReadWriteOnce.
 cache:

@@ -50,15 +50,10 @@ JSON format example:
 | `modelship.infer` | Base inference layer |
 | `modelship.infer.deployment` | Ray Serve model deployment actor |
 | `modelship.infer.vllm` | vLLM inference backend |
-| `modelship.infer.transformers` | Transformers inference backend |
-| `modelship.infer.transformers.transcription` | Transformers speech-to-text/translation |
-| `modelship.infer.transformers.chat` | Transformers chat/generation |
-| `modelship.infer.transformers.embedding` | Transformers embeddings |
-| `modelship.infer.transformers.speech` | Transformers TTS |
 | `modelship.infer.diffusers` | Diffusers inference backend |
 | `modelship.infer.diffusers.image` | Diffusers image generation |
 | `modelship.infer.custom` | Custom/plugin inference backend |
-| `modelship.plugin.<name>` | Individual plugins (kokoroonnx, bark, orpheus, whispercpp) |
+| `modelship.plugin.<name>` | Individual plugins (kokoroonnx, orpheus, whispercpp) |
 
 ### Syslog
 

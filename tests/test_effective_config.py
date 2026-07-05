@@ -19,7 +19,7 @@ from modelship.state.file import FileStateStore
 
 def _model(name: str, **overrides) -> dict:
     """A minimal raw model dict (the form the store holds)."""
-    base = {"name": name, "model": f"org/{name}", "usecase": "generate", "loader": "llama_cpp"}
+    base = {"name": name, "model": f"org/{name}", "usecase": "generate", "loader": "llama_server"}
     base.update(overrides)
     return base
 

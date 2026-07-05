@@ -8,10 +8,8 @@ from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig, ModelUsecase
 from modelship.infer.model_resolver import resolve_model_source
 from modelship.logging import get_logger
-from modelship.openai.parsers.reasoning.registry import get_parser as get_reasoning_parser
-from modelship.openai.parsers.reasoning.utils import classify_template as classify_reasoning_template
-from modelship.openai.parsers.tool_calling.registry import available_parsers, get_parser
-from modelship.openai.parsers.tool_calling.utils import classify_template
+from modelship.openai.parsers.reasoning import classify_template as classify_reasoning_template
+from modelship.openai.parsers.tool_calling import classify_template
 from modelship.openai.parsers.utils import read_chat_template
 
 logger = get_logger("startup")
@@ -24,22 +22,9 @@ def _is_explicit_tool_opt_out(cfg) -> bool:
     that excludes our parser:
 
     - vllm: ``enable_auto_tool_choice: false`` — user disabled tool calling.
-    - transformers: ``tool_calls_enabled: false`` — user disabled tool calling.
-    - llama_cpp: ``tool_calls_enabled: false`` (disabled) OR ``chat_format`` set
-      (user wants llama-cpp-python's own function-calling handler — we must not
-      also wire up our parser).
     """
     if cfg.loader == ModelLoader.vllm:
         return cfg.vllm_engine_kwargs is not None and cfg.vllm_engine_kwargs.enable_auto_tool_choice is False
-    if cfg.loader == ModelLoader.transformers:
-        return cfg.transformers_config is not None and cfg.transformers_config.tool_calls_enabled is False
-    if cfg.loader == ModelLoader.llama_cpp:
-        if cfg.llama_cpp_config is None:
-            return False
-        if cfg.llama_cpp_config.tool_calls_enabled is False:
-            return True
-        if cfg.llama_cpp_config.chat_format is not None:
-            return True
     return False
 
 
@@ -149,23 +134,29 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
         if cfg.loader == ModelLoader.custom:
             continue
         assert cfg.model is not None  # validator guarantees this for built-in loaders
-        trust_remote_code = bool(
-            (cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)
-            or (cfg.transformers_config and cfg.transformers_config.trust_remote_code)
-        )
+        trust_remote_code = bool(cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)
         logger.info("Resolving model source for '%s': %s", cfg.name, cfg.model)
         cfg._resolved_path = resolve_model_source(cfg.model, trust_remote_code=trust_remote_code)
         logger.info("Resolved '%s' -> %s", cfg.name, cfg._resolved_path)
 
+        if cfg.loader == ModelLoader.llama_server and cfg.llama_server_config and cfg.llama_server_config.mmproj:
+            logger.info("Resolving mmproj source for '%s': %s", cfg.name, cfg.llama_server_config.mmproj)
+            cfg.llama_server_config.mmproj = resolve_model_source(
+                cfg.llama_server_config.mmproj, trust_remote_code=trust_remote_code
+            )
+            logger.info("Resolved mmproj -> %s", cfg.llama_server_config.mmproj)
+
         # GGUF is not supported on the vllm loader: vLLM 0.24 moved GGUF out of
         # tree, and the only external plugin is incompatible with 0.24's
-        # quantization API. Reject early with a pointer to llama_cpp instead of
-        # letting vLLM misparse the .gguf as a config.json deep in engine init.
+        # quantization API. Reject early with a pointer to llama_server instead
+        # of letting vLLM misparse the .gguf as a config.json deep in engine init.
         if cfg.loader == ModelLoader.vllm and cfg._resolved_path.lower().endswith(".gguf"):
             raise ValueError(
                 f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
-                f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_cpp` for GGUF models, or point "
-                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant)."
+                f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_server` for GGUF models, or point "
+                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant — this is "
+                f"also the supported path for gemma models, whose tool calling llama.cpp's parsers can't "
+                f"handle; see config/examples/vllm-cpu.yaml)."
             )
 
 
@@ -177,33 +168,34 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
     onto `_resolved_tool_call_parser` so loader code has a single source of
     truth and never re-implements the precedence.
 
-    Auto-detection runs for vllm, transformers, and llama_cpp. diffusers has
-    no chat path; custom is plugin-managed.
+    Auto-detection runs for vllm. llama_server does its own tool-call
+    detection internally; diffusers has no chat path; custom is plugin-managed.
 
     Behavior per model:
     - Loader-specific opt-out (see `_is_explicit_tool_opt_out`): leaves
       `_resolved_tool_call_parser` as None.
-    - Explicit parser name configured: validated against the registry,
-      stored on `_resolved_tool_call_parser`. Raises if unknown.
+    - Explicit parser name configured: validated against vLLM's own
+      `ToolParserManager`, stored on `_resolved_tool_call_parser`. Raises if
+      unknown.
     - Auto-detected, registered: stored on `_resolved_tool_call_parser`.
     - Auto-detected as `unknown` / known-but-unregistered: warn, leave None.
     - Not detected: leave None (no template tool-call affordance).
     """
-    registered = set(available_parsers())
-    for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
-            continue
-        if cfg.usecase != ModelUsecase.generate:
-            continue
+    vllm_generate_cfgs = [
+        cfg for cfg in yml_conf.models if cfg.loader == ModelLoader.vllm and cfg.usecase == ModelUsecase.generate
+    ]
+    if not vllm_generate_cfgs:
+        return
+
+    from vllm.tool_parsers import ToolParserManager
+
+    registered = set(ToolParserManager.list_registered())
+    for cfg in vllm_generate_cfgs:
         if _is_explicit_tool_opt_out(cfg):
             logger.info("Tool-call resolution skipped for '%s' (explicit opt-out).", cfg.name)
             continue
 
-        explicit = None
-        if cfg.loader == ModelLoader.transformers and cfg.transformers_config:
-            explicit = cfg.transformers_config.tool_call_parser
-        elif cfg.loader == ModelLoader.vllm and cfg.vllm_engine_kwargs:
-            explicit = cfg.vllm_engine_kwargs.tool_call_parser
+        explicit = cfg.vllm_engine_kwargs.tool_call_parser if cfg.vllm_engine_kwargs else None
 
         if explicit is not None:
             if explicit not in registered:
@@ -212,7 +204,6 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
                     f"which is not registered. Available: {sorted(registered) or '(none)'}."
                 )
             cfg._resolved_tool_call_parser = explicit
-            _merge_skip_specials(cfg, explicit, is_reasoning=False)
             logger.info("Using explicit tool_call_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -240,31 +231,7 @@ def resolve_all_tool_parsers(yml_conf: ModelshipConfig) -> None:
             )
             continue
         cfg._resolved_tool_call_parser = detected
-        _merge_skip_specials(cfg, detected, is_reasoning=False)
         logger.info("Auto-detected tool_call_parser=%r for '%s'", detected, cfg.name)
-
-
-def _skip_specials_for(parser_name: str, is_reasoning: bool = False) -> bool | None:
-    """Resolve the ``skip_special_tokens`` setting a loader should use.
-
-    Returns ``False`` when the parser declares ``markers_are_specials``
-    (its marker is registered as a special token and would be stripped by
-    the loader's default detokenization) — the loader must keep specials
-    in the stream and noise-strip the rest itself. Returns ``None``
-    otherwise so the loader keeps its own default (``True``).
-    """
-    get_fn = get_reasoning_parser if is_reasoning else get_parser
-    return False if get_fn(parser_name).markers_are_specials else None
-
-
-def _merge_skip_specials(cfg, parser_name: str, is_reasoning: bool = False) -> None:
-    """Update ``_resolved_skip_special_tokens`` if the parser requires it.
-
-    Once set to ``False`` (keep specials), it is never reset to ``None``.
-    """
-    if cfg._resolved_skip_special_tokens is False:
-        return
-    cfg._resolved_skip_special_tokens = _skip_specials_for(parser_name, is_reasoning=is_reasoning)
 
 
 def _is_explicit_reasoning_opt_out(cfg) -> bool:
@@ -291,7 +258,7 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
     - Not detected: leaves None (reasoning disabled).
     """
     for cfg in yml_conf.models:
-        if cfg.loader not in (ModelLoader.vllm, ModelLoader.transformers, ModelLoader.llama_cpp):
+        if cfg.loader != ModelLoader.vllm:
             continue
         if cfg.usecase != ModelUsecase.generate:
             continue
@@ -305,7 +272,6 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
 
         if explicit is not None:
             cfg._resolved_reasoning_parser = explicit
-            _merge_skip_specials(cfg, explicit, is_reasoning=True)
             logger.info("Using explicit reasoning_parser=%r for '%s'", explicit, cfg.name)
             continue
 
@@ -322,5 +288,4 @@ def resolve_all_reasoning_parsers(yml_conf: ModelshipConfig) -> None:
         if detected is None:
             continue
         cfg._resolved_reasoning_parser = detected
-        _merge_skip_specials(cfg, detected, is_reasoning=True)
         logger.info("Auto-detected reasoning_parser=%r for '%s'", detected, cfg.name)

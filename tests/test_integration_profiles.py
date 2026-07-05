@@ -146,7 +146,7 @@ def _run_deploy_expecting_failure(profile: str, num_cpus: int, num_gpus: int, tm
 
 @pytest.mark.integration
 @pytest.mark.profiles
-@pytest.mark.llama_cpp
+@pytest.mark.llama_server
 def test_chat_on_2_cores_deploys_smallest_generate(tmp_path):
     # 2 cores: chat (generate + embed) can only afford the 1.5B generate rung
     # alongside embed — the smallest box gets the smallest model.
@@ -157,7 +157,7 @@ def test_chat_on_2_cores_deploys_smallest_generate(tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.profiles
-@pytest.mark.llama_cpp
+@pytest.mark.llama_server
 def test_chat_on_8_cores_scales_generate_up(tmp_path):
     # 8 cores: the knapsack must pick a larger generate than the 2-core box did
     # (at least the 3B), proving cpu headroom scales the selection up.
@@ -168,7 +168,7 @@ def test_chat_on_8_cores_scales_generate_up(tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.profiles
-@pytest.mark.llama_cpp
+@pytest.mark.llama_server
 def test_assistant_deploys_full_capability_set(tmp_path):
     # assistant = generate + transcription + tts. Needs the whispercpp + kokoroonnx
     # plugin wheels available (MSHIP_PLUGIN_WHEEL_DIR / installed extras).
@@ -211,4 +211,4 @@ def test_studio_on_one_gpu_uses_gpu_loaders(tmp_path):
         by_uc = {m["usecase"]: m for m in doc["models"]}
         assert by_uc["generate"]["loader"] == "vllm"
         assert by_uc["image"]["loader"] == "diffusers"
-        assert by_uc["embed"]["loader"] == "llama_cpp"
+        assert by_uc["embed"]["loader"] == "llama_server"

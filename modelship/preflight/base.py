@@ -380,13 +380,13 @@ class _CustomPluginPreflight:
 def _ensure_registered() -> None:
     if ModelLoader.custom not in _REGISTRY:
         register(ModelLoader.custom, _CustomPluginPreflight())
-    if ModelLoader.llama_cpp not in _REGISTRY:
+    if ModelLoader.llama_server not in _REGISTRY:
         try:
-            from modelship.preflight.llama_cpp import LlamaCppPreflight
+            from modelship.preflight.llama_cpp import LlamaServerPreflight
 
-            register(ModelLoader.llama_cpp, LlamaCppPreflight())
+            register(ModelLoader.llama_server, LlamaServerPreflight())
         except Exception:
-            logger.debug("preflight: LlamaCppPreflight registration skipped", exc_info=True)
+            logger.debug("preflight: LlamaServerPreflight registration skipped", exc_info=True)
     if ModelLoader.stable_diffusion_cpp not in _REGISTRY:
         try:
             from modelship.preflight.stable_diffusion_cpp import StableDiffusionCppPreflight

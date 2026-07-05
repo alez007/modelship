@@ -163,24 +163,24 @@ class TestBuildDeploymentOptions:
         opts = build_deployment_options(config, plugin_wheel=wheel_path)
         assert opts["ray_actor_options"]["runtime_env"]["pip"] == [str(wheel_path)]
 
-    def test_llama_cpp_honors_num_gpus(self):
+    def test_llama_server_honors_num_gpus(self):
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
             usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
+            loader=ModelLoader.llama_server,
             num_gpus=2,
         )
         opts = build_deployment_options(config)
         assert opts["ray_actor_options"]["num_gpus"] == 2
         assert "placement_group_bundles" not in opts
 
-    def test_llama_cpp_num_gpus_zero_stays_cpu(self):
+    def test_llama_server_num_gpus_zero_stays_cpu(self):
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
             usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
+            loader=ModelLoader.llama_server,
             num_gpus=0,
         )
         opts = build_deployment_options(config)

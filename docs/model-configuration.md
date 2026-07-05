@@ -112,7 +112,7 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `name` | string | Model identifier used in API requests |
 | `model` | string | HuggingFace repo ID, local path, or `repo:filename` (see [Model source](#model-source)). Required for built-in loaders; optional for `loader: custom` |
 | `usecase` | string | `generate`, `embed`, `transcription`, `translation`, `tts`, or `image` |
-| `loader` | string | `vllm`, `transformers`, `diffusers`, `llama_cpp`, `stable_diffusion_cpp`, or `custom` |
+| `loader` | string | `vllm`, `diffusers`, `llama_server`, `stable_diffusion_cpp`, or `custom` |
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
@@ -120,12 +120,11 @@ Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is
 | `autoscaling_config` | object | Autoscale replicas with load instead of a fixed `num_replicas` (see [Autoscaling](#autoscaling)). Mutually exclusive with `num_replicas`. |
 | `max_ongoing_requests` | int | Per-replica Ray Serve concurrency cap (default: Ray Serve's own default of `100`). Streaming requests hold a slot for the whole generation, so a low cap throttles upstream of the engine; raise it for high-concurrency models. Omit to inherit the default. |
 | `vllm_engine_kwargs` | object | Passed directly to the vLLM engine (see below) |
-| `transformers_config` | object | Transformers loader options (see below) |
 | `diffusers_config` | object | Diffusers pipeline options (see below) |
-| `llama_cpp_config` | object | llama.cpp loader options (see below) |
+| `llama_server_config` | object | llama-server loader options (see below) |
 | `stable_diffusion_cpp_config` | object | stable-diffusion.cpp loader options (see below) |
 | `plugin_config` | object | Plugin-specific options passed through to the plugin |
-| `chat_template_kwargs` | object | Extra variables forwarded into the chat-template render on text loaders (`vllm`, `transformers`, `llama_cpp`) — e.g. `enable_thinking: false` for Qwen3. Only has an effect if the model's template branches on the key; ignored on paths that bypass the template (llama.cpp's native chat-handler fallback when `chat_format` is set or no template resolves). A per-request `chat_template_kwargs` overrides the model default on `vllm`. |
+| `chat_template_kwargs` | object | Extra variables forwarded into the chat-template render on text loaders (`vllm`) — e.g. `enable_thinking: false` for Qwen3. Only has an effect if the model's template branches on the key. A per-request `chat_template_kwargs` overrides the model default on `vllm`. |
 
 ## Model source
 
@@ -183,7 +182,7 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | `dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`) |
 | `tokenizer` | string | model default | Custom tokenizer path |
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `gpu_memory_utilization` | float | `0.9` | VRAM fraction (overridden by `num_gpus` when `num_gpus < 1`) |
+| `gpu_memory_utilization` | float | `0.9` (`0.4` on CPU deploys) | VRAM fraction on GPU; on CPU it means *host RAM* fraction reserved for the KV cache instead (see [CPU (no GPU required)](#cpu-no-gpu-required) below). Overridden by `num_gpus` when `num_gpus < 1`, including `num_gpus: 0`. |
 | `quantization` | string | — | Quantization method (e.g. `awq`, `gptq`) |
 | `enable_auto_tool_choice` | bool | — | Enable automatic tool/function calling |
 | `tool_call_parser` | string | — | Tool call parser (e.g. `llama3_json`, `hermes`) |
@@ -191,8 +190,42 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | `kv_cache_dtype` | string | — | KV cache dtype (e.g. `fp8`) |
 
 > **GGUF is not supported on the `vllm` loader.** vLLM 0.24 dropped in-tree GGUF, so
-> pointing the vllm loader at a `.gguf` is rejected at startup. Use `loader: llama_cpp`
+> pointing the vllm loader at a `.gguf` is rejected at startup. Use `loader: llama_server`
 > for GGUF models; the vllm loader takes safetensors checkpoints or AWQ/GPTQ/FP8 quants.
+> This is unconditional regardless of GPU vs. CPU — see below.
+
+### CPU (no GPU required)
+
+The `vllm` loader also installs on the `cpu` extra (`num_gpus: 0`). The main use case is
+gemma models, which the `llama_server` loader can't tool-call (llama.cpp's own parsers
+don't support it) — vLLM handles gemma tool-calling correctly, GPU or CPU. This is **not** a way
+to run an existing GGUF gemma file on CPU: the GGUF rejection above applies here too, so
+you need a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/compressed-tensors quant —
+the CPU backend supports AWQ/GPTQ on x86 plus INT8 W8A8).
+
+`gpu_memory_utilization` means something different on CPU: vLLM repurposes it as the
+fraction of **host RAM** to reserve for the KV cache, not VRAM. modelship lowers its
+default to `0.4` for `num_gpus: 0` deploys — the GPU-oriented `0.9` default would try to
+reserve 90% of node RAM and fail at worker init on a real machine — but set it explicitly
+based on what your box can spare. For finer control than a RAM fraction, vLLM also reads
+`VLLM_CPU_KVCACHE_SPACE` (a fixed GiB budget) and `VLLM_CPU_OMP_THREADS_BIND` directly
+from the process environment; these are vLLM-native env vars, not modelship config.
+
+```yaml
+models:
+  - name: gemma-cpu
+    model: org/gemma-3-AWQ  # a real non-GGUF gemma checkpoint
+    usecase: generate
+    loader: vllm
+    num_gpus: 0
+    num_cpus: 4
+    vllm_engine_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: functiongemma
+      gpu_memory_utilization: 0.4
+```
+
+See `config/examples/vllm-cpu.yaml` for a complete example.
 
 ### Chat / Text Generation
 
@@ -274,94 +307,6 @@ models:
       trust_remote_code: true
 ```
 
-## Transformers Loader
-
-The `transformers` loader uses PyTorch with HuggingFace Transformers. Supports chat/generation, embeddings, transcription, translation, and TTS. Unlike the vLLM loader, it can run entirely on CPU — making it ideal for smaller models, development, or environments without a GPU.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `device` | string | `cpu` | Device to run on (`cpu`, `cuda`, `cuda:0`, etc.) |
-| `torch_dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`, `float32`) |
-| `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the model constructor |
-| `pipeline_kwargs` | object | `{}` | Extra keyword arguments passed to the pipeline at inference time |
-| `tool_call_parser` | string | auto | Parser used to turn raw model output into OpenAI `tool_calls`. Currently supported: `hermes` (Hermes-2-Pro / Qwen2.5-Instruct / many community fine-tunes that emit `<tool_call>{...}</tool_call>` markers), `qwen3_coder` (Qwen3-Coder family — same `<tool_call>` envelope but an XML body of `<function=name><parameter=key>value</parameter></function>`; parameter values are returned as strings), `mistral` (Mistral 7B Instruct v0.3+ / Mistral Small/Large that emit `[TOOL_CALLS][...]`), `llama3_json` (Llama-3.1 / Llama-3.2 Instruct emitting bare `{"name": "...", "parameters": {...}}`). Auto-detected from the chat template when omitted. |
-
-### Chat / Text Generation (CPU)
-
-```yaml
-models:
-  - name: qwen
-    model: Qwen/Qwen3-0.6B
-    usecase: generate
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### Chat with Tool Calling (CPU)
-
-The transformers loader renders `tools` into the prompt via the model's chat
-template and parses the output back into OpenAI `tool_calls`. The model must
-have been trained on a Hermes-style tool format (Qwen2.5-Instruct, Hermes-2,
-many community fine-tunes); the parser is selected via `tool_call_parser`.
-
-```yaml
-models:
-  - name: qwen-tools
-    model: Qwen/Qwen2.5-0.5B-Instruct
-    usecase: generate
-    loader: transformers
-    num_cpus: 2
-    transformers_config:
-      device: "cpu"
-      tool_call_parser: hermes  # this is the default; shown for clarity
-```
-
-### Speech-to-Text (CPU)
-
-Audio is automatically decoded and resampled to the model's expected sample rate (e.g. 16kHz for Whisper).
-
-```yaml
-models:
-  - name: whisper
-    model: openai/whisper-small
-    usecase: transcription
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### Embeddings (CPU)
-
-Uses `sentence-transformers` under the hood.
-
-```yaml
-models:
-  - name: embeddings
-    model: sentence-transformers/all-MiniLM-L6-v2
-    usecase: embed
-    loader: transformers
-    num_gpus: 0
-    transformers_config:
-      device: "cpu"
-```
-
-### TTS (GPU)
-
-```yaml
-models:
-  - name: my-tts
-    model: some-org/some-tts-model
-    usecase: tts
-    loader: transformers
-    num_gpus: 0.20
-    transformers_config:
-      device: "cuda:0"
-```
-
 ## Diffusers Loader
 
 The `diffusers` loader uses HuggingFace Diffusers for image generation. Any model supported by `AutoPipelineForText2Image` works out of the box.
@@ -385,92 +330,71 @@ models:
       guidance_scale: 0.0
 ```
 
-## llama.cpp Loader
+## llama_server Loader
 
-The `llama_cpp` loader uses [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) to run GGUF models. It supports **CPU or GPU inference** (GGUF offload via `n_gpu_layers`). `num_gpus` must be `0` (CPU-only, `n_gpu_layers` forced to `0`) or a whole integer number of GPUs — fractional `num_gpus` is rejected at config time, since llama.cpp has no VRAM-fraction knob. With `num_gpus >= 1` on the GPU build, `n_gpu_layers` is honored (default `-1` = offload all layers); multi-GPU deploys use llama.cpp's default even layer split across the visible GPUs (`tensor_split`, `split_mode`, and `main_gpu` are available via `model_kwargs` for finer control). This loader is ideal for running quantized models efficiently, including on hardware without dedicated GPUs.
+The `llama_server` loader runs GGUF models by launching a [`llama-server`](https://github.com/ggml-org/llama.cpp) subprocess and proxying its native OpenAI-compatible HTTP API. Chat templating, tool-call parsing, and reasoning parsing are all llama-server's own (`--jinja --reasoning-format auto`), not modelship's. `--parallel` request slots let concurrent requests actually overlap instead of serializing behind a single lock. It requires the `llama-server` binary to be discoverable via `MSHIP_LLAMA_SERVER_BIN` (see [development.md](development.md#llama-server-binary-llama_server-loader)); the Docker images ship a pinned build at `/opt/llama.cpp`.
+
+`num_gpus` must be `0` (CPU-only) or a whole integer number of GPUs — fractional is rejected at config time, since llama.cpp has no VRAM-fraction knob.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `n_ctx` | int | `2048` | Maximum sequence length |
+| `n_ctx` | int | `2048` | Per-slot context length. The launch command multiplies this by `parallel` for llama-server's total `-c` (it splits one context budget across slots) |
 | `n_batch` | int | `512` | Batch size for prompt processing |
-| `n_gpu_layers` | int | `-1` | Layers to offload to GPU (`-1` = all). Honored when `num_gpus >= 1` on a GPU-capable build; forced to `0` otherwise |
-| `chat_format` | string | — | Chat template format (e.g. `llama-3`) |
-| `model_kwargs` | object | `{}` | Extra keyword arguments passed to the `Llama` constructor (e.g. `tensor_split`, `split_mode`, `main_gpu`) |
-| `cache` | object | — | llama.cpp's native prompt-state cache (see below). Omit to disable. |
+| `n_gpu_layers` | int | `-1` | Layers to offload to GPU when `num_gpus >= 1` (`-1` auto-fits free VRAM, `<= -2` offloads all layers). Forced to `0` when `num_gpus` is `0` |
+| `parallel` | int | `1` | Concurrent request slots (`--parallel`). When `max_ongoing_requests` isn't set explicitly, it defaults to this value so overflow queues in Ray Serve rather than inside llama-server |
+| `chat_template` | string | — | Built-in template name (e.g. `chatml`) or a path to a Jinja file. Omit to use the GGUF's embedded chat template |
+| `mmproj` | string | — | Multimodal projector file/repo ref (e.g. a CLIP model) for vision models — see [Vision](#vision-gguf) below |
+| `extra_args` | list[string] | `[]` | Escape hatch: extra flags appended verbatim to the `llama-server` launch command |
 
-> **Note:** Setting `MSHIP_LOG_LEVEL` to `TRACE` will enable `verbose` mode in the underlying llama.cpp engine.
-
-#### Prompt cache (`cache`)
-
-When set, llama.cpp's native prompt-state cache is attached to the model (via `Llama.set_cache`). It stores the model's evaluated KV state keyed by prompt prefix, so a later request that shares a prefix skips re-evaluating it — useful for repeated system prompts or long shared contexts.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `type` | string | `ram` | `ram` keeps states in process memory; `disk` persists them (survives replica restarts, at the cost of disk I/O) |
-| `capacity` | string/int | `2GiB` | Eviction ceiling for cached states. Accepts a human-readable size — `2GiB`, `512MB`, `1.5gb` — or a bare byte count. Decimal units (`KB`/`MB`/`GB`/`TB`) are powers of 1000; binary units (`KiB`/`MiB`/`GiB`/`TiB`) powers of 1024 |
-
-The `disk` cache is stored under `$MSHIP_CACHE_DIR/llama_cache/<deployment-name>` (default `/.cache`), keyed by the deployment name (model name + config fingerprint + gateway). This isolates the store per model configuration version and per gateway, so a different model, a changed config, or another gateway never cross-loads — or concurrently corrupts — an incompatible cache. The fingerprint is stable across redeploys of the same config, so persistence holds.
-
-> **Note:** `type: disk` requires a single replica. llama.cpp's on-disk cache has no file locking, so replicas sharing the store would corrupt it — combining `disk` with `num_replicas > 1` (or an `autoscaling_config` whose `max_replicas > 1`) is a config error that stops the deploy. Use `type: ram` (per-process, always safe) for multi-replica models.
+> **Note:** there is no persistent on-disk prompt cache. llama-server manages request-level prefix caching internally and automatically within its slots, but has no equivalent to modelship's restart-persistent disk cache.
 
 ```yaml
 models:
-  - name: "qwen-gguf-hf"
+  - name: "qwen-llama-server"
     model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
     usecase: "generate"
-    loader: "llama_cpp"
-    llama_cpp_config:
-      cache:
-        type: disk
-        capacity: 4GiB
+    loader: "llama_server"
+    llama_server_config:
+      parallel: 4
 ```
 
-#### Tool calling (`tool_choice`)
+### Tool calling and reasoning gaps vs. the OpenAI spec
 
-Tool-call behavior is driven entirely by the per-request OpenAI `tool_choice` parameter — there is no deploy-level flag. Sending a `tools` array is the opt-in.
+llama-server auto-detects both the tool-call and reasoning parser from the model's chat template — there is no modelship-level override. Two gaps are real and per-model-family, not per-loader, so test against the specific model in use before relying on either:
 
-When a request carries `tools` and the model has a usable `tool_call_parser`, decoding is automatically constrained by a [GBNF](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md) grammar compiled from those tool schemas (it caps the call count, pins `name` to a real tool, and constrains `arguments` to each tool's JSON schema — preventing malformed envelopes, invented fields, and runaway repetition). `tool_choice` selects the grammar's root:
+- **Named-function forcing is unsupported.** `tool_choice: {"type": "function", "function": {"name": "X"}}` silently falls back to `auto` (llama-server logs a warning; modelship does not surface it as an error).
+- **`tool_choice: required` enforcement depends on the model's chat template family.** It's grammar-enforced for harmony-style templates (e.g. gpt-oss) but a silent no-op for hermes-style templates (e.g. Qwen3) — the model may still answer in free text with no error.
+- **Bare `response_format: {"type": "json_object"}` (no `schema` key) is not enforced**, despite llama-server's own docs describing it as supported "plain JSON output" — verified directly against the b9859 binary. The model can answer in free text with no error. This doesn't affect `type: json_schema` requests (which modelship sends whenever a schema is given, e.g. structured outputs) — those carry a `schema` and llama-server does constrain them correctly.
 
-- `auto` (default) — the model may answer in free text **or** call tools. The free-text branch cannot contain a literal `<`, so it is skipped on a reasoning-enabled deployment (which would emit `<think>`); tool calls are still parsed from the raw output.
-- `required` / `{"type":"function","function":{"name":"X"}}` — the free-text branch is dropped, so the model **must** call a tool. Because that root cannot emit `<think>`, it is enforced even on a reasoning-capable model.
-- `none` — tools are suppressed entirely.
+`response_format`/`json_schema` can be combined with reasoning in the same request, and `logprobs`/`top_logprobs` are forwarded and returned.
 
-Per-loader enforcement: **vLLM** honors `tool_choice` natively. **llama_cpp** enforces `required`/named via the grammar above (when a grammar-emitting parser is resolved — currently the JSON family `hermes` and the Gemma family; others are left unconstrained, logged once). **transformers** has no constrained decoding, so `required`/named are best-effort (tools are passed and the model is trusted).
+### Vision (GGUF)
 
-Caveats: the grammar enforces *structure*, not *choice* (it can't pick the right value); JSON-schema numeric bounds aren't expressible as GBNF ranges (digit shape only); and the tool-call grammar takes precedence over a `response_format` grammar on the same request — the two cannot be combined.
-
-#### Reasoning detection
-
-A model's reasoning parser is auto-detected from its chat template. After load, each loader renders a generation prompt with the deployment's effective `chat_template_kwargs` and confirms whether reasoning is actually emitted; if you suppress it (e.g. `chat_template_kwargs: {enable_thinking: false}` on Qwen3), the parser is disabled — speeding up inference and letting `tool_choice=auto` fully constrain. There is no modelship-level reasoning flag.
-
-GGUF variants in a HuggingFace repo are picked via the `:filename` syntax on the
-`model:` field (see [Model source](#model-source)). The selector is a glob and
-must match exactly one file.
-
-### Chat / Text Generation (GGUF)
+Set `mmproj` to a multimodal projector file (local path or `repo:filename`, resolved the same way as `model:`) to enable image input; requests with `image_url`/`input_image` content parts are rejected at the gateway when `mmproj` isn't configured.
 
 ```yaml
 models:
-  - name: "qwen-gguf-hf"
-    model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+  - name: "llava-llama-server"
+    model: "second-state/Llava-v1.5-7B-GGUF:llava-v1.5-7b-Q4_K_M.gguf"
     usecase: "generate"
-    loader: "llama_cpp"
-    num_cpus: 3
+    loader: "llama_server"
+    llama_server_config:
+      mmproj: "second-state/Llava-v1.5-7B-GGUF:llava-v1.5-7b-mmproj-model-f16.gguf"
 ```
 
 ### Embeddings (GGUF)
 
 ```yaml
 models:
-  - name: nomic-embed
+  - name: nomic-embed-server
     model: "nomic-ai/nomic-embed-text-v1.5-GGUF:nomic-embed-text-v1.5.Q4_K_M.gguf"
     usecase: embed
-    loader: llama_cpp
+    loader: llama_server
 ```
 
 ## stable-diffusion.cpp Loader
 
-The `stable_diffusion_cpp` loader uses [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (via [stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)) for **CPU-only image generation** — the image counterpart to the `llama_cpp` text loader. It runs GGUF-quantized single-file diffusion checkpoints (SD1.5, SDXL, SD-Turbo, all-in-one Flux) in a few GB of RAM, with no GPU. Any `num_gpus` is ignored (a warning is logged and the actor is allocated `num_gpus: 0`). `usecase` is always `image` (defaulted if omitted) and it serves `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations`.
+The `stable_diffusion_cpp` loader uses [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (via [stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)) for **CPU-only image generation**. It runs GGUF-quantized single-file diffusion checkpoints (SD1.5, SDXL, SD-Turbo, all-in-one Flux) in a few GB of RAM, with no GPU. Any `num_gpus` is ignored (a warning is logged and the actor is allocated `num_gpus: 0`). `usecase` is always `image` (defaulted if omitted) and it serves `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations`.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -508,7 +432,6 @@ The `custom` loader delegates to a plugin module. The `plugin` field is required
 
 See each plugin's README for configuration details:
 - [Kokoro ONNX TTS](../plugins/kokoroonnx/README.md)
-- [Bark TTS](../plugins/bark/README.md)
 - [Orpheus TTS](../plugins/orpheus/README.md)
 - [whisper.cpp STT](../plugins/whispercpp/README.md)
 

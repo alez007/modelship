@@ -209,7 +209,7 @@ class TestResolveHfRepo:
 
     def test_single_gguf_without_selector_returns_file_path(self):
         # Single-GGUF repo: resolver must return the file path (not a snapshot
-        # dir), because llama_cpp requires a file path.
+        # dir), because llama_server requires a file path.
         files = ["model.gguf", "config.json"]
         with (
             patch("modelship.infer.model_resolver.list_repo_files", return_value=files),

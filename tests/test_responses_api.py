@@ -1,4 +1,11 @@
-"""Route-level tests for /v1/responses (Phase A, non-streaming)."""
+"""Route-level tests for /v1/responses.
+
+Since Stage D, the route does no chat<->Responses translation itself (that
+now lives on `BaseInfer.create_response`, either the default Phase A shim or
+a loader's native override) — it only fails fast on unsupported features
+before touching Ray, then hands the original `ResponsesRequest` straight to
+`handle.respond` and threads the result through the shared `_handle_response`.
+"""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,17 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modelship.openai.api import ModelshipAPI
-from modelship.openai.protocol import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatCompletionResponseChoice,
-    ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse,
-    ChatMessage,
-    DeltaMessage,
-    ResponsesRequest,
-    UsageInfo,
-)
+from modelship.openai.protocol import ResponsesRequest
+from modelship.openai.protocol.responses import ResponseObject, ResponseOutputMessage, ResponseOutputText, ResponseUsage
 
 _ModelshipAPI = ModelshipAPI.func_or_class
 
@@ -45,9 +43,9 @@ def _raw_request():
 
 class TestResponsesRoute:
     @pytest.mark.asyncio
-    async def test_adapts_request_and_reuses_handle_response(self, api):
+    async def test_dispatches_original_request_to_respond(self, api):
         handle = MagicMock()
-        remote = handle.generate.options.return_value.remote
+        remote = handle.respond.options.return_value.remote
         api.models = {"m": {"m-a1b2c": handle}}
         api._round_robin = {"m": 0}
 
@@ -57,38 +55,25 @@ class TestResponsesRoute:
             result = await api.create_response(request, _raw_request())
 
         assert result == "OK"
-        # The chat request handed to the actor must be the translated shape.
-        chat_request = remote.call_args.args[0]
-        assert isinstance(chat_request, ChatCompletionRequest)
-        assert chat_request.messages == [
-            {"role": "system", "content": "be terse"},
-            {"role": "user", "content": "hi"},
-        ]
-        assert chat_request.stream is False
+        # No gateway-side translation: the original ResponsesRequest is handed
+        # straight to the deployment, which owns chat<->Responses shaping now.
+        assert remote.call_args.args[0] is request
         hr.assert_awaited_once()
         # endpoint label flows through to _handle_response for metrics.
         assert hr.call_args.args[3] == "create_response"
 
     @pytest.mark.asyncio
-    async def test_stream_true_drives_streaming_translation(self, api):
-        # stream=True sets stream + include_usage on the chat request and routes
-        # the chat SSE chunks through the Responses event translator, yielding a
-        # text/event-stream of Responses events.
+    async def test_stream_true_dispatches_and_returns_event_stream(self, api):
+        # Streaming has no gateway-side translation anymore: the deployment
+        # (BaseInfer.create_response) is responsible for producing Responses SSE
+        # events directly. The route only needs to thread them through.
         handle = MagicMock()
 
         async def gen():
-            chunk = ChatCompletionStreamResponse(
-                model="m",
-                choices=[
-                    ChatCompletionResponseStreamChoice(
-                        index=0, delta=DeltaMessage(content="hello!"), finish_reason="stop"
-                    )
-                ],
-            )
-            yield f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
-            yield "data: [DONE]\n\n"
+            yield 'event: response.created\ndata: {"type": "response.created"}\n\n'
+            yield 'event: response.completed\ndata: {"type": "response.completed"}\n\n'
 
-        handle.generate.options.return_value.remote.return_value = gen()
+        handle.respond.options.return_value.remote.return_value = gen()
         api.models = {"m": {"m-a1b2c": handle}}
         api._round_robin = {"m": 0}
 
@@ -96,14 +81,10 @@ class TestResponsesRoute:
         result = await api.create_response(request, _raw_request())
 
         assert result.media_type == "text/event-stream"
-        # The chat request handed to the loader must be streaming with usage on.
-        chat_request = handle.generate.options.return_value.remote.call_args.args[0]
-        assert chat_request.stream is True
-        assert chat_request.stream_options is not None and chat_request.stream_options.include_usage is True
+        assert handle.respond.options.return_value.remote.call_args.args[0] is request
 
         body = "".join([chunk async for chunk in result.body_iterator])
         assert "event: response.created" in body
-        assert "event: response.output_text.delta" in body
         assert "event: response.completed" in body
 
     @pytest.mark.asyncio
@@ -126,25 +107,20 @@ class TestResponsesRoute:
         assert body["error"]["type"] == "invalid_request_error"
 
     @pytest.mark.asyncio
-    async def test_end_to_end_adaptation_through_handle_response(self, api):
-        # Drive the real _handle_response with a mock generator yielding a chat
-        # response, and assert the body comes back in Responses shape.
+    async def test_end_to_end_through_handle_response(self, api):
+        # Drive the real _handle_response with a mock generator yielding an
+        # already-built ResponseObject (what the deployment now returns
+        # directly, with no gateway-side chat->Responses translation left).
         handle = MagicMock()
 
         async def gen():
-            yield ChatCompletionResponse(
+            yield ResponseObject(
                 model="m",
-                choices=[
-                    ChatCompletionResponseChoice(
-                        index=0,
-                        message=ChatMessage(role="assistant", content="hello!"),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=UsageInfo(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+                output=[ResponseOutputMessage(content=[ResponseOutputText(text="hello!")])],
+                usage=ResponseUsage(input_tokens=1, output_tokens=2, total_tokens=3),
             )
 
-        handle.generate.options.return_value.remote.return_value = gen()
+        handle.respond.options.return_value.remote.return_value = gen()
         api.models = {"m": {"m-a1b2c": handle}}
         api._round_robin = {"m": 0}
 

@@ -1,17 +1,19 @@
-"""Tool-call parser detection by chat-template inspection."""
+"""Tool-call parser name detection by chat-template inspection.
+
+Auto-detects which vLLM-native tool-call parser (``vllm.tool_parsers.ToolParserManager``)
+a model's chat template calls for, by marker sniffing. Names returned here must match
+vLLM's own registered parser names exactly — ``deploy/config.py`` validates them against
+vLLM's registry directly rather than a modelship-side one.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from modelship.openai.parsers.utils import read_chat_template
-
-
-def detect_tool_parser(model_path: str | Path) -> str | None:
-    """Return the name of the tool-call parser required by the model or None.
+def classify_template(template: str) -> str | None:
+    """Map a chat-template string to a vLLM tool-call parser name based on markers.
 
     - Returns "gemma4" if `<|tool_call>` markers are found.
-    - Returns "function_gemma" if `<start_function_call>` markers are found.
+    - Returns "functiongemma" if `<start_function_call>` markers are found.
     - Returns "qwen3_coder" if `<function=` or `<parameter=` markers are found.
     - Returns "hermes" if `<tool_call>` markers are found.
     - Returns "mistral" if `[TOOL_CALLS]` markers are found.
@@ -19,14 +21,6 @@ def detect_tool_parser(model_path: str | Path) -> str | None:
     - Returns "unknown" if tool logic is found but format markers are not recognized.
     - Returns ``None`` if no chat template / no tool logic is detected.
     """
-    template = read_chat_template(model_path)
-    if template is None:
-        return None
-    return classify_template(template)
-
-
-def classify_template(template: str) -> str | None:
-    """Map a chat-template string to a parser name based on tool-call markers."""
     if "tools" not in template and "tool_calls" not in template and "function" not in template:
         return None
 
@@ -34,7 +28,7 @@ def classify_template(template: str) -> str | None:
         return "gemma4"
 
     if "<start_function_call>" in template:
-        return "function_gemma"
+        return "functiongemma"
 
     # Qwen3-Coder shares the ``<tool_call>`` envelope with Hermes but the
     # body is XML rather than JSON. The ``<function=`` / ``<parameter=``

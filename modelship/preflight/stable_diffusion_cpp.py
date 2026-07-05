@@ -19,7 +19,7 @@ _VAE_TILING_RAM_THRESHOLD_BYTES = 8 * 1024**3
 class StableDiffusionCppPreflight:
     """Hardware-aware defaults for the stable_diffusion_cpp loader. Conservative
     in v1: the only recommendation is enabling VAE tiling on low-RAM hosts. Sizing
-    by model footprint (like the llama_cpp preflight does for n_ctx) is a
+    by model footprint (like the llama_server preflight does for n_ctx) is a
     follow-up once split-file resolution lands."""
 
     def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:

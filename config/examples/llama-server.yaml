@@ -1,0 +1,46 @@
+# llama_server loader examples — GGUF inference via a llama-server subprocess
+# proxied over its native OpenAI-compatible HTTP API. --parallel slots let
+# concurrent requests overlap instead of serializing behind a single lock.
+# Requires MSHIP_LLAMA_SERVER_BIN to point at a llama-server executable (see
+# docs/development.md); the Docker images ship a pinned build already.
+
+models:
+  # Chat: GGUF pulled from a HuggingFace repo, 4 concurrent request slots.
+  - name: "qwen"
+    model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+    usecase: "generate"
+    loader: "llama_server"
+    num_cpus: 3
+    llama_server_config:
+      parallel: 4
+
+  # Chat: GGUF from a local path (bind-mount the directory into the container).
+  # Tool calling and reasoning parsing are llama-server's own, auto-detected
+  # from the chat template — no modelship-level parser config. See
+  # docs/model-configuration.md for the tool_choice gaps vs. the OpenAI spec.
+  - name: "llama3-local"
+    model: "/.cache/huggingface/llama-3-8b-instruct.Q4_K_M.gguf"
+    usecase: "generate"
+    loader: "llama_server"
+    num_cpus: 4
+    llama_server_config:
+      n_ctx: 4096
+      n_batch: 512
+      parallel: 2
+
+  # Vision: mmproj enables image input; requests with image content are
+  # rejected at the gateway when it's unset.
+  - name: "llava"
+    model: "second-state/Llava-v1.5-7B-GGUF:llava-v1.5-7b-Q4_K_M.gguf"
+    usecase: "generate"
+    loader: "llama_server"
+    num_cpus: 3
+    llama_server_config:
+      mmproj: "second-state/Llava-v1.5-7B-GGUF:llava-v1.5-7b-mmproj-model-f16.gguf"
+
+  # Embeddings
+  - name: "nomic-embed"
+    model: "nomic-ai/nomic-embed-text-v1.5-GGUF:nomic-embed-text-v1.5.Q4_K_M.gguf"
+    usecase: "embed"
+    loader: "llama_server"
+    num_cpus: 2

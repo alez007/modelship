@@ -100,10 +100,9 @@ class ChatCompletionRequest(OpenAIBaseModel):
         # grammar that excludes any token outside the schema — including the
         # markers a model would use to emit a tool call (<tool_call>...,
         # <|python_tag|>..., etc.). The two cannot meaningfully coexist on any
-        # loader we support: vLLM passes both through but the grammar dominates;
-        # llama-cpp-python silently drops json_schema; transformers has no
-        # native machinery to compose them. Reject upfront so callers don't
-        # discover the conflict by watching tool calls never fire in prod.
+        # loader we support: vLLM passes both through but the grammar dominates.
+        # Reject upfront so callers don't discover the conflict by watching
+        # tool calls never fire in prod.
         if not self.tools or not self.response_format:
             return self
         fmt_type = self.response_format.get("type")
@@ -155,7 +154,7 @@ class DeltaMessage(OpenAIBaseModel):
     role: str | None = None
     content: str | None = None
     reasoning: str | None = None
-    tool_calls: list[DeltaToolCall] = Field(default_factory=list)
+    tool_calls: list[DeltaToolCall] | None = None
 
 
 class ChatCompletionResponseStreamChoice(OpenAIBaseModel):

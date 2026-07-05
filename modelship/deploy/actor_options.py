@@ -152,6 +152,11 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
 
     # Per-model Ray Serve concurrency cap; only override the default when set.
     # The reservation helpers read only the GPU/CPU keys, so this is inert there.
-    if config.max_ongoing_requests is not None:
-        opts["max_ongoing_requests"] = config.max_ongoing_requests
+    max_ongoing = config.max_ongoing_requests
+    if max_ongoing is None and config.loader == ModelLoader.llama_server:
+        parallel = config.llama_server_config.parallel if config.llama_server_config else 1
+        max_ongoing = parallel
+
+    if max_ongoing is not None:
+        opts["max_ongoing_requests"] = max_ongoing
     return opts

@@ -4,6 +4,48 @@ ARG MSHIP_VARIANT=gpu
 ARG UID=1000
 ARG GID=1000
 
+# llama.cpp's official server images, pinned by manifest digest (the digest IS
+# the sha256 of the content). Upstream publishes no Linux CUDA binary in its
+# GitHub releases, so the GPU variant sources their CUDA 13 Docker build
+# instead. Bump the tag and digest together.
+ARG LLAMA_CPP_IMAGE_GPU=ghcr.io/ggml-org/llama.cpp:server-cuda13-b9859@sha256:e8e003c66cb77615dfef2f6ae1b7f5ad0de7bd048e19c40357220cb4141d1cdc
+ARG LLAMA_CPP_IMAGE_CPU=ghcr.io/ggml-org/llama.cpp:server-b9859@sha256:f415de2e2c3e61b3dfab40d7fd26136c13d342c1ae4b3ffa8657fcc6a2f43d60
+
+# =============================================================================
+# llama-server — assembles /opt/llama.cpp for the llama_server loader.
+#
+# /app in the upstream images holds the llama-server binary plus the .so
+# backends it dlopen()s (GGML_BACKEND_DL). The CUDA backend is skipped
+# gracefully when no GPU/driver is present, so the GPU build also runs
+# CPU-only. libggml-cuda.so dynamically links libcudart/libcublas(Lt) — copied
+# in from the same image so they can't skew against the venv's torch-bundled
+# CUDA libs — and the driver's libcuda.so.1, which the NVIDIA Container
+# Toolkit provides at run time.
+# =============================================================================
+FROM ${LLAMA_CPP_IMAGE_GPU} AS llama-server-gpu
+
+RUN set -e && \
+    mkdir -p /opt/llama.cpp && \
+    cp -a /app/. /opt/llama.cpp/ && \
+    ldconfig && \
+    for lib in libcudart.so.13 libcublas.so.13 libcublasLt.so.13; do \
+        cp -L "$(ldconfig -p | awk -v lib="$lib" '$1 == lib { print $NF; exit }')" /opt/llama.cpp/; \
+    done
+
+FROM ${LLAMA_CPP_IMAGE_CPU} AS llama-server-cpu
+
+RUN mkdir -p /opt/llama.cpp && cp -a /app/. /opt/llama.cpp/
+
+# The raw binary can't run standalone: it resolves its sibling .so files via
+# the loader path. The wrapper scopes LD_LIBRARY_PATH to the llama-server
+# process only — globally, /opt/llama.cpp would shadow llama-cpp-python's own
+# bundled libllama/libggml.
+FROM llama-server-${MSHIP_VARIANT} AS llama-server
+
+RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/opt/llama.cpp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec /opt/llama.cpp/llama-server "$@"\n' \
+        > /opt/llama.cpp/llama-server.sh && \
+    chmod +x /opt/llama.cpp/llama-server.sh
+
 # =============================================================================
 # base — minimal runtime OS + uv + non-root user + env vars.
 #
@@ -36,7 +78,8 @@ RUN apt-get update -y && \
         gcc \
         gnupg \
         gosu \
-        libc6-dev && \
+        libc6-dev \
+        libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Register the NVIDIA CUDA apt repo and install cuda-cudart (GPU variant only).
@@ -81,6 +124,12 @@ ENV MSHIP_LOG_FORMAT=text
 ENV UV_PYTHON_INSTALL_DIR=/usr/local/uv/python
 ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 ENV MSHIP_PLUGIN_WHEEL_DIR=/opt/modelship/plugin-wheels
+
+# Pinned llama.cpp build for the llama_server loader (see the llama-server
+# stages above). llama-server additionally needs libgomp1 (ggml CPU backends)
+# and libssl3 (already pulled in via curl).
+COPY --from=llama-server /opt/llama.cpp /opt/llama.cpp
+ENV MSHIP_LLAMA_SERVER_BIN=/opt/llama.cpp/llama-server.sh
 
 # onnxruntime-gpu (pulled in by the kokoroonnx plugin) dlopen()s
 # libonnxruntime_providers_cuda.so which has plain DT_NEEDED entries for

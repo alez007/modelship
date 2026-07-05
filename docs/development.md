@@ -54,6 +54,7 @@ The following environment variables are set in the dev image with sensible defau
 | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to connect to a Ray cluster you manage (must run on a cluster node) instead of starting one; implies deploy-and-exit |
 | `MSHIP_GATEWAY_REPLICAS` | `1` | Number of API gateway replicas. Raise for routing/ingress HA and to spread request-proxying load under high concurrency; replicas keep routing tables in sync via the deploy coordinator's watch loop. |
 | `MSHIP_GATEWAY_MAX_ONGOING` | `1024` | Per-replica Ray Serve concurrency cap for the gateway. The gateway holds a slot for the whole lifetime of each streamed response, so a low cap throttles before the engine does. |
+| `MSHIP_LLAMA_SERVER_BIN` | `/opt/llama.cpp/llama-server.sh` | `llama-server` executable used by the `llama_server` loader. The image ships a pinned llama.cpp build; see [llama-server binary](#llama-server-binary-llama_server-loader) for running outside the image. |
 
 ### Installing plugin dependencies for IntelliSense
 
@@ -105,6 +106,23 @@ The dev image drops into a shell. Start the server — it starts its own Ray hea
 
 ```bash
 uv run mship_deploy.py
+```
+
+## llama-server binary (`llama_server` loader)
+
+The `llama_server` loader launches a `llama-server` subprocess and finds it via `MSHIP_LLAMA_SERVER_BIN`. Inside the Docker images (dev and prod, both variants) this is preconfigured: a pinned llama.cpp build lives at `/opt/llama.cpp`, and the env var points at its wrapper script. The GPU variant ships upstream's CUDA build, which falls back to its bundled CPU backends when no GPU is visible.
+
+To run outside the image (e.g. directly on a Linux or macOS host), download a build from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) and extract it. The raw `llama-server` binary does **not** run standalone — it dynamically links the `libggml*`/`libllama*` libraries that ship as sibling files in the same archive, so point `MSHIP_LLAMA_SERVER_BIN` at a small wrapper that puts the extracted directory on the loader path:
+
+```bash
+#!/bin/sh
+# llama-server.sh — use DYLD_LIBRARY_PATH instead on macOS
+export LD_LIBRARY_PATH="/path/to/extracted${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /path/to/extracted/llama-server "$@"
+```
+
+```bash
+export MSHIP_LLAMA_SERVER_BIN=/path/to/llama-server.sh
 ```
 
 ## Production Builds

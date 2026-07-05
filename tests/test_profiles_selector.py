@@ -162,7 +162,7 @@ def test_gpu_box_uses_gpu_loaders_for_generate_image_cpu_for_satellites():
     emb = next(s for s in specs if s.usecase == ModelUsecase.embed)
     assert gen.loader == ModelLoader.vllm
     assert img.loader == ModelLoader.diffusers
-    assert emb.loader == ModelLoader.llama_cpp  # satellite stays CPU
+    assert emb.loader == ModelLoader.llama_server  # satellite stays CPU
 
 
 def test_studio_on_tiny_gpu_is_refused_on_vram():

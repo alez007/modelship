@@ -10,7 +10,7 @@ from modelship.preflight.base import HardwareProfile
 logger = get_logger("preflight.llama_cpp")
 
 # Fraction of total system RAM the preflight will allocate. No equivalent of
-# vLLM's `gpu_memory_utilization` exists in LlamaCppConfig; 0.8 leaves room
+# vLLM's `gpu_memory_utilization` exists for this loader; 0.8 leaves room
 # for the OS, page cache, and other actors on the same node.
 _RAM_UTILIZATION = 0.8
 
@@ -65,7 +65,7 @@ class LlamaCppPreflight:
             logger.info("preflight '%s': skipping — GGUF metadata unreadable at %s", config.name, model_path)
             return {}
 
-        kv_per_token = _kv_bytes_per_token(meta, config)
+        kv_per_token = _kv_bytes_per_token(meta)
         if kv_per_token is None:
             logger.warning(
                 "preflight '%s': skipping — GGUF metadata missing KV-cache geometry "
@@ -128,6 +128,45 @@ class LlamaCppPreflight:
         )
 
         return {"n_ctx": suggested}
+
+
+class LlamaServerPreflight:
+    """Reuses `LlamaCppPreflight`'s GGUF/RAM-budget math for the `llama_server`
+    loader. That math sizes a single context to the RAM budget; llama-server
+    instead splits its total context (`-c`) across `parallel` slots, so the
+    per-slot `n_ctx` LlamaServerConfig expects is the total budget divided by
+    the slot count (the loader's launch command re-multiplies by `parallel`
+    to reconstruct the RAM-safe total)."""
+
+    def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        rec = LlamaCppPreflight().recommend(config, hw)
+        if "n_ctx" not in rec:
+            return rec
+
+        server_config = config.llama_server_config
+        parallel = server_config.parallel if server_config else 1
+        if parallel <= 1:
+            return rec
+
+        per_slot = (rec["n_ctx"] // parallel // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
+        if per_slot < _MIN_NCTX:
+            logger.warning(
+                "preflight '%s': RAM budget yields n_ctx=%d across %d parallel slots (< %d per slot); "
+                "skipping recommendation",
+                config.name,
+                per_slot,
+                parallel,
+                _MIN_NCTX,
+            )
+            return {}
+        logger.info(
+            "preflight llama_server '%s': dividing total n_ctx budget %d across parallel=%d -> n_ctx=%d",
+            config.name,
+            rec["n_ctx"],
+            parallel,
+            per_slot,
+        )
+        return {"n_ctx": per_slot}
 
 
 class _GGUFMeta:
@@ -267,52 +306,10 @@ def _read_string(reader: Any, key: str) -> str | None:
     return str(val)
 
 
-def _kv_bytes_per_token(meta: _GGUFMeta, config: ModelshipModelConfig) -> int | None:
+def _kv_bytes_per_token(meta: _GGUFMeta) -> int | None:
     """Bytes of KV cache stored per token across all layers.
 
     `2 *` accounts for both K and V tensors. KV element size defaults to fp16
-    (2 bytes); user can override via `model_kwargs.type_k`/`type_v`."""
-    kv_dtype_bytes = _resolve_kv_dtype_bytes(config)
-    return 2 * meta.block_count * meta.head_count_kv * meta.head_dim * kv_dtype_bytes
-
-
-def _resolve_kv_dtype_bytes(config: ModelshipModelConfig) -> int:
-    """llama.cpp's KV cache defaults to fp16 unless `type_k`/`type_v` are set
-    in `model_kwargs`. We accept either GGML type codes (ints) or string
-    aliases like `"f16"`, `"q8_0"`. Anything we don't recognize falls back to
-    fp16 — preflight stays conservative."""
-    llama_cfg = config.llama_cpp_config
-    if llama_cfg is None:
-        return _DEFAULT_KV_DTYPE_BYTES
-    kwargs = llama_cfg.model_kwargs or {}
-    # Use the larger of the two if they disagree — KV cache bytes per token
-    # is the sum of K and V, both already counted with the `2 *` factor.
-    sizes = [_ggml_type_bytes(kwargs.get(k)) for k in ("type_k", "type_v") if k in kwargs]
-    sizes = [s for s in sizes if s is not None]
-    if not sizes:
-        return _DEFAULT_KV_DTYPE_BYTES
-    return max(sizes)
-
-
-# GGML type aliases used by `type_k`/`type_v`. We only enumerate the formats
-# people actually run as KV cache; anything else returns None and we fall back
-# to fp16. Codes match `enum ggml_type` in llama.cpp/ggml.h.
-_GGML_TYPE_BYTES_BY_NAME = {
-    "f32": 4,
-    "f16": 2,
-    "bf16": 2,
-    "q8_0": 1,  # nominal bytes/elem — actual is 1.0625 with block overhead
-    "q4_0": 1,  # nominal; ~0.5 bytes/elem incl. block overhead, round up safely
-}
-
-
-def _ggml_type_bytes(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        # Treat the GGML enum value as opaque — only the common float types
-        # are predictable. 0=F32, 1=F16, 30=BF16 in current ggml.
-        return {0: 4, 1: 2, 30: 2}.get(value)
-    if isinstance(value, str):
-        return _GGML_TYPE_BYTES_BY_NAME.get(value.lower())
-    return None
+    (2 bytes) — `llama_server`'s config surface has no `type_k`/`type_v`
+    override, so preflight always assumes it."""
+    return 2 * meta.block_count * meta.head_count_kv * meta.head_dim * _DEFAULT_KV_DTYPE_BYTES

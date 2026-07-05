@@ -61,7 +61,7 @@ module-root = ""
 
 #### Dependency contract
 
-Plugins assume the host environment provides `modelship` itself plus the full core/gpu/cpu stack: `torch`, `torchvision`, `transformers`, `sentence-transformers`, `numpy`, `scipy`, `librosa`, `soundfile`, `llama-cpp-python`, `onnxruntime[-gpu]`, `diffusers`, `accelerate`, `vllm`. **Do not redeclare any of these in your plugin's `dependencies`.**
+Plugins assume the host environment provides `modelship` itself plus the full core/gpu/cpu stack: `torch`, `torchvision`, `transformers`, `numpy`, `scipy`, `librosa`, `soundfile`, `onnxruntime[-gpu]`, `diffusers`, `vllm`. **Do not redeclare any of these in your plugin's `dependencies`.**
 
 Why: plugin wheels are shipped to Ray workers via `runtime_env`, which installs them into a per-job venv layered over a base image that already has the core stack baked in. Redeclaring `modelship` or `torch` causes pip to either pull a second copy from PyPI (version drift, two packages on `sys.path`) or error on the layered install.
 
@@ -189,7 +189,7 @@ Every plugin must include a `README.md` in its package root (`plugins/myplugin/R
 - **Voices / options** — any model-specific choices (voice presets, providers, etc.)
 - **Example request** — a working `curl` command
 
-See the built-in plugins for reference: [Kokoro ONNX](../plugins/kokoroonnx/README.md), [Bark](../plugins/bark/README.md), [Orpheus](../plugins/orpheus/README.md), [whisper.cpp](../plugins/whispercpp/README.md).
+See the built-in plugins for reference: [Kokoro ONNX](../plugins/kokoroonnx/README.md), [Orpheus](../plugins/orpheus/README.md), [whisper.cpp](../plugins/whispercpp/README.md).
 
 ## Submitting to this repo
 

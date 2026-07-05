@@ -1,8 +1,25 @@
 """Validation and normalization helpers for OpenAI chat-completion messages."""
 
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from modelship.logging import get_logger
+from modelship.openai.protocol import (
+    ChatCompletionResponse,
+    ChatCompletionResponseChoice,
+    ChatMessage,
+    ToolCall,
+    UsageInfo,
+)
+from modelship.openai.protocol.responses.schemas import (
+    ResponseFunctionToolCall,
+    ResponseOutputItem,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+    ResponseReasoningSummary,
+)
 
 logger = get_logger("openai.chat_utils")
 
@@ -190,3 +207,96 @@ def _validate_part(
         return part
 
     raise UnsupportedContentError(f"messages[{msg_idx}].content: unsupported content part type {ptype!r}")
+
+
+@dataclass(frozen=True)
+class ParsedChatOutput:
+    """Aggregate result of parsing a model's full chat-completion text.
+
+    This is a loader-agnostic 3-field DTO representing the parsed output.
+    """
+
+    content: str | None
+    reasoning: str | None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+
+def build_from_parsed(
+    *,
+    request_id: str,
+    model_name: str,
+    choices: list[ParsedChatOutput],
+    usage: UsageInfo,
+    finish_reasons: list[str | None] | str | None = None,
+    created: int | None = None,
+    logprobs: list[Any] | None = None,
+) -> ChatCompletionResponse:
+    """Build a ChatCompletionResponse from parsed choice DTOs.
+
+    Allows multi-choice responses from day one.
+    """
+    if created is None:
+        created = int(time.time())
+
+    response_choices = []
+    for idx, parsed in enumerate(choices):
+        # Determine finish reason for this choice
+        if isinstance(finish_reasons, list) and idx < len(finish_reasons):
+            fr = finish_reasons[idx]
+        elif isinstance(finish_reasons, str):
+            fr = finish_reasons
+        else:
+            fr = "tool_calls" if parsed.has_tool_calls else "stop"
+
+        choice_logprobs = None
+        if logprobs is not None and idx < len(logprobs):
+            choice_logprobs = logprobs[idx]
+
+        response_choices.append(
+            ChatCompletionResponseChoice(
+                index=idx,
+                message=ChatMessage(
+                    role="assistant",
+                    content=parsed.content,
+                    reasoning=parsed.reasoning,
+                    tool_calls=parsed.tool_calls,
+                ),
+                logprobs=choice_logprobs,
+                finish_reason=fr,
+            )
+        )
+
+    return ChatCompletionResponse(
+        id=request_id,
+        model=model_name,
+        choices=response_choices,
+        usage=usage,
+        created=created,
+    )
+
+
+def build_responses_items_from_parsed(parsed: ParsedChatOutput) -> list[ResponseOutputItem]:
+    """Shape one parsed choice into Responses ``output[]`` items.
+
+    Sibling to `build_from_parsed`: same DTO in, Responses items out instead
+    of a `ChatCompletionResponse`. Order matches OpenAI's own: reasoning
+    first, then the assistant message, then one `function_call` per tool call.
+    """
+    output: list[ResponseOutputItem] = []
+    if parsed.reasoning:
+        output.append(ResponseReasoningItem(summary=[ResponseReasoningSummary(text=parsed.reasoning)]))
+    if parsed.content:
+        output.append(ResponseOutputMessage(content=[ResponseOutputText(text=parsed.content)]))
+    for call in parsed.tool_calls:
+        output.append(
+            ResponseFunctionToolCall(
+                call_id=call.id,
+                name=call.function.name,
+                arguments=call.function.arguments,
+            )
+        )
+    return output

@@ -1,6 +1,9 @@
+import asyncio
+import contextlib
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
+from typing import Any, TypeVar
 
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy
 from modelship.logging import get_logger
@@ -15,6 +18,8 @@ from modelship.openai.protocol import (
     ImageGenerationResponse,
     ImageVariationRequest,
     RawSpeechResponse,
+    ResponseObject,
+    ResponsesRequest,
     SpeechRequest,
     TranscriptionRequest,
     TranscriptionResponse,
@@ -50,6 +55,15 @@ _MINIMAL_WAV_HEADER = struct.pack(
 )
 MINIMAL_WAV = _MINIMAL_WAV_HEADER + b"\x00\x00"
 
+_DISCONNECT_POLL_INTERVAL_S = 0.1
+
+T = TypeVar("T")
+
+
+class ClientDisconnectedError(Exception):
+    """Raised by `BaseInfer.run_cancellable` when the client disconnects before
+    the guarded work finishes."""
+
 
 class BaseInfer(ABC):
     def __init__(self, model_config: ModelshipModelConfig):
@@ -65,6 +79,89 @@ class BaseInfer(ABC):
     def _set_max_context_length(self, length: int | None) -> None:
         self.max_context_length = length
         logger.info("max_context_length for %s: %s", self.model_config.name, self.max_context_length)
+
+    async def run_cancellable(self, work: Coroutine[Any, Any, T], raw_request: RawRequestProxy) -> T:
+        """Run `work` to completion, or cancel it and raise `ClientDisconnectedError`
+        if the client disconnects first.
+
+        A non-streaming Ray Serve call has no socket to watch: unlike streaming
+        (where Starlette's own `StreamingResponse` races disconnect against the
+        body iterator and cancellation propagates down through the whole chain
+        automatically), a single-shot non-stream call would otherwise run to
+        completion for a client that's already gone. This polls
+        `RawRequestProxy.is_disconnected()` (the same cross-process
+        DisconnectRegistry signal the streaming path's disconnect ultimately
+        traces back to) alongside `work` and cancels whichever loses.
+
+        Cancelling the task is often sufficient by itself — e.g. vLLM's
+        `AsyncLLM.generate()` aborts its own engine-side request when its
+        consuming task is cancelled, needing no extra cleanup here. Loaders
+        whose engine needs cleanup beyond task cancellation (freeing a
+        connection/slot, etc.) should override `on_generation_aborted`.
+        """
+        task = asyncio.ensure_future(work)
+        watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
+        done, _pending = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+            return task.result()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await self.on_generation_aborted()
+        raise ClientDisconnectedError
+
+    async def run_cancellable_stream(
+        self, work: AsyncGenerator[T, None], raw_request: RawRequestProxy
+    ) -> AsyncGenerator[T, None]:
+        """Streaming counterpart of `run_cancellable`.
+
+        Races each pulled item against the same disconnect signal: cancelling
+        the in-flight `__anext__()` call delivers `CancelledError` straight into
+        `work`'s currently-suspended frame (and transitively into whatever it's
+        awaiting, e.g. an engine's own generator), the same way cancelling a
+        plain task does for `run_cancellable`. `aclose()` afterward is a defensive
+        no-op when the generator already self-terminated on that exception.
+        """
+        watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
+        try:
+            while True:
+                next_item = asyncio.ensure_future(work.__anext__())
+                done, _pending = await asyncio.wait({next_item, watch}, return_when=asyncio.FIRST_COMPLETED)
+                if next_item in done:
+                    try:
+                        item = next_item.result()
+                    except StopAsyncIteration:
+                        return
+                    yield item
+                    continue
+                next_item.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await next_item
+                await work.aclose()
+                await self.on_generation_aborted()
+                raise ClientDisconnectedError
+        finally:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+
+    async def on_generation_aborted(self) -> None:
+        """Hook for loaders whose engine needs cleanup beyond task cancellation
+        when `run_cancellable` aborts a request on client disconnect. No-op by
+        default — most engines are naturally cleaned up by cancellation alone
+        (or, like a blocking call already running in a thread pool, can't be
+        interrupted early regardless of what happens here)."""
+        return None
+
+    @staticmethod
+    async def _poll_disconnect(raw_request: RawRequestProxy) -> None:
+        while True:
+            if await raw_request.is_disconnected():
+                return
+            await asyncio.sleep(_DISCONNECT_POLL_INTERVAL_S)
 
     @abstractmethod
     def shutdown(self) -> None:
@@ -89,6 +186,11 @@ class BaseInfer(ABC):
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
+        return _NOT_SUPPORTED
+
+    async def create_response(
+        self, request: ResponsesRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
         return _NOT_SUPPORTED
 
     async def create_embedding(self, request: EmbeddingRequest, raw_request: RawRequestProxy) -> ErrorResponse:

@@ -29,6 +29,7 @@ from modelship.openai.protocol import (
     ImageEditRequest,
     ImageGenerationRequest,
     ImageVariationRequest,
+    ResponsesRequest,
     SpeechRequest,
     TranscriptionRequest,
     TranslationRequest,
@@ -156,18 +157,14 @@ class ModelDeployment:
                 from modelship.infer.vllm.vllm_infer import VllmInfer
 
                 self.infer = VllmInfer(config)
-            elif config.loader == ModelLoader.transformers:
-                from modelship.infer.transformers.transformers_infer import TransformersInfer
-
-                self.infer = TransformersInfer(config)
             elif config.loader == ModelLoader.diffusers:
                 from modelship.infer.diffusers.diffusers_infer import DiffusersInfer
 
                 self.infer = DiffusersInfer(config)
-            elif config.loader == ModelLoader.llama_cpp:
-                from modelship.infer.llama_cpp.llama_cpp_infer import LlamaCppInfer
+            elif config.loader == ModelLoader.llama_server:
+                from modelship.infer.llama_server.llama_server_infer import LlamaServerInfer
 
-                self.infer = LlamaCppInfer(config)
+                self.infer = LlamaServerInfer(config)
             elif config.loader == ModelLoader.stable_diffusion_cpp:
                 from modelship.infer.stable_diffusion_cpp.stable_diffusion_cpp_infer import StableDiffusionCppInfer
 
@@ -239,6 +236,27 @@ class ModelDeployment:
             # Streaming: tokens are produced lazily while we iterate, so observe
             # after the generator drains (try/finally also captures a mid-stream
             # client disconnect / cancellation).
+            try:
+                async for chunk in result:
+                    yield chunk
+            finally:
+                GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
+        else:
+            GENERATION_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": self.config.name})
+            yield result
+
+    async def respond(
+        self,
+        request: ResponsesRequest,
+        request_headers: dict[str, str],
+        disconnect_registry: Any,
+        request_id: str | None = None,
+    ):
+        self._set_request_id(request_id)
+        proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
+        start = time.monotonic()
+        result = await self.infer.create_response(request, proxy)
+        if isinstance(result, AsyncGenerator):
             try:
                 async for chunk in result:
                     yield chunk

@@ -161,7 +161,7 @@ def resolve_model_source(model_ref: str, trust_remote_code: bool = False) -> str
         )
 
     # Single GGUF in the repo: download it directly and return the file path.
-    # llama_cpp requires a file path, not a directory, so snapshot_download
+    # llama_server requires a file path, not a directory, so snapshot_download
     # would break it. The implicit "the only GGUF" is unambiguous.
     if len(ggufs) == 1:
         logger.info("HF repo %r has a single GGUF (%s); resolving to its file path", source, ggufs[0])

@@ -102,7 +102,7 @@ class TestMergeWithUserOverrides:
 class TestRunPreflightDispatch:
     def test_returns_empty_for_unregistered_loader(self):
         cfg = _make_config()
-        cfg.loader = ModelLoader.transformers
+        cfg.loader = ModelLoader.diffusers
         result = run_preflight(cfg, HardwareProfile())
         assert result == {}
 

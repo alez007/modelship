@@ -5,96 +5,47 @@ from pydantic import ValidationError
 
 from modelship.infer.infer_config import (
     AutoscalingConfig,
-    LlamaCppConfig,
+    LlamaServerConfig,
     ModelLoader,
     ModelshipConfig,
     ModelshipModelConfig,
     ModelUsecase,
-    TransformersConfig,
     VllmEngineConfig,
 )
 
 
-class TestLlamaCppConfig:
+class TestLlamaServerConfig:
     def test_defaults(self):
-        config = LlamaCppConfig()
-        assert config.n_gpu_layers == -1
+        config = LlamaServerConfig()
         assert config.n_ctx == 2048
         assert config.n_batch == 512
-        assert config.chat_format is None
-        assert config.model_kwargs == {}
-        assert config.cache is None
+        assert config.n_gpu_layers == -1
+        assert config.parallel == 1
+        assert config.chat_template is None
+        assert config.extra_args == []
 
-    def test_cache_defaults(self):
-        config = LlamaCppConfig(cache={})
-        assert config.cache is not None
-        assert config.cache.type == "ram"
-        assert config.cache.capacity == "2GiB"
-        assert config.cache.capacity_bytes == 2 << 30
-
-    def test_cache_disk(self):
-        config = LlamaCppConfig(cache={"type": "disk", "capacity": "512MB"})
-        assert config.cache is not None
-        assert config.cache.type == "disk"
-        assert config.cache.capacity_bytes == 512 * 1000**2
-
-    @pytest.mark.parametrize(
-        ("capacity", "expected_bytes"),
-        [
-            ("2GiB", 2 << 30),
-            ("512MB", 512 * 1000**2),
-            ("1.5gb", int(1.5 * 1000**3)),
-            ("100mib", 100 << 20),
-            ("4096", 4096),
-            (1024, 1024),
-        ],
-    )
-    def test_cache_capacity_parsing(self, capacity, expected_bytes):
-        config = LlamaCppConfig(cache={"capacity": capacity})
-        assert config.cache is not None
-        assert config.cache.capacity_bytes == expected_bytes
-
-    def test_cache_rejects_invalid_type(self):
-        with pytest.raises(ValidationError):
-            LlamaCppConfig(cache={"type": "gpu"})
-
-    @pytest.mark.parametrize("capacity", ["0", "-5MB", "2PB", "abc", ""])
-    def test_cache_rejects_invalid_capacity(self, capacity):
-        with pytest.raises(ValidationError):
-            LlamaCppConfig(cache={"capacity": capacity})
-
-    def _disk_cache_model(self, **overrides):
-        return ModelshipModelConfig(
-            name="qwen-gguf",
-            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
-            **overrides,
+    def test_custom_values(self):
+        config = LlamaServerConfig(
+            n_ctx=4096,
+            n_batch=1024,
+            n_gpu_layers=33,
+            parallel=4,
+            chat_template="chatml",
+            extra_args=["--flash-attn"],
         )
+        assert config.n_ctx == 4096
+        assert config.n_batch == 1024
+        assert config.n_gpu_layers == 33
+        assert config.parallel == 4
+        assert config.chat_template == "chatml"
+        assert config.extra_args == ["--flash-attn"]
 
-    def test_disk_cache_single_replica_allowed(self):
-        config = self._disk_cache_model()
-        assert config.llama_cpp_config.cache.type == "disk"
-
-    def test_disk_cache_rejects_multiple_num_replicas(self):
-        with pytest.raises(ValidationError, match="not process-safe"):
-            self._disk_cache_model(num_replicas=2)
-
-    def test_disk_cache_rejects_autoscaling_above_one(self):
-        with pytest.raises(ValidationError, match="not process-safe"):
-            self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=1, max_replicas=3))
-
-    def test_disk_cache_allows_scale_to_zero_single_max(self):
-        config = self._disk_cache_model(autoscaling_config=AutoscalingConfig(min_replicas=0, max_replicas=1))
-        assert config.llama_cpp_config.cache.type == "disk"
-
-    def _num_gpus_model(self, num_gpus):
+    def _num_gpus_model(self, num_gpus: float) -> ModelshipModelConfig:
         return ModelshipModelConfig(
-            name="qwen-gguf",
+            name="test-model",
             model="repo/Qwen-GGUF:*Q4_K_M.gguf",
             usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
+            loader=ModelLoader.llama_server,
             num_gpus=num_gpus,
         )
 
@@ -107,67 +58,20 @@ class TestLlamaCppConfig:
         assert config.num_gpus == 0
 
     def test_num_gpus_fractional_rejected(self):
-        with pytest.raises(ValidationError, match="not allowed for the llama_cpp loader"):
+        with pytest.raises(ValidationError, match="not allowed for the llama_server loader"):
             self._num_gpus_model(0.5)
 
-    def test_num_gpus_fractional_still_allowed_on_vllm(self):
-        config = ModelshipModelConfig(
-            name="qwen-vllm",
-            model="repo/Qwen",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.vllm,
-            num_gpus=0.5,
-        )
-        assert config.num_gpus == 0.5
-
-    def test_disk_cache_ignored_for_non_llama_cpp_loader(self):
-        # A leftover llama_cpp_config on a different loader is ignored, so the
-        # disk-cache multi-replica guard must not fire.
-        config = ModelshipModelConfig(
-            name="qwen-vllm",
-            model="Qwen/Qwen2.5-7B-Instruct",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.vllm,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "disk"}),
-            num_replicas=2,
-        )
-        assert config.num_replicas == 2
-
-    def test_ram_cache_allows_multiple_replicas(self):
-        config = ModelshipModelConfig(
-            name="qwen-gguf",
-            model="repo/Qwen-GGUF:*Q4_K_M.gguf",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(cache={"type": "ram"}),
-            num_replicas=4,
-        )
-        assert config.num_replicas == 4
-
-    def test_custom_values(self):
-        config = LlamaCppConfig(
-            n_gpu_layers=33,
-            n_ctx=4096,
-            n_batch=1024,
-            chat_format="llama-3",
-            model_kwargs={"seed": 42},
-        )
-        assert config.n_gpu_layers == 33
-        assert config.n_ctx == 4096
-        assert config.n_batch == 1024
-        assert config.chat_format == "llama-3"
-        assert config.model_kwargs == {"seed": 42}
-
-    def test_llama_cpp_model_config(self):
+    def test_llama_server_model_config(self):
         config = ModelshipModelConfig(
             name="llama-3",
             model="meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf",
             usecase=ModelUsecase.generate,
-            loader=ModelLoader.llama_cpp,
-            llama_cpp_config=LlamaCppConfig(),
+            loader=ModelLoader.llama_server,
+            llama_server_config=LlamaServerConfig(parallel=4),
         )
-        assert config.loader == ModelLoader.llama_cpp
-        assert config.model == "meta-llama/Llama-3-8B-Instruct-GGUF:*Q4_K_M.gguf"
+        assert config.loader == ModelLoader.llama_server
+        assert config.llama_server_config is not None
+        assert config.llama_server_config.parallel == 4
 
 
 class TestModelshipModelConfig:
@@ -190,7 +94,7 @@ class TestModelshipModelConfig:
                 "name": "qwen3",
                 "model": "some-org/qwen3",
                 "usecase": ModelUsecase.generate,
-                "loader": ModelLoader.llama_cpp,
+                "loader": ModelLoader.llama_server,
                 "chat_template_kwargs": {"enable_thinking": False},
             }
         )
@@ -337,6 +241,30 @@ class TestModelshipModelConfig:
         )
         assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.9
 
+    def test_cpu_num_gpus_lowers_gpu_memory_utilization_default(self):
+        # On vLLM's CPU backend, gpu_memory_utilization means "fraction of host
+        # RAM to reserve," not VRAM — the GPU-oriented 0.9 default reserves 90%
+        # of node RAM and reliably raises at worker init on a real machine.
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0,
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.4
+
+    def test_explicit_gpu_memory_utilization_wins_over_cpu_default(self):
+        config = ModelshipModelConfig(
+            name="test-llm",
+            model="some-model",
+            usecase=ModelUsecase.generate,
+            loader=ModelLoader.vllm,
+            num_gpus=0,
+            vllm_engine_kwargs={"gpu_memory_utilization": 0.6},
+        )
+        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.6
+
     def test_num_gpus_integer_required_above_one(self):
         with pytest.raises(ValidationError, match="must be integers"):
             ModelshipModelConfig(
@@ -420,8 +348,8 @@ class TestModelshipModelConfig:
         assert any("redundant" in rec.message for rec in caplog.records)
 
     def test_non_vllm_loader_skips_tp_derivation(self):
-        # transformers has no parallelism config; num_gpus stays as-is for the
-        # loader to interpret directly (whole GPUs are fine for that path).
+        # Non-vllm loaders have no parallelism config; num_gpus stays as-is
+        # for the loader to interpret directly.
         config = ModelshipModelConfig(
             name="test-tts",
             model="some-model",
@@ -580,7 +508,8 @@ class TestFingerprint:
 
     def test_changes_when_loader_differs(self):
         assert (
-            self._cfg(loader=ModelLoader.vllm).fingerprint() != self._cfg(loader=ModelLoader.transformers).fingerprint()
+            self._cfg(loader=ModelLoader.vllm).fingerprint()
+            != self._cfg(loader=ModelLoader.llama_server, num_gpus=0).fingerprint()
         )
 
     def test_deployment_name_combines_name_and_fingerprint(self):
@@ -596,83 +525,6 @@ class TestFingerprint:
         assert cfg.deployment_name("gw-a") != cfg.deployment_name("gw-b")
         # No gateway == the gateway-independent config hash.
         assert cfg.fingerprint() == cfg.fingerprint("")
-
-
-class TestTransformersConfig:
-    def test_defaults(self):
-        config = TransformersConfig()
-        assert config.device == "cpu"
-        assert config.torch_dtype == "auto"
-        assert config.trust_remote_code is False
-        assert config.model_kwargs == {}
-        assert config.pipeline_kwargs == {}
-
-    def test_custom_values(self):
-        config = TransformersConfig(
-            device="cuda:0",
-            torch_dtype="float16",
-            trust_remote_code=True,
-            model_kwargs={"attn_implementation": "flash_attention_2"},
-        )
-        assert config.device == "cuda:0"
-        assert config.torch_dtype == "float16"
-        assert config.trust_remote_code is True
-        assert config.model_kwargs == {"attn_implementation": "flash_attention_2"}
-
-    def test_transformers_generate_model(self):
-        config = ModelshipModelConfig(
-            name="llm-cpu",
-            model="meta-llama/Llama-3.2-1B-Instruct",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.transformers,
-            num_cpus=4,
-            transformers_config=TransformersConfig(torch_dtype="float32"),
-        )
-        assert config.loader == ModelLoader.transformers
-        assert config.usecase == ModelUsecase.generate
-        assert config.transformers_config.torch_dtype == "float32"
-
-    def test_transformers_embed_model(self):
-        config = ModelshipModelConfig(
-            name="embed",
-            model="nomic-ai/nomic-embed-text-v1.5",
-            usecase=ModelUsecase.embed,
-            loader=ModelLoader.transformers,
-            num_cpus=2,
-            transformers_config=TransformersConfig(trust_remote_code=True),
-        )
-        assert config.usecase == ModelUsecase.embed
-        assert config.transformers_config.trust_remote_code is True
-
-    def test_transformers_transcription_model(self):
-        config = ModelshipModelConfig(
-            name="whisper-cpu",
-            model="openai/whisper-base",
-            usecase=ModelUsecase.transcription,
-            loader=ModelLoader.transformers,
-            num_cpus=2,
-        )
-        assert config.usecase == ModelUsecase.transcription
-        assert config.transformers_config is None
-
-    def test_transformers_tts_model(self):
-        config = ModelshipModelConfig(
-            name="tts",
-            model="microsoft/speecht5_tts",
-            usecase=ModelUsecase.tts,
-            loader=ModelLoader.transformers,
-            num_cpus=1,
-        )
-        assert config.usecase == ModelUsecase.tts
-
-    def test_transformers_config_not_required(self):
-        config = ModelshipModelConfig(
-            name="test",
-            model="some-model",
-            usecase=ModelUsecase.generate,
-            loader=ModelLoader.transformers,
-        )
-        assert config.transformers_config is None
 
 
 class TestNumReplicas:

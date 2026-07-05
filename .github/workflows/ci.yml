@@ -55,21 +55,6 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # The gpu extra's llama-cpp-python wheel (cu130) statically links libcuda.so.1
-      # and fails to import at all without it, even for CPU-only test configs. This
-      # runner has no GPU/driver, so provide NVIDIA's official stub libcuda.so (from
-      # cuda-driver-dev, meant for driverless build/CI environments): its cuInit()
-      # returns CUDA_ERROR_STUB_LIBRARY instead of crashing, which is enough to let
-      # the module load. See CLAUDE.md sharp edges for details.
-      - name: Install CUDA driver stub for llama-cpp-python import
-        run: |
-          curl -sSL -o /tmp/cuda-driver-dev.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-driver-dev-13-0_13.0.96-1_amd64.deb
-          dpkg-deb -x /tmp/cuda-driver-dev.deb /tmp/cuda-stub
-          stub_dir=/tmp/cuda-stub/usr/local/cuda-13.0/targets/x86_64-linux/lib/stubs
-          ln -s libcuda.so "$stub_dir/libcuda.so.1"
-          echo "LD_LIBRARY_PATH=$stub_dir:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-
       - name: Install dependencies
         run: uv sync --extra dev --extra gpu
 

@@ -5,11 +5,11 @@ modelship ``ChatCompletionRequest`` -> ``model_dump()`` -> ``VllmChatCompletionR
 (vLLM's own pydantic model). If image parts survive that, vLLM's downstream
 multimodal preprocessing runs against the same shape it does in upstream
 deployments. Wrapper-level concerns (normalize_chat_messages gating) are
-tested via :class:`VllmInfer.create_chat_completion` with serving_chat stubbed
-out — the goal there is the 400-rejection path, not the inference call.
+tested via :class:`VllmInfer.create_chat_completion` with the streaming path
+stubbed out — the goal there is the 400-rejection path, not the inference call.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest as VllmChatCompletionRequest
@@ -83,15 +83,15 @@ def _make_infer(*, supports_image: bool) -> VllmInfer:
     infer = VllmInfer.__new__(VllmInfer)
     infer._caps = VllmCapabilities(supports_image=supports_image)  # type: ignore[attr-defined]
     infer.model_config = MagicMock(chat_template_kwargs={})
-    infer.serving_chat = MagicMock()
-    infer.serving_chat.create_chat_completion = AsyncMock(return_value=MagicMock())
+    infer.openai_serving_render = MagicMock()
+    infer._create_chat_completion_stream = MagicMock(return_value=MagicMock())
     return infer
 
 
 @pytest.mark.asyncio
 async def test_image_part_rejected_on_text_only_model_with_400():
     """A text-only model receiving image_url returns a 400 BadRequest with
-    our error envelope — same shape transformers and llama.cpp produce."""
+    our error envelope — same shape llama.cpp produces."""
     infer = _make_infer(supports_image=False)
     request = ChatCompletionRequest(
         model="llm",
@@ -112,33 +112,36 @@ async def test_image_part_rejected_on_text_only_model_with_400():
     assert result._http_status == 400
     assert "image" in result.error.message.lower()
     # The reject must happen before we hand off to vLLM.
-    infer.serving_chat.create_chat_completion.assert_not_awaited()
+    infer._create_chat_completion_stream.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_text_only_request_reaches_serving_chat_on_vlm():
+async def test_text_only_request_reaches_streaming_path_on_vlm():
     """Sanity check: a plain text request on a VLM is not blocked by the
-    gating layer."""
+    gating layer. Streaming, since non-stream no longer calls `_create_chat_completion_stream`
+    (see test_vllm_engine_ops.py / test_integration.py::TestChatCapable for
+    the engine_ops-based non-stream path; TestChatStreamingCapable for streaming)."""
     infer = _make_infer(supports_image=True)
     request = ChatCompletionRequest(
         model="qwen-vl",
         messages=[{"role": "user", "content": "hello"}],
+        stream=True,
     )
 
     await infer.create_chat_completion(request, raw_request=MagicMock())
 
-    infer.serving_chat.create_chat_completion.assert_awaited_once()
+    infer._create_chat_completion_stream.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_model_chat_template_kwargs_merged_into_vllm_request():
-    """The model's chat_template_kwargs default reaches the vLLM request that
-    serving_chat renders from."""
+    """The model's chat_template_kwargs default reaches the vLLM request built
+    for the streaming path."""
     infer = _make_infer(supports_image=False)
     infer.model_config.chat_template_kwargs = {"enable_thinking": False}
-    request = ChatCompletionRequest(model="llm", messages=[{"role": "user", "content": "hi"}])
+    request = ChatCompletionRequest(model="llm", messages=[{"role": "user", "content": "hi"}], stream=True)
 
     await infer.create_chat_completion(request, raw_request=MagicMock())
 
-    vllm_request = infer.serving_chat.create_chat_completion.await_args.args[0]
+    vllm_request = infer._create_chat_completion_stream.call_args.args[1]
     assert vllm_request.chat_template_kwargs == {"enable_thinking": False}

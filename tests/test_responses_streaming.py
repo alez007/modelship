@@ -1,13 +1,11 @@
-"""Tests for the streaming Responses <-> chat-completions translator (Phase A2).
+"""Tests for the streaming Responses <-> chat-completions translator.
 
-The translator consumes the chat SSE chunk stream every loader emits and emits
+The translator consumes typed chat stream chunks every loader emits and emits
 the Responses event protocol. These tests drive it directly with synthesized
 chat chunks (no Ray, no loader) and assert the event sequence/shape.
 """
 
 import json
-
-import pytest
 
 from modelship.openai.protocol import (
     ChatCompletionResponseStreamChoice,
@@ -18,11 +16,7 @@ from modelship.openai.protocol import (
     ResponsesRequest,
     UsageInfo,
 )
-from modelship.openai.protocol.responses.streaming import (
-    ResponsesStreamTranslator,
-    _parse_chat_sse,
-    responses_stream_from_chat,
-)
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -40,13 +34,7 @@ def _chunk(delta: DeltaMessage | None = None, *, finish_reason=None, usage=None)
     return ChatCompletionStreamResponse(model="m", choices=choices, usage=usage)
 
 
-def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
-    """Run start -> process(chunks) -> finish and return parsed event payloads."""
-    raw: list[str] = []
-    raw.extend(translator.start())
-    for c in chunks:
-        raw.extend(translator.process(c))
-    raw.extend(translator.finish())
+def _decode(raw: list[str]) -> list[dict]:
     out = []
     for line in raw:
         # each is "event: <type>\ndata: {json}\n\n"
@@ -55,32 +43,28 @@ def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
     return out
 
 
+def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
+    """Run start -> process(chunks) -> finish and return parsed event payloads."""
+    raw: list[str] = []
+    raw.extend(translator.start())
+    for c in chunks:
+        raw.extend(translator.process(c))
+    raw.extend(translator.finish())
+    return _decode(raw)
+
+
+def _events_then_fail(translator: ResponsesStreamTranslator, chunks, message: str) -> list[dict]:
+    """Run start -> process(chunks) -> fail(message) and return parsed event payloads."""
+    raw: list[str] = []
+    raw.extend(translator.start())
+    for c in chunks:
+        raw.extend(translator.process(c))
+    raw.extend(translator.fail(message))
+    return _decode(raw)
+
+
 def _types(events: list[dict]) -> list[str]:
     return [e["type"] for e in events]
-
-
-class TestSseParsing:
-    def test_parses_data_chunk(self):
-        chunk = _chunk(DeltaMessage(content="hi"))
-        raw = f"data: {json.dumps(chunk.model_dump(mode='json'))}\n\n"
-        parsed = list(_parse_chat_sse(raw))
-        assert len(parsed) == 1
-        assert parsed[0].choices[0].delta.content == "hi"
-
-    def test_done_sentinel_yields_nothing(self):
-        assert list(_parse_chat_sse("data: [DONE]\n\n")) == []
-
-    def test_non_data_line_yields_nothing(self):
-        assert list(_parse_chat_sse(": keep-alive\n\n")) == []
-
-    def test_bundled_messages_all_parsed(self):
-        # A single raw string may bundle several SSE messages; every data line
-        # must be parsed (not just the first), [DONE] skipped.
-        a = json.dumps(_chunk(DeltaMessage(content="a")).model_dump(mode="json"))
-        b = json.dumps(_chunk(DeltaMessage(content="b")).model_dump(mode="json"))
-        raw = f"data: {a}\n\ndata: {b}\n\ndata: [DONE]\n\n"
-        parsed = list(_parse_chat_sse(raw))
-        assert [c.choices[0].delta.content for c in parsed] == ["a", "b"]
 
 
 class TestTextStream:
@@ -251,29 +235,35 @@ class TestTerminalStatus:
         assert events[-1]["response"]["incomplete_details"] == {"reason": "content_filter"}
 
 
-class TestStreamWrapper:
-    @pytest.mark.asyncio
-    async def test_wraps_chat_sse_strings_into_events(self):
-        async def gen():
-            yield f"data: {json.dumps(_chunk(DeltaMessage(content='hi')).model_dump(mode='json'))}\n\n"
-            yield f"data: {json.dumps(_chunk(finish_reason='stop').model_dump(mode='json'))}\n\n"
-            yield "data: [DONE]\n\n"
+class TestFailedStream:
+    def test_fail_before_any_output_emits_bare_failed_event(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events_then_fail(translator, [], "boom")
+        assert _types(events) == ["response.created", "response.in_progress", "response.failed"]
+        failed = events[-1]["response"]
+        assert failed["status"] == "failed"
+        assert failed["error"] == {"message": "boom"}
+        assert failed["output"] == []
 
-        out = [e async for e in responses_stream_from_chat(gen(), _req())]
-        assert all(isinstance(e, str) for e in out)
-        assert out[0].startswith("event: response.created")
-        assert "event: response.completed" in out[-1]
+    def test_fail_mid_message_closes_the_open_item_with_partial_text(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events_then_fail(translator, [_chunk(DeltaMessage(content="partial"))], "boom")
+        assert _types(events)[-4:] == [
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.failed",
+        ]
+        failed = events[-1]["response"]
+        assert failed["status"] == "failed"
+        assert failed["output"][0]["type"] == "message"
+        assert failed["output"][0]["content"][0]["text"] == "partial"
 
-    @pytest.mark.asyncio
-    async def test_pre_stream_error_object_passes_through(self):
-        from modelship.openai.protocol import create_error_response
-
-        err = create_error_response("nope")
-
-        async def gen():
-            yield err
-
-        out = [e async for e in responses_stream_from_chat(gen(), _req())]
-        # Passed straight through (not turned into a 200 event stream) so
-        # _handle_response can render the proper HTTP error.
-        assert out == [err]
+    def test_fail_mid_tool_call_closes_it_with_partial_arguments(self):
+        translator = ResponsesStreamTranslator(_req())
+        tc = DeltaToolCall(index=0, id="call_1", function=DeltaFunctionCall(name="get_weather", arguments='{"lo'))
+        events = _events_then_fail(translator, [_chunk(DeltaMessage(tool_calls=[tc]))], "boom")
+        failed = events[-1]["response"]
+        assert failed["output"][0]["type"] == "function_call"
+        assert failed["output"][0]["arguments"] == '{"lo'
+        assert failed["output"][0]["status"] == "completed"
