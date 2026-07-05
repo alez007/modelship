@@ -101,7 +101,5 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
             raise ValueError(
                 f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
                 f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_server` for GGUF models, or point "
-                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant — this is "
-                f"also the supported path for gemma models, whose tool calling llama.cpp's parsers can't "
-                f"handle; see config/examples/vllm-cpu.yaml)."
+                f"the vllm loader at a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/FP8 quant)."
             )

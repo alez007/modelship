@@ -131,7 +131,11 @@ class TestSubprocessLifecycle:
             (0, {"n_gpu_layers": 24}, "0"),
             (1, {}, "-1"),  # llama-server auto-fit default
             (1, {"n_gpu_layers": 24}, "24"),
-            (2, {"n_gpu_layers": -2}, "-2"),  # <= -2 means all layers
+            # Any negative value hits llama-server's own auto-fit code path
+            # (verified against the b9859 binary: `params.n_gpu_layers < 0`
+            # gates the call regardless of exactly how negative) — this
+            # loader just passes the configured int through verbatim.
+            (2, {"n_gpu_layers": -2}, "-2"),
         ],
     )
     async def test_ngl_follows_num_gpus(self, tmp_path, monkeypatch, num_gpus, config_kwargs, expected_ngl):
@@ -145,6 +149,26 @@ class TestSubprocessLifecycle:
             assert args[args.index("-ngl") + 1] == expected_ngl
         finally:
             infer.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_threads_flag_only_appears_when_set(self, tmp_path, monkeypatch):
+        binary = _write_fake_executable(tmp_path, _FAKE_HEALTHY_SERVER)
+        monkeypatch.setenv("MSHIP_LLAMA_SERVER_BIN", binary)
+
+        infer_unset = LlamaServerInfer(_make_config())
+        await infer_unset.start()
+        try:
+            assert "--threads" not in list(infer_unset._proc.args)
+        finally:
+            infer_unset.shutdown()
+
+        infer_set = LlamaServerInfer(_make_config(threads=8))
+        await infer_set.start()
+        try:
+            args = list(infer_set._proc.args)
+            assert args[args.index("--threads") + 1] == "8"
+        finally:
+            infer_set.shutdown()
 
     @pytest.mark.asyncio
     async def test_immediate_crash_retries_then_raises(self, tmp_path, monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from modelship.infer.infer_config import ModelshipModelConfig
@@ -41,29 +42,47 @@ _UNKNOWN_CONTEXT_LENGTH_CAP = 32768
 # `model_kwargs`. llama.cpp defaults to fp16 (2 bytes).
 _DEFAULT_KV_DTYPE_BYTES = 2
 
+# GPU-offload constants (num_gpus >= 1).
+_VRAM_UTILIZATION = 0.9
+# CUDA context + compute buffers, per GPU.
+_GPU_OVERHEAD_FIXED_BYTES = 1 * 1024**3
+# GGUF loads near-verbatim (no repack like AWQ/Marlin), so the runtime
+# footprint tracks on-disk size closely; still leave a small margin.
+_GGUF_WEIGHT_OVERHEAD_FRACTION = 0.05
+# llama.cpp counts the output layer as one extra offloadable "layer" beyond
+# the transformer blocks — full offload means block_count + 1.
+_NON_BLOCK_LAYER_EQUIV = 1
+# Default context to size partial-offload ngl against when the user hasn't
+# pinned n_ctx themselves.
+_PARTIAL_OFFLOAD_NCTX_TARGET = 8192
 
-class LlamaCppPreflight:
+# Sharded GGUF filenames (e.g. model-00001-of-00003.gguf). The resolver only
+# keeps the first shard's path; llama.cpp auto-loads the rest at load time,
+# but the weight-footprint estimate needs every shard's size summed.
+_SHARD_SUFFIX_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+class LlamaServerPreflight:
+    """Sizes the `llama_server` loader's launch args to the hardware an actor
+    lands on. Branches on `config.num_gpus` (the reservation is the intent
+    signal), never on hardware discoverability — the pynvml node-level
+    fallback in `discover_hardware()` can report GPUs Ray didn't assign to a
+    `num_gpus=0` deploy."""
+
     def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
-        if config.num_gpus > 0:
-            logger.info(
-                "preflight '%s': skipping — GPU offload requested; n_ctx left to user config",
-                config.name,
-            )
-            return {}
-
-        if hw.ram_bytes <= 0:
-            logger.info("preflight '%s': skipping — system RAM not discoverable", config.name)
-            return {}
+        # Thread alignment is independent of context/offload sizing — recommend
+        # it even when the GGUF-based math below declines.
+        threads_rec = _recommend_threads(config)
 
         model_path = config._resolved_path
         if not model_path or not os.path.isfile(model_path):
             logger.info("preflight '%s': skipping — resolved path is not a GGUF file: %s", config.name, model_path)
-            return {}
+            return threads_rec
 
         meta = _read_gguf_metadata(model_path)
         if meta is None:
             logger.info("preflight '%s': skipping — GGUF metadata unreadable at %s", config.name, model_path)
-            return {}
+            return threads_rec
 
         kv_per_token = _kv_bytes_per_token(meta)
         if kv_per_token is None:
@@ -72,9 +91,24 @@ class LlamaCppPreflight:
                 "(block_count/head_count_kv/head_dim)",
                 config.name,
             )
-            return {}
+            return threads_rec
 
         weight_bytes = _weight_bytes(model_path)
+
+        if config.num_gpus > 0:
+            rec = self._recommend_gpu(config, hw, meta, kv_per_token, weight_bytes)
+        else:
+            rec = self._recommend_cpu(config, hw, meta, kv_per_token, weight_bytes)
+
+        rec = self._apply_parallel_division(config, rec)
+        return {**threads_rec, **rec}
+
+    def _recommend_cpu(
+        self, config: ModelshipModelConfig, hw: HardwareProfile, meta: _GGUFMeta, kv_per_token: int, weight_bytes: int
+    ) -> dict[str, Any]:
+        if hw.ram_bytes <= 0:
+            logger.info("preflight '%s': skipping — system RAM not discoverable", config.name)
+            return {}
 
         ram_basis = hw.sizing_ram_bytes
         fallback = " [total fallback]" if not hw.available_ram_bytes else ""
@@ -116,7 +150,7 @@ class LlamaCppPreflight:
             return {}
 
         logger.info(
-            "preflight llama_cpp '%s': ram_avail=%.2f GiB%s util=%.2f weights=%.2f GiB kv/token=%d B "
+            "preflight llama_server cpu '%s': ram_avail=%.2f GiB%s util=%.2f weights=%.2f GiB kv/token=%d B "
             "→ suggested n_ctx=%d",
             config.name,
             ram_basis / 1024**3,
@@ -129,17 +163,144 @@ class LlamaCppPreflight:
 
         return {"n_ctx": suggested}
 
+    def _recommend_gpu(
+        self, config: ModelshipModelConfig, hw: HardwareProfile, meta: _GGUFMeta, kv_per_token: int, weight_bytes: int
+    ) -> dict[str, Any]:
+        if not hw.gpus:
+            logger.info(
+                "preflight '%s': skipping — GPU offload requested but no GPUs discoverable on this node",
+                config.name,
+            )
+            return {}
 
-class LlamaServerPreflight:
-    """Reuses `LlamaCppPreflight`'s GGUF/RAM-budget math for the `llama_server`
-    loader. That math sizes a single context to the RAM budget; llama-server
-    instead splits its total context (`-c`) across `parallel` slots, so the
-    per-slot `n_ctx` LlamaServerConfig expects is the total budget divided by
-    the slot count (the loader's launch command re-multiplies by `parallel`
-    to reconstruct the RAM-safe total)."""
+        num_gpus = int(config.num_gpus)
+        # llama.cpp's default --split-mode layer splits proportionally to free
+        # memory, so summed free VRAM across the assigned GPUs is the real
+        # capacity. Take the num_gpus smallest-free GPUs from the node-level
+        # view, keeping this a lower bound when that view shows GPUs Ray
+        # didn't actually assign to this deploy.
+        picked = sorted(hw.gpus, key=lambda g: g.available_bytes)[:num_gpus]
+        if len(picked) < num_gpus:
+            logger.info(
+                "preflight '%s': skipping — %d GPU(s) requested but only %d discoverable",
+                config.name,
+                num_gpus,
+                len(picked),
+            )
+            return {}
 
-    def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
-        rec = LlamaCppPreflight().recommend(config, hw)
+        total_layers = meta.block_count + _NON_BLOCK_LAYER_EQUIV
+        layer_bytes = weight_bytes * (1 + _GGUF_WEIGHT_OVERHEAD_FRACTION) / total_layers
+        kv_per_layer = kv_per_token / meta.block_count
+        ctx_cap = meta.context_length or _UNKNOWN_CONTEXT_LENGTH_CAP
+        vram_budget = (
+            sum(g.available_bytes for g in picked) * _VRAM_UTILIZATION - len(picked) * _GPU_OVERHEAD_FIXED_BYTES
+        )
+
+        ctx_full = int((vram_budget - layer_bytes * total_layers) // kv_per_token)
+        if ctx_full >= _MIN_NCTX:
+            suggested = min(ctx_full, ctx_cap)
+            suggested = (suggested // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
+            if suggested >= _MIN_NCTX:
+                logger.info(
+                    "preflight llama_server gpu '%s': vram_budget=%.2f GiB across %d GPU(s), full offload "
+                    "→ n_ctx=%d n_gpu_layers=%d",
+                    config.name,
+                    vram_budget / 1024**3,
+                    len(picked),
+                    suggested,
+                    total_layers,
+                )
+                return {"n_ctx": suggested, "n_gpu_layers": total_layers}
+
+        return self._recommend_gpu_partial(
+            config, hw, meta, kv_per_layer, layer_bytes, vram_budget, total_layers, ctx_cap
+        )
+
+    def _recommend_gpu_partial(
+        self,
+        config: ModelshipModelConfig,
+        hw: HardwareProfile,
+        meta: _GGUFMeta,
+        kv_per_layer: float,
+        layer_bytes: float,
+        vram_budget: float,
+        total_layers: int,
+        ctx_cap: int,
+    ) -> dict[str, Any]:
+        server_config = config.llama_server_config
+        if server_config is not None and "n_ctx" in server_config.model_fields_set:
+            target_ctx = server_config.n_ctx * server_config.parallel
+        else:
+            target_ctx = min(ctx_cap, _PARTIAL_OFFLOAD_NCTX_TARGET)
+
+        def fit_ngl(ctx: int) -> int:
+            denom = layer_bytes + kv_per_layer * ctx
+            if denom <= 0:
+                return total_layers
+            return max(0, min(total_layers, int(vram_budget // denom)))
+
+        ngl = fit_ngl(target_ctx)
+        # cpu_blocks: transformer blocks left on CPU — the only layers with a
+        # KV cache. cpu_layers: all CPU-resident weight layers, which also
+        # includes the output layer (_NON_BLOCK_LAYER_EQUIV) once ngl reaches
+        # block_count but hasn't yet covered total_layers.
+        cpu_blocks = meta.block_count - min(ngl, meta.block_count)
+        cpu_layers = total_layers - ngl
+
+        if cpu_layers > 0:
+            ram_budget = hw.sizing_ram_bytes * _RAM_UTILIZATION - _OVERHEAD_FIXED_BYTES
+            weight_ram = layer_bytes * cpu_layers
+            kv_ram_per_ctx = kv_per_layer * cpu_blocks
+            if kv_ram_per_ctx > 0:
+                ctx_ram = int((ram_budget - weight_ram) // kv_ram_per_ctx)
+            else:
+                # No CPU-resident blocks (only the output layer is), so context
+                # size doesn't affect this budget — it's a pure weight-fit check.
+                ctx_ram = target_ctx if ram_budget >= weight_ram else 0
+            if ctx_ram < target_ctx:
+                target_ctx = ctx_ram
+                if target_ctx < _MIN_NCTX:
+                    logger.warning(
+                        "preflight '%s': RAM budget for %d CPU-resident layers yields n_ctx=%d "
+                        "(< %d); skipping recommendation",
+                        config.name,
+                        cpu_layers,
+                        target_ctx,
+                        _MIN_NCTX,
+                    )
+                    return {}
+                # Refit once against the shrunk context — a smaller context
+                # needs less VRAM per layer, so more layers may now fit.
+                ngl = fit_ngl(target_ctx)
+
+        suggested = (target_ctx // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
+        if suggested < _MIN_NCTX:
+            logger.warning(
+                "preflight '%s': partial-offload budget yields n_ctx=%d (< %d); skipping recommendation",
+                config.name,
+                suggested,
+                _MIN_NCTX,
+            )
+            return {}
+
+        logger.info(
+            "preflight llama_server gpu '%s': vram_budget=%.2f GiB, partial offload → n_ctx=%d n_gpu_layers=%d/%d",
+            config.name,
+            vram_budget / 1024**3,
+            suggested,
+            ngl,
+            total_layers,
+        )
+        return {"n_ctx": suggested, "n_gpu_layers": ngl}
+
+    def _apply_parallel_division(self, config: ModelshipModelConfig, rec: dict[str, Any]) -> dict[str, Any]:
+        """llama-server splits its total context (`-c`) across `parallel`
+        slots, so the per-slot `n_ctx` LlamaServerConfig expects is the total
+        RAM/VRAM-budgeted context divided by the slot count (the loader's
+        launch command re-multiplies by `parallel` to reconstruct the
+        RAM/VRAM-safe total). `n_gpu_layers` is per-process, not per-slot, so
+        it survives the division untouched."""
         if "n_ctx" not in rec:
             return rec
 
@@ -151,7 +312,7 @@ class LlamaServerPreflight:
         per_slot = (rec["n_ctx"] // parallel // _NCTX_ALIGNMENT) * _NCTX_ALIGNMENT
         if per_slot < _MIN_NCTX:
             logger.warning(
-                "preflight '%s': RAM budget yields n_ctx=%d across %d parallel slots (< %d per slot); "
+                "preflight '%s': RAM/VRAM budget yields n_ctx=%d across %d parallel slots (< %d per slot); "
                 "skipping recommendation",
                 config.name,
                 per_slot,
@@ -166,7 +327,35 @@ class LlamaServerPreflight:
             parallel,
             per_slot,
         )
-        return {"n_ctx": per_slot}
+        return {**rec, "n_ctx": per_slot}
+
+
+def _recommend_threads(config: ModelshipModelConfig) -> dict[str, Any]:
+    """Align llama-server's compute threads with the actor's Ray CPU
+    reservation so a subprocess on a shared node doesn't grab every core.
+    `num_cpus` defaults to 0.1 (a fractional share), so only >= 1 (necessarily
+    an explicit config value) is treated as a real thread budget.
+
+    `num_cpus` is a Ray scheduling hint, not an enforced cap the way `num_gpus`
+    is — a deploy can legitimately set it low for bin-packing while still
+    running many `--parallel` slots that need real compute concurrency to
+    actually overlap. Recommending fewer threads than slots would starve them
+    and defeat the loader's headline feature, so decline in that case and let
+    llama-server keep its own default (all cores) instead."""
+    if config.num_cpus < 1:
+        return {}
+    threads = int(config.num_cpus)
+    parallel = config.llama_server_config.parallel if config.llama_server_config else 1
+    if threads < parallel:
+        logger.info(
+            "preflight '%s': skipping thread alignment — num_cpus=%d would undercut parallel=%d slots",
+            config.name,
+            threads,
+            parallel,
+        )
+        return {}
+    logger.info("preflight '%s': aligning llama-server threads to num_cpus=%d", config.name, threads)
+    return {"threads": threads}
 
 
 class _GGUFMeta:
@@ -186,12 +375,28 @@ class _GGUFMeta:
 
 
 def _weight_bytes(path: str) -> int:
-    """On-disk size of the GGUF file. Wrapped as a helper so tests can mock
-    a hypothetical weight footprint without writing real bytes to tmp."""
-    try:
-        return os.path.getsize(path)
-    except OSError:
-        return 0
+    """On-disk size of the GGUF file, summed across shards for a sharded model
+    (e.g. model-00001-of-00003.gguf) — the resolver only keeps the first
+    shard's path, so a naive single-file size undercounts total weight bytes.
+    Wrapped as a helper so tests can mock a hypothetical weight footprint
+    without writing real bytes to tmp."""
+    match = _SHARD_SUFFIX_RE.search(path)
+    if match is None:
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    prefix = path[: match.start()]
+    total_shards = match.group(2)
+    total = 0
+    for shard_num in range(1, int(total_shards) + 1):
+        shard_path = f"{prefix}-{shard_num:0{len(total_shards)}d}-of-{total_shards}.gguf"
+        try:
+            total += os.path.getsize(shard_path)
+        except OSError:
+            logger.debug("preflight: sharded GGUF sibling missing: %s", shard_path)
+    return total
 
 
 def _read_gguf_metadata(path: str) -> _GGUFMeta | None:

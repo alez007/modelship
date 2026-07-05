@@ -5,7 +5,7 @@ Ready-to-run `models.yaml` configs for common scenarios. Mount one into the cont
 | File | What it runs | Hardware |
 |---|---|---|
 | [llama-server.yaml](llama-server.yaml) | Quantized GGUF chat (concurrent), vision, embeddings via a llama-server subprocess | CPU or NVIDIA GPU |
-| [vllm-cpu.yaml](vllm-cpu.yaml) | Quantized (AWQ/GPTQ) chat via vLLM's CPU backend — the path for gemma tool calling, which llama-server's parsers can't handle | CPU |
+| [vllm-cpu.yaml](vllm-cpu.yaml) | Quantized (AWQ/GPTQ) chat via vLLM's CPU backend | CPU |
 | [vllm.yaml](vllm.yaml) | High-throughput chat with tool calling, embeddings, Whisper | NVIDIA GPU |
 | [diffusers.yaml](diffusers.yaml) | SDXL Turbo image generation | NVIDIA GPU |
 | [kokoro-tts.yaml](kokoro-tts.yaml) | Kokoro ONNX TTS with GPU + CPU fallback replicas | Mixed |

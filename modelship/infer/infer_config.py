@@ -26,11 +26,13 @@ FINGERPRINT_LEN = 10
 # re-bound with the same app name.
 _FINGERPRINT_EXCLUDED_FIELDS = {"name", "num_replicas", "autoscaling_config"}
 
+# vLLM's own default for a normal (whole/shared-GPU) deploy.
+_VLLM_GPU_DEFAULT_GPU_MEMORY_UTILIZATION = 0.9
 # vLLM's CPU backend repurposes gpu_memory_utilization to mean "fraction of
 # HOST RAM to reserve for the KV cache" (not VRAM) — the GPU-oriented 0.9
 # default asks to reserve 90% of node RAM and reliably raises at worker init
 # on a real machine. Used only for num_gpus == 0 vllm deploys (see
-# normalize_num_gpus_and_tp); an explicitly set value always wins.
+# default_gpu_memory_utilization); an explicitly set value always wins.
 _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION = 0.4
 
 ChatTemplateContentFormatOption = Literal["auto", "string", "openai"]
@@ -61,7 +63,12 @@ class VllmEngineConfig(BaseModel):
     dtype: str = "auto"
     tokenizer: str | None = None
     trust_remote_code: bool = False
-    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when num_gpus < 1 (incl. 0, CPU deploys)
+    # None -> resolved lazily by default_gpu_memory_utilization() (0.9 on GPU,
+    # 0.4 on CPU deploys), so an unset field is never confused with a real user
+    # value. A fractional num_gpus (< 1) is the exception: normalize_num_gpus_and_tp
+    # writes it here directly since it's an authoritative VRAM-share derivation,
+    # not a mere default.
+    gpu_memory_utilization: float | None = None
     task: str = "auto"
     model_impl: str | None = None
     enable_log_requests: bool | None = False
@@ -95,9 +102,18 @@ class LlamaServerConfig(BaseModel):
 
     n_ctx: int = 2048
     n_batch: int = 512
-    # Layers to offload when the deployment reserves GPUs (num_gpus > 0):
-    # -1 auto-fits the offload to free VRAM, <= -2 offloads all layers.
+    # Layers to offload when the deployment reserves GPUs (num_gpus > 0). Any
+    # negative value hits llama-server's own "auto-fit to free device memory"
+    # code path (verified against the pinned b9859 binary: `params.n_gpu_layers
+    # < 0` gates that call regardless of exactly how negative; `--help`'s
+    # documented 'all' token isn't reachable through this int-typed field).
+    # `LlamaServerPreflight` recommends a concrete count whenever the GGUF
+    # metadata is readable, so this default is rarely what actually launches.
     n_gpu_layers: int = -1
+    # Compute thread count. None keeps llama-server's own default (all cores).
+    # LlamaServerPreflight recommends num_cpus when the deploy reserves whole
+    # CPUs, so a subprocess on a shared node doesn't grab every core.
+    threads: int | None = None
     # Concurrent request slots. llama-server splits its total context (`-c`)
     # across slots, so the process is launched with `n_ctx * parallel`.
     parallel: int = Field(default=1, ge=1)
@@ -275,20 +291,15 @@ class ModelshipModelConfig(BaseModel):
           also set num_gpus, log a warning and use tp x pp (each slot owns a
           whole GPU).
         - When tp = pp = 1 and num_gpus >= 2 is set, auto-derive tp = num_gpus.
-        - num_gpus == 0: a CPU deploy. Lower gpu_memory_utilization's default
-          (see _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION) — same rationale and
-          "explicit value always wins" mechanism as the fractional-GPU case.
+        - num_gpus <= 0 (a CPU deploy, or the not-yet-normalized fractional/whole
+          cases handled below): gpu_memory_utilization is left unset here — see
+          default_gpu_memory_utilization() for how it's resolved lazily.
         """
         ng = self.num_gpus
         if self.loader != ModelLoader.vllm:
             return self
 
-        if ng == 0:
-            if "gpu_memory_utilization" not in self.vllm_engine_kwargs.model_fields_set:
-                self.vllm_engine_kwargs.gpu_memory_utilization = _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
-                self.vllm_engine_kwargs.model_fields_set.add("gpu_memory_utilization")
-            return self
-        if ng < 0:
+        if ng <= 0:
             return self
 
         tp = self.vllm_engine_kwargs.tensor_parallel_size
@@ -362,6 +373,24 @@ class ModelshipModelConfig(BaseModel):
         # Gateway folded into the fingerprint, not a visible prefix; ownership is
         # tracked in the coordinator registry, not parsed out of the name.
         return f"{self.name}-{self.fingerprint(gateway_name)}"
+
+
+def default_gpu_memory_utilization(config: ModelshipModelConfig) -> float:
+    """The loader-appropriate `gpu_memory_utilization` fallback when neither the
+    user nor preflight set one: vLLM's own 0.9 default on GPU, or the much
+    lower `_VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION` on a `num_gpus: 0` CPU
+    deploy, where the same knob reserves host RAM instead of VRAM and 0.9
+    reliably over-reserves and crashes at worker init.
+
+    Callers should apply this last via `setdefault` on the merged engine
+    kwargs — `config.vllm_engine_kwargs.gpu_memory_utilization` itself is only
+    ever a real value: either an explicit user override, or (for a fractional
+    `num_gpus`) the VRAM-share value `normalize_num_gpus_and_tp` derives
+    directly. It's `None` only when there's nothing to fall back on but this.
+    """
+    if config.num_gpus == 0:
+        return _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
+    return _VLLM_GPU_DEFAULT_GPU_MEMORY_UTILIZATION
 
 
 class ModelshipConfig(BaseModel):

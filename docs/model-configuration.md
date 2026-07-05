@@ -136,11 +136,11 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `tensor_parallel_size` | int | `1` | Number of GPUs for tensor parallelism |
-| `max_model_len` | int | auto | Maximum sequence length |
+| `max_model_len` | int | auto (preflight) | Maximum sequence length. Preflight sizes this to the hardware an actor lands on — GPU VRAM or, on `num_gpus: 0`, host RAM — falling back to vLLM's own default when it declines (missing `config.json`, unreadable KV-cache geometry, etc.) |
 | `dtype` | string | `auto` | Model dtype (`auto`, `float16`, `bfloat16`) |
 | `tokenizer` | string | model default | Custom tokenizer path |
 | `trust_remote_code` | bool | `false` | Allow remote code execution |
-| `gpu_memory_utilization` | float | `0.9` (`0.4` on CPU deploys) | VRAM fraction on GPU; on CPU it means *host RAM* fraction reserved for the KV cache instead (see [CPU (no GPU required)](#cpu-no-gpu-required) below). Overridden by `num_gpus` when `num_gpus < 1`, including `num_gpus: 0`. |
+| `gpu_memory_utilization` | float | `0.9` (`0.4` on CPU deploys) | VRAM fraction on GPU; on CPU it means *host RAM* fraction reserved for the KV cache instead (see [CPU (no GPU required)](#cpu-no-gpu-required) below). Overridden by `num_gpus` when `num_gpus < 1`, including `num_gpus: 0`; on a `num_gpus: 0` deploy, preflight may also recommend a tighter value than the `0.4` fallback — an explicit value always wins over both. |
 | `quantization` | string | — | Quantization method (e.g. `awq`, `gptq`) |
 | `enable_auto_tool_choice` | bool | — | Enable automatic tool/function calling |
 | `tool_call_parser` | string | — | Tool call parser (e.g. `llama3_json`, `hermes`) |
@@ -154,36 +154,36 @@ The `vllm` loader supports chat/generation, embeddings, transcription, and trans
 
 ### CPU (no GPU required)
 
-The `vllm` loader also installs on the `cpu` extra (`num_gpus: 0`). The main use case is
-gemma models, which the `llama_server` loader can't tool-call (llama.cpp's own parsers
-don't support it) — vLLM handles gemma tool-calling correctly, GPU or CPU. This is **not** a way
-to run an existing GGUF gemma file on CPU: the GGUF rejection above applies here too, so
-you need a non-GGUF checkpoint (safetensors, or an AWQ/GPTQ/compressed-tensors quant —
-the CPU backend supports AWQ/GPTQ on x86 plus INT8 W8A8).
+The `vllm` loader also installs on the `cpu` extra (`num_gpus: 0`), for quantized chat
+without a GPU. The GGUF rejection above applies here too, so you need a non-GGUF
+checkpoint (safetensors, or an AWQ/GPTQ/compressed-tensors quant — the CPU backend
+supports AWQ/GPTQ on x86 plus INT8 W8A8).
 
 `gpu_memory_utilization` means something different on CPU: vLLM repurposes it as the
 fraction of **host RAM** to reserve for the KV cache, not VRAM. modelship lowers its
 default to `0.4` for `num_gpus: 0` deploys — the GPU-oriented `0.9` default would try to
-reserve 90% of node RAM and fail at worker init on a real machine — but set it explicitly
-based on what your box can spare. For finer control than a RAM fraction, vLLM also reads
-`VLLM_CPU_KVCACHE_SPACE` (a fixed GiB budget) and `VLLM_CPU_OMP_THREADS_BIND` directly
-from the process environment; these are vLLM-native env vars, not modelship config.
+reserve 90% of node RAM and fail at worker init on a real machine. Preflight goes a step
+further: it reads the actual RAM available on the actor's node and the model's weight
+footprint, and recommends both `max_model_len` and a tighter `gpu_memory_utilization` than
+the `0.4` fallback whenever it can (the fallback only applies when preflight declines —
+e.g. an unreadable `config.json`). Set either explicitly and it always wins over both the
+preflight recommendation and the fallback. For finer control than a RAM fraction, vLLM
+also reads `VLLM_CPU_KVCACHE_SPACE` (a fixed GiB budget) and `VLLM_CPU_OMP_THREADS_BIND`
+(CPU thread pinning) directly from the process environment; these are vLLM-native env
+vars, not modelship config.
+
+The fool-proof minimum — preflight fills in everything else:
 
 ```yaml
 models:
-  - name: gemma-cpu
-    model: org/gemma-3-AWQ  # a real non-GGUF gemma checkpoint
+  - name: qwen-cpu
+    model: Qwen/Qwen2.5-7B-Instruct-AWQ
     usecase: generate
     loader: vllm
     num_gpus: 0
-    num_cpus: 4
-    vllm_engine_kwargs:
-      enable_auto_tool_choice: true
-      tool_call_parser: functiongemma
-      gpu_memory_utilization: 0.4
 ```
 
-See `config/examples/vllm-cpu.yaml` for a complete example.
+See `config/examples/vllm-cpu.yaml` for a complete example with tool calling enabled.
 
 ### Chat / Text Generation
 
@@ -296,9 +296,10 @@ The `llama_server` loader runs GGUF models by launching a [`llama-server`](https
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `n_ctx` | int | `2048` | Per-slot context length. The launch command multiplies this by `parallel` for llama-server's total `-c` (it splits one context budget across slots) |
+| `n_ctx` | int | auto (preflight); `2048` when preflight declines | Per-slot context length. The launch command multiplies this by `parallel` for llama-server's total `-c` (it splits one context budget across slots). Preflight sizes it from GGUF metadata and the actor's hardware: RAM on `num_gpus: 0`, VRAM (and RAM for any CPU-resident layers) on `num_gpus >= 1` |
 | `n_batch` | int | `512` | Batch size for prompt processing |
-| `n_gpu_layers` | int | `-1` | Layers to offload to GPU when `num_gpus >= 1` (`-1` auto-fits free VRAM, `<= -2` offloads all layers). Forced to `0` when `num_gpus` is `0` |
+| `n_gpu_layers` | int | auto (preflight); `-1` when preflight declines | Layers to offload to GPU when `num_gpus >= 1`; forced to `0` when `num_gpus` is `0`. Preflight always recommends a concrete count (full or partial offload, sized to free VRAM) when GGUF metadata is readable. The `-1` fallback hits llama-server's own auto-fit-to-free-memory behavior (any negative value does — verified against the pinned b9859 binary) |
+| `threads` | int | `None` (llama-server's own default: all cores) | Compute thread count (`--threads`). Preflight recommends `num_cpus` when the deploy reserves one or more whole CPUs, so the subprocess doesn't grab every core on a shared node |
 | `parallel` | int | `1` | Concurrent request slots (`--parallel`). When `max_ongoing_requests` isn't set explicitly, it defaults to this value so overflow queues in Ray Serve rather than inside llama-server |
 | `chat_template` | string | — | Built-in template name (e.g. `chatml`) or a path to a Jinja file. Omit to use the GGUF's embedded chat template |
 | `mmproj` | string | — | Multimodal projector file/repo ref (e.g. a CLIP model) for vision models — see [Vision](#vision-gguf) below |
@@ -306,14 +307,15 @@ The `llama_server` loader runs GGUF models by launching a [`llama-server`](https
 
 > **Note:** there is no persistent on-disk prompt cache. llama-server manages request-level prefix caching internally and automatically within its slots, but has no equivalent to modelship's restart-persistent disk cache.
 
+The fool-proof minimum — preflight fills in `n_ctx`, `n_gpu_layers`, and `threads`:
+
 ```yaml
 models:
   - name: "qwen-llama-server"
     model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
     usecase: "generate"
     loader: "llama_server"
-    llama_server_config:
-      parallel: 4
+    num_gpus: 1
 ```
 
 ### Tool calling and reasoning gaps vs. the OpenAI spec

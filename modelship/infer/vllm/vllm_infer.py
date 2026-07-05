@@ -52,7 +52,13 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 
 from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer, ClientDisconnectedError
-from modelship.infer.infer_config import ModelshipModelConfig, ModelUsecase, RawRequestProxy, VllmEngineConfig
+from modelship.infer.infer_config import (
+    ModelshipModelConfig,
+    ModelUsecase,
+    RawRequestProxy,
+    VllmEngineConfig,
+    default_gpu_memory_utilization,
+)
 from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.infer.vllm.parsing.detect import resolve_reasoning_parser, resolve_tool_parser
@@ -151,6 +157,7 @@ class VllmInfer(BaseInfer):
         else:
             logger.info("preflight recommendation for '%s': none", model_config.name)
         config_engine_kwargs = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
+        config_engine_kwargs.setdefault("gpu_memory_utilization", default_gpu_memory_utilization(model_config))
         config_engine_kwargs["model"] = model_config._resolved_path
 
         # gpu_memory_utilization for a fractional num_gpus is resolved once at
@@ -187,7 +194,7 @@ class VllmInfer(BaseInfer):
             dtype=cast("ModelDType", self.vllm_engine_kwargs.dtype),
             tokenizer=self.vllm_engine_kwargs.tokenizer,
             trust_remote_code=self.vllm_engine_kwargs.trust_remote_code,
-            gpu_memory_utilization=self.vllm_engine_kwargs.gpu_memory_utilization,
+            gpu_memory_utilization=cast("float", self.vllm_engine_kwargs.gpu_memory_utilization),
             distributed_executor_backend=distributed_executor_backend,
             enable_log_requests=self.vllm_engine_kwargs.enable_log_requests
             if self.vllm_engine_kwargs.enable_log_requests is not None
