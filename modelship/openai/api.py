@@ -142,7 +142,16 @@ def _error_response(result: ErrorResponse) -> JSONResponse:
 def _validation_error_from_cause(cause: BaseException) -> ErrorResponse:
     # OpenAI-style 400 for client-side validation failures (e.g. vLLM's
     # VLLMValidationError on context overflow, which subclasses ValueError).
-    base = cause.args[0] if cause.args else str(cause)
+    # A pydantic ValidationError's .args is only () locally; once it crosses the
+    # Ray pickle boundary it becomes (model_title, [line_errors], ...) — args[0]
+    # would be a bare model name like "TranscriptionRequest", not a useful
+    # message, so always render those through str() instead.
+    if isinstance(cause, ValidationError):
+        base = str(cause)
+    elif cause.args:
+        base = cause.args[0]
+    else:
+        base = str(cause)
     return create_error_response(
         message=base,
         err_type="invalid_request_error",

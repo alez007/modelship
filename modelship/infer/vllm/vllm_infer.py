@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from vllm.config.model import ModelDType
 from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.entrypoints.chat_utils import ChatTemplateConfig
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
@@ -334,8 +335,7 @@ class VllmInfer(BaseInfer):
                     ],
                 ),
                 request_logger=RequestLogger(max_log_len=None),
-                chat_template=None,
-                chat_template_content_format="auto",
+                chat_template_config=ChatTemplateConfig(chat_template=None, chat_template_content_format="auto"),
             )
             if self.model_config.usecase is ModelUsecase.embed
             and any(task in self.supported_tasks for task in ["embed", "embedding"])
@@ -723,7 +723,10 @@ class VllmInfer(BaseInfer):
     ) -> ErrorResponse | TranscriptionResponse | TranscriptionResponseVerbose | AsyncGenerator[str, None]:
         if self.serving_transcription is None:
             return await super().create_transcription(audio_data, request, raw_request)
-        vllm_request = VllmTranscriptionRequest(**request.model_dump())
+        # `file` is a required field on vLLM's own request schema but unused by
+        # create_transcription (audio_data is passed separately) — model_construct
+        # skips validation instead of raising on the field modelship never populates.
+        vllm_request = VllmTranscriptionRequest.model_construct(**request.model_dump())
         vllm_request.timestamp_granularities = []
         try:
             result = await self.serving_transcription.create_transcription(
@@ -746,7 +749,10 @@ class VllmInfer(BaseInfer):
     ) -> ErrorResponse | TranslationResponse | TranslationResponseVerbose | AsyncGenerator[str, None]:
         if self.serving_translation is None:
             return await super().create_translation(audio_data, request, raw_request)
-        vllm_request = VllmTranslationRequest(**request.model_dump())
+        # `file` is a required field on vLLM's own request schema but unused by
+        # create_translation (audio_data is passed separately) — model_construct
+        # skips validation instead of raising on the field modelship never populates.
+        vllm_request = VllmTranslationRequest.model_construct(**request.model_dump())
         try:
             result = await self.serving_translation.create_translation(
                 audio_data, vllm_request, cast("Request", raw_request)
