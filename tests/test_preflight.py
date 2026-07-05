@@ -374,6 +374,16 @@ class TestVllmPreflightCpu:
         with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=32 * 1024**3):
             assert VllmPreflight().recommend(cfg, hw) == {}
 
+    def test_undiscoverable_host_ram_returns_empty(self, tmp_path):
+        # _raw_host_ram_bytes reads raw psutil total independently of hw.ram_bytes
+        # (needed to match vLLM's own cgroup-blind denominator) — if that probe
+        # comes back 0, dividing by it in _recommend_cpu_auto_gmu must not raise.
+        snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        hw = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=0):
+            assert VllmPreflight().recommend(cfg, hw) == {}
+
     def test_user_pinned_gmu_sizes_max_model_len_without_recommending_gmu(self, tmp_path):
         snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
         cfg = _make_config(resolved_path=str(snapshot), num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.5})

@@ -263,6 +263,9 @@ class VllmPreflight:
         # cgroup-blind host total — matching that denominator here keeps our
         # recommended fraction faithful to what vLLM will actually reserve.
         denom_ram = _raw_host_ram_bytes(hw)
+        if denom_ram <= 0:
+            logger.info("preflight '%s': skipping — system RAM not discoverable", config.name)
+            return {}
         gmu = config.vllm_engine_kwargs.gpu_memory_utilization
 
         if gmu is not None:
