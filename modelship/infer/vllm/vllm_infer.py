@@ -57,7 +57,7 @@ from modelship.infer.infer_config import (
     ModelUsecase,
     RawRequestProxy,
     VllmEngineConfig,
-    split_vllm_user_overrides,
+    default_gpu_memory_utilization,
 )
 from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
@@ -146,7 +146,7 @@ class VllmInfer(BaseInfer):
                 f"Check driver logs for resolution errors."
             )
 
-        user_overrides, auto_defaults = split_vllm_user_overrides(model_config)
+        user_overrides = model_config.vllm_engine_kwargs.model_dump(exclude_unset=True)
 
         # Preflight: hardware-aware safe defaults the user can override.
         # User-supplied values always win; divergences are logged so
@@ -157,8 +157,7 @@ class VllmInfer(BaseInfer):
         else:
             logger.info("preflight recommendation for '%s': none", model_config.name)
         config_engine_kwargs = merge_with_user_overrides(recommendation, user_overrides, model_name=model_config.name)
-        for key, value in auto_defaults.items():
-            config_engine_kwargs.setdefault(key, value)
+        config_engine_kwargs.setdefault("gpu_memory_utilization", default_gpu_memory_utilization(model_config))
         config_engine_kwargs["model"] = model_config._resolved_path
 
         # gpu_memory_utilization for a fractional num_gpus is resolved once at
@@ -195,7 +194,7 @@ class VllmInfer(BaseInfer):
             dtype=cast("ModelDType", self.vllm_engine_kwargs.dtype),
             tokenizer=self.vllm_engine_kwargs.tokenizer,
             trust_remote_code=self.vllm_engine_kwargs.trust_remote_code,
-            gpu_memory_utilization=self.vllm_engine_kwargs.gpu_memory_utilization,
+            gpu_memory_utilization=cast("float", self.vllm_engine_kwargs.gpu_memory_utilization),
             distributed_executor_backend=distributed_executor_backend,
             enable_log_requests=self.vllm_engine_kwargs.enable_log_requests
             if self.vllm_engine_kwargs.enable_log_requests is not None

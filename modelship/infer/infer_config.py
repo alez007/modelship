@@ -26,11 +26,13 @@ FINGERPRINT_LEN = 10
 # re-bound with the same app name.
 _FINGERPRINT_EXCLUDED_FIELDS = {"name", "num_replicas", "autoscaling_config"}
 
+# vLLM's own default for a normal (whole/shared-GPU) deploy.
+_VLLM_GPU_DEFAULT_GPU_MEMORY_UTILIZATION = 0.9
 # vLLM's CPU backend repurposes gpu_memory_utilization to mean "fraction of
 # HOST RAM to reserve for the KV cache" (not VRAM) — the GPU-oriented 0.9
 # default asks to reserve 90% of node RAM and reliably raises at worker init
 # on a real machine. Used only for num_gpus == 0 vllm deploys (see
-# normalize_num_gpus_and_tp); an explicitly set value always wins.
+# default_gpu_memory_utilization); an explicitly set value always wins.
 _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION = 0.4
 
 ChatTemplateContentFormatOption = Literal["auto", "string", "openai"]
@@ -61,7 +63,12 @@ class VllmEngineConfig(BaseModel):
     dtype: str = "auto"
     tokenizer: str | None = None
     trust_remote_code: bool = False
-    gpu_memory_utilization: float = 0.9  # overridden by num_gpus when num_gpus < 1 (incl. 0, CPU deploys)
+    # None -> resolved lazily by default_gpu_memory_utilization() (0.9 on GPU,
+    # 0.4 on CPU deploys), so an unset field is never confused with a real user
+    # value. A fractional num_gpus (< 1) is the exception: normalize_num_gpus_and_tp
+    # writes it here directly since it's an authoritative VRAM-share derivation,
+    # not a mere default.
+    gpu_memory_utilization: float | None = None
     task: str = "auto"
     model_impl: str | None = None
     enable_log_requests: bool | None = False
@@ -81,10 +88,6 @@ class VllmEngineConfig(BaseModel):
     # Per-model multimodal processor knobs (e.g. min_pixels / max_pixels for
     # Qwen2.5-VL). Forwarded verbatim to the HF processor.
     mm_processor_kwargs: dict[str, Any] | None = None
-
-    # True when gpu_memory_utilization was auto-injected (CPU-deploy default)
-    # rather than set by the user — lets a preflight recommendation outrank it.
-    _gmu_auto: bool = PrivateAttr(default=False)
 
 
 class DiffusersConfig(BaseModel):
@@ -288,21 +291,15 @@ class ModelshipModelConfig(BaseModel):
           also set num_gpus, log a warning and use tp x pp (each slot owns a
           whole GPU).
         - When tp = pp = 1 and num_gpus >= 2 is set, auto-derive tp = num_gpus.
-        - num_gpus == 0: a CPU deploy. Lower gpu_memory_utilization's default
-          (see _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION) — same rationale and
-          "explicit value always wins" mechanism as the fractional-GPU case.
+        - num_gpus <= 0 (a CPU deploy, or the not-yet-normalized fractional/whole
+          cases handled below): gpu_memory_utilization is left unset here — see
+          default_gpu_memory_utilization() for how it's resolved lazily.
         """
         ng = self.num_gpus
         if self.loader != ModelLoader.vllm:
             return self
 
-        if ng == 0:
-            if "gpu_memory_utilization" not in self.vllm_engine_kwargs.model_fields_set:
-                self.vllm_engine_kwargs.gpu_memory_utilization = _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
-                self.vllm_engine_kwargs.model_fields_set.add("gpu_memory_utilization")
-                self.vllm_engine_kwargs._gmu_auto = True
-            return self
-        if ng < 0:
+        if ng <= 0:
             return self
 
         tp = self.vllm_engine_kwargs.tensor_parallel_size
@@ -378,22 +375,22 @@ class ModelshipModelConfig(BaseModel):
         return f"{self.name}-{self.fingerprint(gateway_name)}"
 
 
-def split_vllm_user_overrides(config: ModelshipModelConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Split `vllm_engine_kwargs` into (explicit user overrides, auto-injected defaults).
+def default_gpu_memory_utilization(config: ModelshipModelConfig) -> float:
+    """The loader-appropriate `gpu_memory_utilization` fallback when neither the
+    user nor preflight set one: vLLM's own 0.9 default on GPU, or the much
+    lower `_VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION` on a `num_gpus: 0` CPU
+    deploy, where the same knob reserves host RAM instead of VRAM and 0.9
+    reliably over-reserves and crashes at worker init.
 
-    `model_dump(exclude_unset=True)` can't tell an explicit user value from the
-    CPU-deploy `gpu_memory_utilization=0.4` that `normalize_num_gpus_and_tp` injects
-    and marks as "set" so it still reaches the engine — without this split, that
-    auto default would be indistinguishable from a real user override and would
-    silently outrank any preflight recommendation. Callers should merge as
-    `{**preflight_recommendation, **user_overrides}` and only then `setdefault`
-    the auto defaults back in, giving precedence: explicit user > preflight > auto.
+    Callers should apply this last via `setdefault` on the merged engine
+    kwargs — `config.vllm_engine_kwargs.gpu_memory_utilization` itself is only
+    ever a real value: either an explicit user override, or (for a fractional
+    `num_gpus`) the VRAM-share value `normalize_num_gpus_and_tp` derives
+    directly. It's `None` only when there's nothing to fall back on but this.
     """
-    user_overrides = config.vllm_engine_kwargs.model_dump(exclude_unset=True)
-    auto_defaults: dict[str, Any] = {}
-    if config.vllm_engine_kwargs._gmu_auto:
-        auto_defaults["gpu_memory_utilization"] = user_overrides.pop("gpu_memory_utilization")
-    return user_overrides, auto_defaults
+    if config.num_gpus == 0:
+        return _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
+    return _VLLM_GPU_DEFAULT_GPU_MEMORY_UTILIZATION
 
 
 class ModelshipConfig(BaseModel):

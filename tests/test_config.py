@@ -11,6 +11,7 @@ from modelship.infer.infer_config import (
     ModelshipModelConfig,
     ModelUsecase,
     VllmEngineConfig,
+    default_gpu_memory_utilization,
 )
 
 
@@ -234,7 +235,9 @@ class TestModelshipModelConfig:
         )
         assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.6
 
-    def test_whole_gpu_leaves_gpu_memory_utilization_default(self):
+    def test_whole_gpu_leaves_gpu_memory_utilization_unset(self):
+        # Left None rather than eagerly written as 0.9: default_gpu_memory_utilization()
+        # resolves it lazily so an unset field is never confused with a real value.
         config = ModelshipModelConfig(
             name="test-llm",
             model="some-model",
@@ -242,12 +245,15 @@ class TestModelshipModelConfig:
             loader=ModelLoader.vllm,
             num_gpus=1,
         )
-        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.9
+        assert config.vllm_engine_kwargs.gpu_memory_utilization is None
+        assert default_gpu_memory_utilization(config) == 0.9
 
-    def test_cpu_num_gpus_lowers_gpu_memory_utilization_default(self):
+    def test_cpu_num_gpus_leaves_gpu_memory_utilization_unset(self):
         # On vLLM's CPU backend, gpu_memory_utilization means "fraction of host
         # RAM to reserve," not VRAM — the GPU-oriented 0.9 default reserves 90%
-        # of node RAM and reliably raises at worker init on a real machine.
+        # of node RAM and reliably raises at worker init on a real machine, so
+        # the CPU-appropriate fallback is 0.4. Still resolved lazily, not
+        # written back onto the config here.
         config = ModelshipModelConfig(
             name="test-llm",
             model="some-model",
@@ -255,7 +261,8 @@ class TestModelshipModelConfig:
             loader=ModelLoader.vllm,
             num_gpus=0,
         )
-        assert config.vllm_engine_kwargs.gpu_memory_utilization == 0.4
+        assert config.vllm_engine_kwargs.gpu_memory_utilization is None
+        assert default_gpu_memory_utilization(config) == 0.4
 
     def test_explicit_gpu_memory_utilization_wins_over_cpu_default(self):
         config = ModelshipModelConfig(
@@ -391,7 +398,7 @@ class TestVllmEngineConfig:
         assert config.tensor_parallel_size == 1
         assert config.pipeline_parallel_size == 1
         assert config.dtype == "auto"
-        assert config.gpu_memory_utilization == 0.9
+        assert config.gpu_memory_utilization is None
         assert config.trust_remote_code is False
 
     def test_custom_values(self):

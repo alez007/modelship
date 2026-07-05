@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from modelship.infer.infer_config import ModelshipModelConfig
+from modelship.infer.infer_config import ModelshipModelConfig, default_gpu_memory_utilization
 from modelship.logging import get_logger
 from modelship.preflight.base import HardwareProfile
 
@@ -151,7 +151,9 @@ class VllmPreflight:
         gpu_available = min(g.available_bytes for g in hw.gpus)
         # gpu_memory_utilization already reflects a fractional num_gpus: it's
         # resolved at config normalization, so we read the effective value here.
-        gpu_util = config.vllm_engine_kwargs.gpu_memory_utilization
+        # An unset field (whole-GPU deploy, no user override) falls back to
+        # vLLM's own default.
+        gpu_util = config.vllm_engine_kwargs.gpu_memory_utilization or default_gpu_memory_utilization(config)
         # Dense text models carry far less non-KV overhead than MoE/MM models;
         # charging the heavy figure to a small dense model on a fractional GPU
         # wrongly zeroes the budget.
@@ -263,7 +265,7 @@ class VllmPreflight:
         denom_ram = _raw_host_ram_bytes(hw)
         gmu = config.vllm_engine_kwargs.gpu_memory_utilization
 
-        if not config.vllm_engine_kwargs._gmu_auto:
+        if gmu is not None:
             return self._recommend_cpu_pinned_gmu(
                 config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram, gmu
             )

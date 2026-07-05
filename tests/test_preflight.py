@@ -14,7 +14,7 @@ from modelship.infer.infer_config import (
     ModelshipModelConfig,
     ModelUsecase,
     VllmEngineConfig,
-    split_vllm_user_overrides,
+    default_gpu_memory_utilization,
 )
 from modelship.preflight import (
     GPUInfo,
@@ -336,7 +336,7 @@ class TestVllmPreflightCpu:
         # budget rather than the raw (huge) headroom.
         snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
         cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
-        assert cfg.vllm_engine_kwargs._gmu_auto is True
+        assert cfg.vllm_engine_kwargs.gpu_memory_utilization is None
         hw = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
         with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=256 * 1024**3):
             rec = VllmPreflight().recommend(cfg, hw)
@@ -377,7 +377,7 @@ class TestVllmPreflightCpu:
     def test_user_pinned_gmu_sizes_max_model_len_without_recommending_gmu(self, tmp_path):
         snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
         cfg = _make_config(resolved_path=str(snapshot), num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.5})
-        assert cfg.vllm_engine_kwargs._gmu_auto is False
+        assert cfg.vllm_engine_kwargs.gpu_memory_utilization == 0.5
         hw = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
         with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=256 * 1024**3):
             rec = VllmPreflight().recommend(cfg, hw)
@@ -386,42 +386,44 @@ class TestVllmPreflightCpu:
         assert rec["max_model_len"] == 2048
 
 
-class TestSplitVllmUserOverrides:
-    def test_gpu_deploy_has_no_auto_default(self):
-        cfg = _make_config(num_gpus=1)
-        _, auto_defaults = split_vllm_user_overrides(cfg)
-        assert auto_defaults == {}
+class TestDefaultGpuMemoryUtilization:
+    """`default_gpu_memory_utilization()` + the setdefault merge in
+    vllm_infer.py replace the old auto-default/split mechanism: the config
+    field itself stays None until an explicit user value, a fractional
+    num_gpus derivation, or a preflight recommendation resolves it, and only
+    the loader-appropriate fallback (0.9 GPU / 0.4 CPU) is applied last."""
 
-    def test_cpu_deploy_auto_default_is_split_out(self):
+    def test_gpu_deploy_default(self):
+        cfg = _make_config(num_gpus=1)
+        assert cfg.vllm_engine_kwargs.gpu_memory_utilization is None
+        assert default_gpu_memory_utilization(cfg) == 0.9
+
+    def test_cpu_deploy_default(self):
         cfg = _make_config(num_gpus=0)
-        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
-        assert "gpu_memory_utilization" not in user_overrides
-        assert auto_defaults == {"gpu_memory_utilization": 0.4}
+        assert cfg.vllm_engine_kwargs.gpu_memory_utilization is None
+        assert default_gpu_memory_utilization(cfg) == 0.4
 
     def test_explicit_gmu_on_cpu_deploy_is_a_user_override(self):
         cfg = _make_config(num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.6})
-        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        user_overrides = cfg.vllm_engine_kwargs.model_dump(exclude_unset=True)
         assert user_overrides["gpu_memory_utilization"] == 0.6
-        assert auto_defaults == {}
 
-    def test_precedence_user_over_recommendation_over_auto_default(self):
+    def test_precedence_user_over_recommendation_over_default(self):
         # Mirrors the merge in vllm_infer.py: {**rec, **user_overrides}, then
-        # auto defaults setdefault'd in last.
+        # the loader-appropriate default setdefault'd in last.
         cfg = _make_config(num_gpus=0, vllm_kwargs={"max_model_len": 4096})
-        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        user_overrides = cfg.vllm_engine_kwargs.model_dump(exclude_unset=True)
         recommendation = {"gpu_memory_utilization": 0.2, "max_model_len": 8192}
         merged = merge_with_user_overrides(recommendation, user_overrides, model_name=cfg.name)
-        for key, value in auto_defaults.items():
-            merged.setdefault(key, value)
+        merged.setdefault("gpu_memory_utilization", default_gpu_memory_utilization(cfg))
         assert merged["max_model_len"] == 4096  # user wins over recommendation
-        assert merged["gpu_memory_utilization"] == 0.2  # recommendation wins over auto default
+        assert merged["gpu_memory_utilization"] == 0.2  # recommendation wins over the default
 
-    def test_auto_default_survives_preflight_decline(self):
+    def test_default_survives_preflight_decline(self):
         cfg = _make_config(num_gpus=0)
-        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        user_overrides = cfg.vllm_engine_kwargs.model_dump(exclude_unset=True)
         merged = merge_with_user_overrides({}, user_overrides, model_name=cfg.name)
-        for key, value in auto_defaults.items():
-            merged.setdefault(key, value)
+        merged.setdefault("gpu_memory_utilization", default_gpu_memory_utilization(cfg))
         assert merged["gpu_memory_utilization"] == 0.4
 
 
