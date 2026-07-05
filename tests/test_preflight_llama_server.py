@@ -283,3 +283,34 @@ class TestLlamaServerThreadsRecommendation:
     def test_user_set_threads_wins_at_merge_level(self):
         merged = merge_with_user_overrides({"threads": 4}, {"threads": 16}, model_name="m")
         assert merged["threads"] == 16
+
+    def test_threads_declined_when_it_would_undercut_parallel_slots(self, tmp_path):
+        # num_cpus=2 with parallel=4: capping to 2 threads would starve the 4
+        # concurrent slots of compute and defeat the loader's headline
+        # concurrency feature — decline and let llama-server keep all cores.
+        cfg = _make_config(
+            resolved_path=str(_write_dummy_gguf(tmp_path)),
+            num_cpus=2,
+            llama_server_kwargs={"parallel": 4},
+        )
+        hw = HardwareProfile(ram_bytes=4 * 1024**3)
+        with (
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=int(1.75 * 1024**3)),
+        ):
+            rec = LlamaServerPreflight().recommend(cfg, hw)
+        assert "threads" not in rec
+
+    def test_threads_recommended_when_it_covers_parallel_slots(self, tmp_path):
+        cfg = _make_config(
+            resolved_path=str(_write_dummy_gguf(tmp_path)),
+            num_cpus=4,
+            llama_server_kwargs={"parallel": 4},
+        )
+        hw = HardwareProfile(ram_bytes=4 * 1024**3)
+        with (
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=int(1.75 * 1024**3)),
+        ):
+            rec = LlamaServerPreflight().recommend(cfg, hw)
+        assert rec["threads"] == 4

@@ -323,10 +323,26 @@ def _recommend_threads(config: ModelshipModelConfig) -> dict[str, Any]:
     """Align llama-server's compute threads with the actor's Ray CPU
     reservation so a subprocess on a shared node doesn't grab every core.
     `num_cpus` defaults to 0.1 (a fractional share), so only >= 1 (necessarily
-    an explicit config value) is treated as a real thread budget."""
+    an explicit config value) is treated as a real thread budget.
+
+    `num_cpus` is a Ray scheduling hint, not an enforced cap the way `num_gpus`
+    is — a deploy can legitimately set it low for bin-packing while still
+    running many `--parallel` slots that need real compute concurrency to
+    actually overlap. Recommending fewer threads than slots would starve them
+    and defeat the loader's headline feature, so decline in that case and let
+    llama-server keep its own default (all cores) instead."""
     if config.num_cpus < 1:
         return {}
     threads = int(config.num_cpus)
+    parallel = config.llama_server_config.parallel if config.llama_server_config else 1
+    if threads < parallel:
+        logger.info(
+            "preflight '%s': skipping thread alignment — num_cpus=%d would undercut parallel=%d slots",
+            config.name,
+            threads,
+            parallel,
+        )
+        return {}
     logger.info("preflight '%s': aligning llama-server threads to num_cpus=%d", config.name, threads)
     return {"threads": threads}
 
