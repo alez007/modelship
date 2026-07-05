@@ -59,9 +59,30 @@ _DTYPE_BYTES = {
 # comfortably under 8192 per item; we'll widen if telemetry shows otherwise.
 _MULTIMODAL_BATCHED_TOKENS_FLOOR = 8192
 
+# CPU backend constants. vLLM's CPU worker reserves `gpu_memory_utilization *
+# total_memory` (raw psutil total, cgroup-blind) for the KV cache and hard-
+# raises at startup if that exceeds available memory — see `_recommend_cpu`.
+_CPU_RAM_UTILIZATION = 0.8
+_CPU_OVERHEAD_FIXED_BYTES = 2 * 1024**3
+# Clamp the auto-picked KV budget to ~4 full-length sequences so a large RAM
+# box doesn't reserve an absurd utilization fraction just because the model's
+# context cap is small.
+_CPU_KV_SEQUENCES = 4
+# Context-length cap used when the model config doesn't declare
+# max_position_embeddings.
+_UNKNOWN_CONTEXT_LENGTH_CAP = 32768
+
 
 class VllmPreflight:
     def recommend(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        # Branch on the reservation (the intent signal), never on hardware
+        # discoverability: the pynvml node-level fallback in discover_hardware()
+        # can report GPUs Ray didn't actually assign to this num_gpus=0 deploy.
+        if config.num_gpus == 0:
+            return self._recommend_cpu(config, hw)
+        return self._recommend_gpu(config, hw)
+
+    def _recommend_gpu(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
         if not hw.gpus:
             # discover_hardware()'s pynvml fallback should have found node-level
             # GPUs even when the actor itself owns none (PG-coordinator case).
@@ -204,6 +225,172 @@ class VllmPreflight:
             )
 
         return rec
+
+    def _recommend_cpu(self, config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str, Any]:
+        model_path = config._resolved_path
+        if not model_path:
+            logger.info("preflight '%s': skipping — no resolved model path", config.name)
+            return {}
+
+        model_cfg = _load_model_config_json(model_path)
+        if model_cfg is None:
+            logger.info(
+                "preflight '%s': skipping — config.json not found or unreadable at %s",
+                config.name,
+                model_path,
+            )
+            return {}
+
+        text_cfg = _resolve_text_config(model_cfg)
+        kv_per_token, max_position_embeddings = _kv_bytes_per_token(text_cfg, model_cfg, config)
+        if kv_per_token is None:
+            logger.warning(
+                "preflight '%s': skipping — config.json missing KV-cache geometry "
+                "(num_hidden_layers/num_key_value_heads/head_dim). Top-level keys=%s, "
+                "architectures=%s",
+                config.name,
+                sorted(model_cfg.keys()),
+                model_cfg.get("architectures"),
+            )
+            return {}
+
+        weight_bytes = _estimate_weight_footprint(model_path)
+        weight_overhead = _OVERHEAD_WEIGHT_FRACTION * weight_bytes
+        ctx_cap = max_position_embeddings or _UNKNOWN_CONTEXT_LENGTH_CAP
+        # vLLM's CPU worker multiplies gpu_memory_utilization by the raw,
+        # cgroup-blind host total — matching that denominator here keeps our
+        # recommended fraction faithful to what vLLM will actually reserve.
+        denom_ram = _raw_host_ram_bytes(hw)
+        gmu = config.vllm_engine_kwargs.gpu_memory_utilization
+
+        if not config.vllm_engine_kwargs._gmu_auto:
+            return self._recommend_cpu_pinned_gmu(
+                config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram, gmu
+            )
+        return self._recommend_cpu_auto_gmu(config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram)
+
+    def _recommend_cpu_pinned_gmu(
+        self,
+        config: ModelshipModelConfig,
+        hw: HardwareProfile,
+        kv_per_token: int,
+        weight_bytes: int,
+        weight_overhead: float,
+        ctx_cap: int,
+        denom_ram: int,
+        gmu: float,
+    ) -> dict[str, Any]:
+        """The user explicitly set gpu_memory_utilization: vLLM's CPU worker
+        reserves exactly `gmu * denom_ram` for the KV cache regardless of what
+        we'd otherwise pick, so size max_model_len against that instead of our
+        own utilization target. We can't change gmu here, only warn if the
+        combined footprint won't fit."""
+        kv_budget = gmu * denom_ram
+        total_footprint = kv_budget + weight_bytes + weight_overhead + _CPU_OVERHEAD_FIXED_BYTES
+        if total_footprint > hw.sizing_ram_bytes:
+            logger.warning(
+                "preflight '%s': user-pinned gpu_memory_utilization=%.3f reserves %.2f GiB for "
+                "the KV cache; combined with an estimated %.2f GiB of weights this exceeds the "
+                "%.2f GiB of RAM available — vLLM's CPU worker will likely hard-raise at startup. "
+                "Lower gpu_memory_utilization or free up RAM.",
+                config.name,
+                gmu,
+                kv_budget / 1024**3,
+                (weight_bytes + weight_overhead) / 1024**3,
+                hw.sizing_ram_bytes / 1024**3,
+            )
+
+        max_tokens = int(kv_budget // kv_per_token)
+        suggested = min((max_tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE, ctx_cap)
+        if suggested < _DEFAULT_BLOCK_SIZE:
+            logger.warning(
+                "preflight '%s': user-pinned gpu_memory_utilization=%.3f yields max_model_len=%d "
+                "(< block_size); skipping recommendation",
+                config.name,
+                gmu,
+                suggested,
+            )
+            return {}
+
+        logger.info(
+            "preflight vllm cpu '%s': user-pinned util=%.3f denom_ram=%.2f GiB kv_budget=%.2f GiB "
+            "kv/token=%d B → suggested max_model_len=%d",
+            config.name,
+            gmu,
+            denom_ram / 1024**3,
+            kv_budget / 1024**3,
+            int(kv_per_token),
+            suggested,
+        )
+        return {"max_model_len": suggested}
+
+    def _recommend_cpu_auto_gmu(
+        self,
+        config: ModelshipModelConfig,
+        hw: HardwareProfile,
+        kv_per_token: int,
+        weight_bytes: int,
+        weight_overhead: float,
+        ctx_cap: int,
+        denom_ram: int,
+    ) -> dict[str, Any]:
+        """gpu_memory_utilization is still at its CPU-deploy auto default: we're
+        free to size both max_model_len and the utilization fraction. Target
+        using up to `_CPU_RAM_UTILIZATION` of the RAM actually free right now,
+        setting weight bytes and a fixed overhead aside first."""
+        kv_budget = (
+            hw.sizing_ram_bytes * _CPU_RAM_UTILIZATION - weight_bytes - weight_overhead - _CPU_OVERHEAD_FIXED_BYTES
+        )
+        if kv_budget <= 0:
+            logger.warning(
+                "preflight '%s': no KV-cache budget on CPU (available=%.2f GiB, est. weights=%.2f GiB); "
+                "model likely won't fit; deploy will be attempted anyway.",
+                config.name,
+                hw.sizing_ram_bytes / 1024**3,
+                (weight_bytes + weight_overhead) / 1024**3,
+            )
+            return {}
+
+        max_tokens = int(kv_budget // kv_per_token)
+        suggested = min((max_tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE, ctx_cap)
+        if suggested < _DEFAULT_BLOCK_SIZE:
+            logger.warning(
+                "preflight '%s': CPU budget yields max_model_len=%d (< block_size); skipping recommendation",
+                config.name,
+                suggested,
+            )
+            return {}
+
+        clamped_kv_bytes = min(kv_budget, _CPU_KV_SEQUENCES * kv_per_token * suggested)
+        recommended_gmu = round(clamped_kv_bytes / denom_ram, 3)
+        recommended_gmu = min(max(recommended_gmu, 0.01), 0.9)
+
+        logger.info(
+            "preflight vllm cpu '%s': sizing_ram=%.2f GiB weights≈%.2f GiB kv/token=%d B "
+            "→ suggested max_model_len=%d gpu_memory_utilization=%.3f",
+            config.name,
+            hw.sizing_ram_bytes / 1024**3,
+            (weight_bytes + weight_overhead) / 1024**3,
+            int(kv_per_token),
+            suggested,
+            recommended_gmu,
+        )
+        return {"max_model_len": suggested, "gpu_memory_utilization": recommended_gmu}
+
+
+def _raw_host_ram_bytes(hw: HardwareProfile) -> int:
+    """vLLM's CPU worker sizes `gpu_memory_utilization` against the raw,
+    cgroup-blind `psutil.virtual_memory().total` — reading the same value here
+    keeps our recommended fraction faithful to what vLLM will actually reserve.
+    Falls back to `hw.ram_bytes` (itself possibly cgroup-clamped) only if
+    psutil is unavailable."""
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().total)
+    except Exception:
+        logger.debug("preflight: psutil total-RAM probe failed; using cgroup-aware fallback", exc_info=True)
+        return hw.ram_bytes
 
 
 def _load_model_config_json(model_path: str) -> dict | None:

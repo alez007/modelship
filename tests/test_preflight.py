@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +14,7 @@ from modelship.infer.infer_config import (
     ModelshipModelConfig,
     ModelUsecase,
     VllmEngineConfig,
+    split_vllm_user_overrides,
 )
 from modelship.preflight import (
     GPUInfo,
@@ -27,7 +29,7 @@ def _make_config(
     *,
     resolved_path: str | None = None,
     vllm_kwargs: dict | None = None,
-    num_gpus: float = 0,
+    num_gpus: float = 1,
 ) -> ModelshipModelConfig:
     cfg = ModelshipModelConfig(
         name="test-model",
@@ -146,6 +148,7 @@ class TestVllmPreflight:
         cfg = _make_config(
             resolved_path=str(snapshot),
             vllm_kwargs={"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9},
+            num_gpus=2,
         )
         # Two small GPUs (typical of the failure scenario)
         hw = HardwareProfile(gpus=[GPUInfo(0, 16 * 1024**3, "test"), GPUInfo(1, 16 * 1024**3, "test")])
@@ -311,6 +314,117 @@ class TestVllmPreflight:
         assert rec_fp8["max_model_len"] >= rec_fp16["max_model_len"]
 
 
+class TestVllmPreflightCpu:
+    """`config.num_gpus == 0` routes to `_recommend_cpu`, sized against system
+    RAM rather than VRAM. `_raw_host_ram_bytes` is patched to a fixed value so
+    the hand-checked math doesn't depend on the actual test machine's RAM."""
+
+    _SMALL_MODEL_CFG: ClassVar[dict] = {
+        "num_hidden_layers": 8,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 8,
+        "hidden_size": 1024,
+        "head_dim": 128,
+        "torch_dtype": "float16",
+        "max_position_embeddings": 2048,
+    }
+
+    def test_cpu_only_node_caps_at_mpe_and_clamps_gmu(self, tmp_path):
+        # Roomy RAM: the KV budget vastly exceeds what's needed for the model's
+        # own max_position_embeddings (2048), so max_model_len caps there, and
+        # gpu_memory_utilization is sized to just the clamped 4-sequence KV
+        # budget rather than the raw (huge) headroom.
+        snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        assert cfg.vllm_engine_kwargs._gmu_auto is True
+        hw = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=256 * 1024**3):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert rec["max_model_len"] == 2048
+        # kv_per_token=32768B; 4 seqs * 2048 tokens = 256 MiB, / 256 GiB denom ≈ 0.001 → clamped to the 0.01 floor.
+        assert rec["gpu_memory_utilization"] == 0.01
+
+    def test_mixed_node_ignores_discoverable_gpus(self, tmp_path):
+        # Same config, but the node-level pynvml view reports GPUs Ray didn't
+        # actually assign to this num_gpus=0 deploy — must not affect sizing.
+        snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        hw_cpu_only = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
+        hw_mixed = HardwareProfile(
+            gpus=[GPUInfo(0, 80 * 1024**3, "test")], ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3
+        )
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=256 * 1024**3):
+            rec_cpu_only = VllmPreflight().recommend(cfg, hw_cpu_only)
+            rec_mixed = VllmPreflight().recommend(cfg, hw_mixed)
+        assert rec_mixed == rec_cpu_only
+
+    def test_unknown_context_length_falls_back_to_cap(self, tmp_path):
+        cfg_json = {k: v for k, v in self._SMALL_MODEL_CFG.items() if k != "max_position_embeddings"}
+        snapshot = _write_model_snapshot(tmp_path, config_json=cfg_json, weight_bytes=1 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        hw = HardwareProfile(ram_bytes=1024 * 1024**3, available_ram_bytes=1024 * 1024**3)
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=1024 * 1024**3):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert rec["max_model_len"] == 32768
+
+    def test_weights_exceed_ram_returns_empty(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=64 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        hw = HardwareProfile(ram_bytes=32 * 1024**3, available_ram_bytes=32 * 1024**3)
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=32 * 1024**3):
+            assert VllmPreflight().recommend(cfg, hw) == {}
+
+    def test_user_pinned_gmu_sizes_max_model_len_without_recommending_gmu(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=self._SMALL_MODEL_CFG, weight_bytes=1 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.5})
+        assert cfg.vllm_engine_kwargs._gmu_auto is False
+        hw = HardwareProfile(ram_bytes=256 * 1024**3, available_ram_bytes=256 * 1024**3)
+        with patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=256 * 1024**3):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert "gpu_memory_utilization" not in rec
+        # Pinned at 0.5 * 256 GiB is far beyond the 2048 mpe cap.
+        assert rec["max_model_len"] == 2048
+
+
+class TestSplitVllmUserOverrides:
+    def test_gpu_deploy_has_no_auto_default(self):
+        cfg = _make_config(num_gpus=1)
+        _, auto_defaults = split_vllm_user_overrides(cfg)
+        assert auto_defaults == {}
+
+    def test_cpu_deploy_auto_default_is_split_out(self):
+        cfg = _make_config(num_gpus=0)
+        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        assert "gpu_memory_utilization" not in user_overrides
+        assert auto_defaults == {"gpu_memory_utilization": 0.4}
+
+    def test_explicit_gmu_on_cpu_deploy_is_a_user_override(self):
+        cfg = _make_config(num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.6})
+        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        assert user_overrides["gpu_memory_utilization"] == 0.6
+        assert auto_defaults == {}
+
+    def test_precedence_user_over_recommendation_over_auto_default(self):
+        # Mirrors the merge in vllm_infer.py: {**rec, **user_overrides}, then
+        # auto defaults setdefault'd in last.
+        cfg = _make_config(num_gpus=0, vllm_kwargs={"max_model_len": 4096})
+        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        recommendation = {"gpu_memory_utilization": 0.2, "max_model_len": 8192}
+        merged = merge_with_user_overrides(recommendation, user_overrides, model_name=cfg.name)
+        for key, value in auto_defaults.items():
+            merged.setdefault(key, value)
+        assert merged["max_model_len"] == 4096  # user wins over recommendation
+        assert merged["gpu_memory_utilization"] == 0.2  # recommendation wins over auto default
+
+    def test_auto_default_survives_preflight_decline(self):
+        cfg = _make_config(num_gpus=0)
+        user_overrides, auto_defaults = split_vllm_user_overrides(cfg)
+        merged = merge_with_user_overrides({}, user_overrides, model_name=cfg.name)
+        for key, value in auto_defaults.items():
+            merged.setdefault(key, value)
+        assert merged["gpu_memory_utilization"] == 0.4
+
+
 class TestMultimodal:
     @pytest.mark.parametrize(
         "model_cfg,expected",
@@ -391,6 +505,7 @@ class TestMultimodal:
         cfg = _make_config(
             resolved_path=str(snapshot),
             vllm_kwargs={"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9},
+            num_gpus=2,
         )
         hw = HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test"), GPUInfo(1, 24 * 1024**3, "test")])
         rec = VllmPreflight().recommend(cfg, hw)

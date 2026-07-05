@@ -1,13 +1,7 @@
 # vLLM loader on CPU — no GPU required.
 #
-# The main use case today: gemma models can't be tool-called through the
-# llama_server loader (llama.cpp's own parsers don't support it), but work
-# fine through vllm. This is NOT a way to run your existing GGUF gemma file
-# on CPU — the vllm loader rejects .gguf unconditionally, GPU or CPU. You
-# need a non-GGUF checkpoint: safetensors, or an AWQ/GPTQ/compressed-tensors
-# quant (CPU backend supports AWQ/GPTQ on x86, plus INT8 W8A8). Look for a
-# community AWQ/GPTQ repack of the gemma model you want, or use the full
-# safetensors checkpoint if you have the RAM for it.
+# Requires a non-GGUF checkpoint: safetensors, or an AWQ/GPTQ/compressed-tensors
+# quant (CPU backend supports AWQ/GPTQ on x86, plus INT8 W8A8).
 #
 # gpu_memory_utilization means something different here than on GPU: vLLM's
 # CPU backend repurposes it as the fraction of HOST RAM to reserve for the KV
@@ -21,8 +15,8 @@
 # See docs/model-configuration.md for the full vllm_engine_kwargs reference.
 
 models:
-  - name: "gemma-cpu"
-    model: "org/gemma-3-AWQ"  # replace with a real non-GGUF gemma checkpoint
+  - name: "qwen-cpu"
+    model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
     usecase: "generate"
     loader: "vllm"
     num_gpus: 0
@@ -30,5 +24,5 @@ models:
     vllm_engine_kwargs:
       max_model_len: 8192
       enable_auto_tool_choice: true
-      tool_call_parser: "functiongemma"
+      tool_call_parser: "hermes"
       gpu_memory_utilization: 0.4

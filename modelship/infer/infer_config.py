@@ -82,6 +82,10 @@ class VllmEngineConfig(BaseModel):
     # Qwen2.5-VL). Forwarded verbatim to the HF processor.
     mm_processor_kwargs: dict[str, Any] | None = None
 
+    # True when gpu_memory_utilization was auto-injected (CPU-deploy default)
+    # rather than set by the user — lets a preflight recommendation outrank it.
+    _gmu_auto: bool = PrivateAttr(default=False)
+
 
 class DiffusersConfig(BaseModel):
     torch_dtype: str = "float16"
@@ -95,9 +99,18 @@ class LlamaServerConfig(BaseModel):
 
     n_ctx: int = 2048
     n_batch: int = 512
-    # Layers to offload when the deployment reserves GPUs (num_gpus > 0):
-    # -1 auto-fits the offload to free VRAM, <= -2 offloads all layers.
+    # Layers to offload when the deployment reserves GPUs (num_gpus > 0). Any
+    # negative value hits llama-server's own "auto-fit to free device memory"
+    # code path (verified against the pinned b9859 binary: `params.n_gpu_layers
+    # < 0` gates that call regardless of exactly how negative; `--help`'s
+    # documented 'all' token isn't reachable through this int-typed field).
+    # `LlamaServerPreflight` recommends a concrete count whenever the GGUF
+    # metadata is readable, so this default is rarely what actually launches.
     n_gpu_layers: int = -1
+    # Compute thread count. None keeps llama-server's own default (all cores).
+    # LlamaServerPreflight recommends num_cpus when the deploy reserves whole
+    # CPUs, so a subprocess on a shared node doesn't grab every core.
+    threads: int | None = None
     # Concurrent request slots. llama-server splits its total context (`-c`)
     # across slots, so the process is launched with `n_ctx * parallel`.
     parallel: int = Field(default=1, ge=1)
@@ -287,6 +300,7 @@ class ModelshipModelConfig(BaseModel):
             if "gpu_memory_utilization" not in self.vllm_engine_kwargs.model_fields_set:
                 self.vllm_engine_kwargs.gpu_memory_utilization = _VLLM_CPU_DEFAULT_GPU_MEMORY_UTILIZATION
                 self.vllm_engine_kwargs.model_fields_set.add("gpu_memory_utilization")
+                self.vllm_engine_kwargs._gmu_auto = True
             return self
         if ng < 0:
             return self
@@ -362,6 +376,24 @@ class ModelshipModelConfig(BaseModel):
         # Gateway folded into the fingerprint, not a visible prefix; ownership is
         # tracked in the coordinator registry, not parsed out of the name.
         return f"{self.name}-{self.fingerprint(gateway_name)}"
+
+
+def split_vllm_user_overrides(config: ModelshipModelConfig) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split `vllm_engine_kwargs` into (explicit user overrides, auto-injected defaults).
+
+    `model_dump(exclude_unset=True)` can't tell an explicit user value from the
+    CPU-deploy `gpu_memory_utilization=0.4` that `normalize_num_gpus_and_tp` injects
+    and marks as "set" so it still reaches the engine — without this split, that
+    auto default would be indistinguishable from a real user override and would
+    silently outrank any preflight recommendation. Callers should merge as
+    `{**preflight_recommendation, **user_overrides}` and only then `setdefault`
+    the auto defaults back in, giving precedence: explicit user > preflight > auto.
+    """
+    user_overrides = config.vllm_engine_kwargs.model_dump(exclude_unset=True)
+    auto_defaults: dict[str, Any] = {}
+    if config.vllm_engine_kwargs._gmu_auto:
+        auto_defaults["gpu_memory_utilization"] = user_overrides.pop("gpu_memory_utilization")
+    return user_overrides, auto_defaults
 
 
 class ModelshipConfig(BaseModel):

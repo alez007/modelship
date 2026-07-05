@@ -20,6 +20,7 @@ class TestLlamaServerConfig:
         assert config.n_ctx == 2048
         assert config.n_batch == 512
         assert config.n_gpu_layers == -1
+        assert config.threads is None
         assert config.parallel == 1
         assert config.chat_template is None
         assert config.extra_args == []
@@ -29,6 +30,7 @@ class TestLlamaServerConfig:
             n_ctx=4096,
             n_batch=1024,
             n_gpu_layers=33,
+            threads=8,
             parallel=4,
             chat_template="chatml",
             extra_args=["--flash-attn"],
@@ -36,6 +38,7 @@ class TestLlamaServerConfig:
         assert config.n_ctx == 4096
         assert config.n_batch == 1024
         assert config.n_gpu_layers == 33
+        assert config.threads == 8
         assert config.parallel == 4
         assert config.chat_template == "chatml"
         assert config.extra_args == ["--flash-attn"]
