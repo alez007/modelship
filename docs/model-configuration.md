@@ -9,7 +9,6 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | Argument | Env Var | Default | Description |
 |---|---|---|---|
 | `--config` | — | `config/models.yaml` | Path to models config file |
-| `--model-stack` | `MSHIP_MODEL_STACK` | — | Auto-generate a config from a [profile](#profiles-mship_model_stack) (`chat`/`assistant`/`studio`/`everything`) sized to detected hardware |
 | `--gateway-name` | `MSHIP_GATEWAY_NAME` | `modelship api` | Name for the API gateway app |
 | `--use-existing-ray-cluster` | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Connect to a Ray cluster you manage (must run on a cluster node) instead of starting one. Implies deploy-and-exit (no teardown) |
 | `--prune-ray-sessions` | `MSHIP_PRUNE_RAY_SESSIONS` | `true` | When starting its own Ray head, delete stale `session_*` dirs left under the Ray temp root (default `/tmp/ray`) by previous, no-longer-running heads — Ray never cleans these up, so they fill the disk across restarts. A live head's session is always kept. Set `false` to keep them (e.g. for debugging). No effect with `--use-existing-ray-cluster` |
@@ -63,47 +62,6 @@ Multiple gateways can run independently by using `--gateway-name`:
 python mship_deploy.py --config config/llm.yaml --gateway-name "llm-api"
 python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 ```
-
-## Profiles (`MSHIP_MODEL_STACK`)
-
-Don't want to pick models, write YAML, or hand-allocate GPU/CPU? Set a **profile** and modelship generates a config sized to your detected hardware:
-
-```bash
-MSHIP_MODEL_STACK=studio uv run mship_deploy.py
-# equivalently:
-uv run mship_deploy.py --model-stack studio
-```
-
-A profile is a set of capabilities to serve. Every model in the catalog is **ungated**, so the one-click path needs no `HF_TOKEN`.
-
-| Profile | Capabilities |
-|---|---|
-| `chat` | generate + embed |
-| `assistant` | generate + transcription + tts |
-| `studio` | generate + image + embed |
-| `everything` | generate + image + embed + transcription + tts |
-
-### Models per tier
-
-The `generate` and `image` models scale with a **tier** (small/medium/large) picked from your hardware — GPU VRAM if a GPU is present, otherwise RAM and core count. Bigger box → bigger tier. The other capabilities are the same on every box.
-
-| Capability | small | medium | large |
-|---|---|---|---|
-| generate (GPU, vLLM/AWQ) | Qwen2.5-7B | Qwen2.5-14B | Qwen2.5-32B |
-| generate (CPU, llama.cpp/GGUF) | Llama-3.2-3B | Qwen2.5-7B | Qwen2.5-14B |
-| image (GPU, diffusers) | SD-Turbo | SDXL-Turbo | playground-v2.5 |
-| image (CPU, stable-diffusion.cpp) | SD-Turbo | SDXL-Turbo | SDXL-base |
-| embed (CPU, llama.cpp) | nomic-embed-text-v1.5 | ← | ← |
-| tts (CPU, `kokoroonnx`) | Kokoro-82M | ← | ← |
-| transcription (CPU, `whispercpp`) | whisper `base` | whisper `small` | ← |
-
-Selection is **all-or-nothing**: the highest tier whose *complete* stack fits is chosen. A capability is never dropped to squeeze something in — if even the smallest tier won't fit, the deploy refuses with a clear message instead of serving a partial stack. Resource requests (`num_cpus`/`num_gpus`) are filled in automatically; on a shared GPU the LLM gets the larger slice.
-
-### File behavior and precedence
-
-- The generated `config/models_stack_<profile>.yaml` is **regenerated from scratch on every start** while the profile is set — switch profiles just by changing the value, with no stale file to delete.
-- Resolution order: an explicit `--config` always wins; otherwise `MSHIP_MODEL_STACK`/`--model-stack`; otherwise the default `config/models.yaml`.
-- The file is normal, editable YAML, but **edits are overwritten** on the next profile-driven start. To keep changes, copy it to `config/models.yaml` (or pass `--config <file>`) and unset `MSHIP_MODEL_STACK`.
 
 ## Fields
 
@@ -509,7 +467,6 @@ deployment.
 | Variable | Description | Default |
 |---|---|---|
 | `HF_TOKEN` | HuggingFace access token | — |
-| `MSHIP_MODEL_STACK` | [Profile](#profiles-mship_model_stack) to auto-generate a hardware-sized config from (`chat`/`assistant`/`studio`/`everything`) | — |
 | `MSHIP_CACHE_DIR` | Model cache directory (HuggingFace + plugins) | `/.cache` |
 | `MSHIP_STATE_STORE` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) | `memory://` |
 | `MSHIP_STATE_DIR` | Default directory for a `file://` state store with no path | `<cache-dir>/state` |
