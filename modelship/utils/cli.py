@@ -17,21 +17,12 @@ _STRING_ARG_TO_ENV: dict[str, str] = {
     "otel_endpoint": "OTEL_EXPORTER_OTLP_ENDPOINT",
     "api_keys": "MSHIP_API_KEYS",
     "gateway_name": "MSHIP_GATEWAY_NAME",
-    "model_stack": "MSHIP_MODEL_STACK",
 }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Modelship — serve LLMs with Ray Serve")
     parser.add_argument("--config", help="Path to models.yaml config file (default: config/models.yaml)")
-    parser.add_argument(
-        "--model-stack",
-        help=(
-            "Profile to auto-generate a config from, e.g. chat/assistant/studio/everything "
-            "(env: MSHIP_MODEL_STACK). Regenerates config/models_stack_<profile>.yaml sized to "
-            "the detected hardware on every start. Ignored when --config is given."
-        ),
-    )
     parser.add_argument("--cache-dir", help="Model cache directory (env: MSHIP_CACHE_DIR)")
     parser.add_argument(
         "--state-dir",
