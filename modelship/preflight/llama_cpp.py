@@ -241,12 +241,23 @@ class LlamaServerPreflight:
             return max(0, min(total_layers, int(vram_budget // denom)))
 
         ngl = fit_ngl(target_ctx)
-        cpu_layers = meta.block_count - min(ngl, meta.block_count)
+        # cpu_blocks: transformer blocks left on CPU — the only layers with a
+        # KV cache. cpu_layers: all CPU-resident weight layers, which also
+        # includes the output layer (_NON_BLOCK_LAYER_EQUIV) once ngl reaches
+        # block_count but hasn't yet covered total_layers.
+        cpu_blocks = meta.block_count - min(ngl, meta.block_count)
+        cpu_layers = total_layers - ngl
 
         if cpu_layers > 0:
             ram_budget = hw.sizing_ram_bytes * _RAM_UTILIZATION - _OVERHEAD_FIXED_BYTES
-            kv_ram_per_ctx = kv_per_layer * cpu_layers
-            ctx_ram = int((ram_budget - layer_bytes * cpu_layers) // kv_ram_per_ctx) if kv_ram_per_ctx > 0 else 0
+            weight_ram = layer_bytes * cpu_layers
+            kv_ram_per_ctx = kv_per_layer * cpu_blocks
+            if kv_ram_per_ctx > 0:
+                ctx_ram = int((ram_budget - weight_ram) // kv_ram_per_ctx)
+            else:
+                # No CPU-resident blocks (only the output layer is), so context
+                # size doesn't affect this budget — it's a pure weight-fit check.
+                ctx_ram = target_ctx if ram_budget >= weight_ram else 0
             if ctx_ram < target_ctx:
                 target_ctx = ctx_ram
                 if target_ctx < _MIN_NCTX:

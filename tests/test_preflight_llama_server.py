@@ -157,7 +157,7 @@ class TestLlamaServerPreflightGpu:
         # the CPU-resident layers' KV cache doesn't fit at the 8192 target, so
         # the context shrinks (and ngl is refit against the smaller context).
         cfg = _make_config(resolved_path=str(_write_dummy_gguf(tmp_path)), num_gpus=1)
-        hw = HardwareProfile(gpus=[GPUInfo(0, 2 * 1024**3, "test")], ram_bytes=5 * 1024**3)
+        hw = HardwareProfile(gpus=[GPUInfo(0, 2 * 1024**3, "test")], ram_bytes=6 * 1024**3)
 
         with (
             patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
@@ -169,6 +169,25 @@ class TestLlamaServerPreflightGpu:
         assert rec["n_ctx"] < 8192
         assert rec["n_ctx"] % 256 == 0
         assert rec["n_gpu_layers"] > 0
+
+    def test_output_layer_ram_shortfall_returns_empty(self, tmp_path):
+        # VRAM fits all 32 transformer blocks but not the 33rd (output) layer,
+        # so ngl == block_count and no CPU-resident block carries a KV cache
+        # (cpu_blocks == 0). The output layer's weights still have to live in
+        # host RAM though, and here RAM is too small even for that alone —
+        # this must not be mistaken for "nothing left on CPU, nothing to check".
+        cfg = _make_config(
+            resolved_path=str(_write_dummy_gguf(tmp_path)), llama_server_kwargs={"n_ctx": 1024}, num_gpus=1
+        )
+        hw = HardwareProfile(gpus=[GPUInfo(0, int(5.8 * 1024**3), "test")], ram_bytes=700 * 1024**2)
+
+        with (
+            patch("modelship.preflight.llama_cpp._read_gguf_metadata", return_value=_LLAMA_META),
+            patch("modelship.preflight.llama_cpp._weight_bytes", return_value=4 * 1024**3),
+        ):
+            rec = LlamaServerPreflight().recommend(cfg, hw)
+
+        assert rec == {}
 
     def test_doesnt_fit_anywhere_returns_empty(self, tmp_path):
         # Neither VRAM nor RAM can absorb even a minimal context.
