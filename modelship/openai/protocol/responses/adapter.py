@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from modelship.openai.protocol.chat import ChatCompletionRequest
+from modelship.openai.protocol.chat import ChatCompletionRequest, StreamOptions
 from modelship.openai.protocol.responses.schemas import (
     ResponseInputTokensDetails,
     ResponseObject,
@@ -49,7 +49,7 @@ class UnsupportedResponsesFeatureError(ValueError):
 
 
 def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionRequest:
-    """Translate a ``ResponsesRequest`` into a non-streaming ``ChatCompletionRequest``.
+    """Translate a ``ResponsesRequest`` into a ``ChatCompletionRequest``.
 
     Raises :class:`UnsupportedResponsesFeatureError` for stateful/background/hosted-tool
     features that the stateless Phase A adapter cannot fulfill.
@@ -67,8 +67,14 @@ def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionReques
     kwargs: dict[str, Any] = {
         "model": request.model,
         "messages": messages,
-        "stream": False,
+        "stream": bool(request.stream),
     }
+    if request.stream:
+        # Responses always reports usage on the final event; the streaming
+        # translator only gets a usage-bearing chunk out of the chat pipeline
+        # when this is set (see engine_ops.stream_chat_completion). ChatCompletionRequest
+        # rejects stream_options when stream=False, so this must stay conditional.
+        kwargs["stream_options"] = StreamOptions(include_usage=True)
     if request.max_output_tokens is not None:
         kwargs["max_completion_tokens"] = request.max_output_tokens
     if request.temperature is not None:
