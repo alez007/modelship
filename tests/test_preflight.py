@@ -114,6 +114,20 @@ class TestRunPreflightDispatch:
             result = run_preflight(cfg, HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")]))
         assert result == {}
 
+    def test_disabled_via_env_returns_empty_even_with_recommendation(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_PREFLIGHT", "false")
+        cfg = _make_config()
+        with patch.object(VllmPreflight, "recommend", return_value={"max_model_len": 4096}):
+            result = run_preflight(cfg, HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")]))
+        assert result == {}
+
+    def test_enabled_by_default_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_PREFLIGHT", raising=False)
+        cfg = _make_config()
+        with patch.object(VllmPreflight, "recommend", return_value={"max_model_len": 4096}):
+            result = run_preflight(cfg, HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")]))
+        assert result == {"max_model_len": 4096}
+
 
 class TestVllmPreflight:
     def test_no_gpus_returns_empty(self):

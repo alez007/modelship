@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -324,6 +325,13 @@ def run_preflight(config: ModelshipModelConfig, hw: HardwareProfile) -> dict[str
     etc.). For `loader='custom'`, dispatches to the plugin's
     `ModelPlugin.preflight()` classmethod via a registered adapter.
     Never raises — preflight failures must not block a deploy."""
+    if os.environ.get("MSHIP_PREFLIGHT", "true").lower() == "false":
+        logger.info(
+            "preflight disabled via MSHIP_PREFLIGHT=false for '%s'; using loader defaults + user config",
+            config.name,
+        )
+        return {}
+
     # Register-on-first-call so importing this module doesn't pull in
     # backend-specific deps (vllm, transformers) when they're not installed.
     _ensure_registered()

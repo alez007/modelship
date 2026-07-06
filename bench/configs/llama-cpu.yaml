@@ -1,0 +1,20 @@
+models:
+  - name: "llm"
+    model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+    usecase: "generate"
+    loader: "llama_server"
+    num_gpus: 0
+    num_cpus: 8
+    # Lift Ray Serve's per-replica concurrency cap (default 100) so the model
+    # deployment isn't the bottleneck during the sweep.
+    max_ongoing_requests: 256
+    llama_server_config:
+      # Concurrent llama-server request slots — must cover --concurrency (8 by
+      # default) so requests overlap instead of queuing behind a full set of
+      # slots, which would understate throughput for both phases equally but
+      # muddy the TTFT/ITL comparison with queue-wait time.
+      parallel: 8
+      # n_gpu_layers is irrelevant here: the loader forces `-ngl 0` for any
+      # num_gpus: 0 deploy regardless of this field (see llama_server_infer.py
+      # and rawllama_entrypoint.py, which mirrors that branch), so both phases
+      # run CPU-only either way.

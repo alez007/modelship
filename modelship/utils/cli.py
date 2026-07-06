@@ -65,6 +65,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--no-metrics", action="store_true", default=None, help="Disable metrics (env: MSHIP_METRICS)")
     parser.add_argument(
+        "--no-preflight",
+        action="store_true",
+        default=None,
+        help=(
+            "Disable preflight hardware-based auto-sizing; models run on loader/library "
+            "defaults plus explicit config (env: MSHIP_PREFLIGHT). Useful for benchmarking."
+        ),
+    )
+    parser.add_argument(
         "--prune-ray-sessions",
         choices=["true", "false"],
         default=None,
@@ -117,6 +126,8 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_USE_EXISTING_RAY_CLUSTER"] = "true"
     if args.no_metrics is True:
         os.environ["MSHIP_METRICS"] = "false"
+    if args.no_preflight is True:
+        os.environ["MSHIP_PREFLIGHT"] = "false"
     if args.prune_ray_sessions is not None:
         os.environ["MSHIP_PRUNE_RAY_SESSIONS"] = args.prune_ray_sessions
     if args.max_request_body_bytes is not None:

@@ -17,14 +17,17 @@ from modelship.logging import get_logger
 logger = get_logger("startup")
 
 # Forwarded from the driver to each replica's runtime_env: logging vars, the gateway
-# name (metrics.py stamps every metric with it), and MSHIP_METRICS so --no-metrics on
-# the driver also disables metrics in the replicas (else they'd default to on).
+# name (metrics.py stamps every metric with it), MSHIP_METRICS so --no-metrics on
+# the driver also disables metrics in the replicas (else they'd default to on), and
+# MSHIP_PREFLIGHT so --no-preflight on the driver also disables it in the replicas
+# (preflight runs inside each loader's actor __init__, not on the driver).
 _PASSTHROUGH_ENV_VARS = (
     "MSHIP_LOG_LEVEL",
     "MSHIP_LOG_FORMAT",
     "MSHIP_LOG_TARGET",
     "MSHIP_GATEWAY_NAME",
     "MSHIP_METRICS",
+    "MSHIP_PREFLIGHT",
 )
 
 
