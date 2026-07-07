@@ -1,10 +1,12 @@
 """Route-level tests for /v1/responses.
 
-Since Stage D, the route does no chat<->Responses translation itself (that
-now lives on `BaseInfer.create_response`, either the default Phase A shim or
-a loader's native override) — it only fails fast on unsupported features
-before touching Ray, then hands the original `ResponsesRequest` straight to
-`handle.respond` and threads the result through the shared `_handle_response`.
+The route does no chat<->Responses translation and no pre-validation of its
+own: it hands the original `ResponsesRequest` straight to `handle.respond`
+and threads the result through the shared `_handle_response`, exactly like
+`create_chat_completion`'s route. Feature-support validation (e.g. rejecting
+`previous_response_id`) happens inside the deployment's `create_response` —
+a rejection surfaces here as an ordinary leading `ErrorResponse` from the
+handle, the same path any other loader-side error takes.
 """
 
 import json
@@ -13,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modelship.openai.api import ModelshipAPI
-from modelship.openai.protocol import ResponsesRequest
+from modelship.openai.protocol import ResponsesRequest, create_error_response
 from modelship.openai.protocol.responses import ResponseObject, ResponseOutputMessage, ResponseOutputText, ResponseUsage
 
 _ModelshipAPI = ModelshipAPI.func_or_class
@@ -89,6 +91,19 @@ class TestResponsesRoute:
 
     @pytest.mark.asyncio
     async def test_previous_response_id_rejected_400(self, api):
+        # The deployment rejects unsupported features (its create_response calls
+        # responses_request_to_chat internally); the route just relays whatever
+        # ErrorResponse comes back as the first item from the handle, same as any
+        # other loader-side rejection.
+        handle = MagicMock()
+
+        async def gen():
+            yield create_error_response("previous_response_id is not supported")
+
+        handle.respond.options.return_value.remote.return_value = gen()
+        api.models = {"m": {"m-a1b2c": handle}}
+        api._round_robin = {"m": 0}
+
         request = ResponsesRequest(model="m", input="hi", previous_response_id="resp_1")
         result = await api.create_response(request, _raw_request())
         assert result.status_code == 400
@@ -97,9 +112,18 @@ class TestResponsesRoute:
 
     @pytest.mark.asyncio
     async def test_invalid_param_returns_400_not_500(self, api):
-        # An invalid reasoning.effort fails when constructing the
+        # An invalid reasoning.effort fails when the deployment constructs the
         # ChatCompletionRequest (pydantic ValidationError, not a ValueError);
-        # the route must convert it to a 400, not let it 500.
+        # that must surface as a 400 ErrorResponse, not a 500.
+        handle = MagicMock()
+
+        async def gen():
+            yield create_error_response("bad reasoning.effort value", err_type="invalid_request_error")
+
+        handle.respond.options.return_value.remote.return_value = gen()
+        api.models = {"m": {"m-a1b2c": handle}}
+        api._round_robin = {"m": 0}
+
         request = ResponsesRequest(model="m", input="hi", reasoning={"effort": "turbo"})
         result = await api.create_response(request, _raw_request())
         assert result.status_code == 400

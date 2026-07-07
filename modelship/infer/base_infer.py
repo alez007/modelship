@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from typing import Any, TypeVar
 
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy
@@ -10,6 +10,7 @@ from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompletionStreamResponse,
     EmbeddingRequest,
     ErrorInfo,
     ErrorResponse,
@@ -28,6 +29,7 @@ from modelship.openai.protocol import (
     TranslationResponse,
     TranslationResponseVerbose,
 )
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 
 logger = get_logger("infer")
 
@@ -165,6 +167,59 @@ class BaseInfer(ABC):
                 with contextlib.suppress(asyncio.CancelledError):
                     await next_item
             await work.aclose()
+
+    async def _stream_responses(
+        self,
+        request: ResponsesRequest,
+        chunks: AsyncGenerator[ChatCompletionStreamResponse, None],
+        *,
+        request_id: str,
+        client_error: Callable[[Exception], str | None] = lambda _exc: None,
+    ) -> AsyncGenerator[str, None]:
+        """Drive a Responses SSE event stream from a loader's typed chat chunks.
+
+        Shared by every loader's `create_response`: each supplies its own native
+        chunk source (already wrapped in `run_cancellable_stream`) and this owns
+        the `ResponsesStreamTranslator` lifecycle — start, one `process()` per
+        chunk, then `finish()` on a clean end or `fail()` on an error.
+        `ClientDisconnectedError` (raised by `run_cancellable_stream` once the
+        client is gone) ends the stream silently, matching every other endpoint.
+        Any other exception is passed to `client_error`, which returns a
+        client-safe message to report via `fail()`, or `None` to log a full
+        stack trace and report a generic "Internal error during generation".
+
+        The `finally` block's `chunks.aclose()` is what guarantees `chunks` (and
+        transitively the native engine/subprocess stream it wraps) is torn down
+        even when neither of the `except` branches runs — e.g. the consumer
+        (Starlette/Ray Serve) closes *this* generator early while it's suspended
+        at one of the `yield`s below. `async for` does not propagate that closure
+        into the generator being iterated the way `yield from` would for a
+        synchronous generator, so without this `chunks` would otherwise be left
+        suspended forever, leaking its disconnect-poll task and underlying stream.
+        """
+        translator = ResponsesStreamTranslator(request)
+        try:
+            for event in translator.start():
+                yield event
+            try:
+                async for chunk in chunks:
+                    for event in translator.process(chunk):
+                        yield event
+            except ClientDisconnectedError:
+                logger.info("responses request %s aborted: client disconnected", request_id)
+                return
+            except Exception as exc:
+                message = client_error(exc)
+                if message is None:
+                    logger.exception("responses request %s failed mid-stream", request_id)
+                    message = "Internal error during generation"
+                for event in translator.fail(message):
+                    yield event
+                return
+            for event in translator.finish():
+                yield event
+        finally:
+            await chunks.aclose()
 
     async def on_generation_aborted(self) -> None:
         """Hook for loaders whose engine needs cleanup beyond task cancellation

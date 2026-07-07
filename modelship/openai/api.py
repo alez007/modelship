@@ -53,10 +53,6 @@ from modelship.openai.protocol import (
     TranslationResponse,
     create_error_response,
 )
-from modelship.openai.protocol.responses import (
-    UnsupportedResponsesFeatureError,
-    responses_request_to_chat,
-)
 from modelship.utils import random_uuid
 
 logger = get_logger("api")
@@ -549,19 +545,6 @@ class ModelshipAPI:
         req_id = random_uuid()
         self._set_request_id(req_id)
         model = request.model or ""
-        try:
-            # Fail fast on unsupported features before touching Ray. The loader
-            # re-derives its own ChatCompletionRequest from `request` — this call's
-            # result is discarded, it's here purely for the early validation.
-            responses_request_to_chat(request)
-        except UnsupportedResponsesFeatureError as e:
-            return _error_response(create_error_response(e))
-        except ValidationError as e:
-            # Translating into ChatCompletionRequest can surface invalid params
-            # (e.g. a bad reasoning.effort value) as a pydantic ValidationError,
-            # which is not a ValueError — return a 400 rather than a generic 500.
-            return _error_response(_validation_error_from_cause(e))
-
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_response")
         headers = dict(raw_request.headers)

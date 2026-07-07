@@ -67,9 +67,10 @@ from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.chat_utils import (
     UnsupportedContentError,
     build_from_parsed,
-    build_responses_items_from_parsed,
+    build_response_from_parsed,
     encode_chat_sse_chunk,
     normalize_chat_messages,
+    responses_validation_error,
 )
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -90,12 +91,8 @@ from modelship.openai.protocol import (
 )
 from modelship.openai.protocol.responses.adapter import (
     UnsupportedResponsesFeatureError,
-    _status_for,
-    _usage_from_chat,
-    build_response_object,
     responses_request_to_chat,
 )
-from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id
 
@@ -118,11 +115,14 @@ def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
     )
 
 
-def _responses_validation_error(exc: ValidationError) -> ErrorResponse:
-    # Same shape as _validation_error, for pydantic ValidationErrors surfaced by
-    # responses_request_to_chat (e.g. a bad reasoning.effort value).
-    base = exc.args[0] if exc.args else str(exc)
-    return create_error_response(message=base, err_type="invalid_request_error", status_code=HTTPStatus.BAD_REQUEST)
+def _vllm_stream_error(exc: Exception) -> str | None:
+    """`client_error` mapper for `BaseInfer._stream_responses`: a mid-stream
+    `VLLMValidationError` is client-safe to relay verbatim; anything else falls
+    through to the generic "Internal error during generation" message."""
+    if isinstance(exc, VLLMValidationError):
+        base = exc.args[0] if exc.args else str(exc)
+        return str(base)
+    return None
 
 
 class VllmInfer(BaseInfer):
@@ -549,7 +549,7 @@ class VllmInfer(BaseInfer):
         except UnsupportedResponsesFeatureError as e:
             return create_error_response(e)
         except ValidationError as e:
-            return _responses_validation_error(e)
+            return responses_validation_error(e)
 
         try:
             chat_request.messages = normalize_chat_messages(
@@ -643,19 +643,15 @@ class VllmInfer(BaseInfer):
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
 
-        status, incomplete = _status_for(finish_reasons[0])
-        return build_response_object(
+        return build_response_from_parsed(
+            choices[0],
             request,
-            status=status,
-            output=build_responses_items_from_parsed(choices[0]),
-            usage=_usage_from_chat(
-                UsageInfo(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
+            usage=UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
             ),
-            incomplete=incomplete,
+            finish_reason=finish_reasons[0],
             model=self.model_config.name,
         )
 
@@ -667,9 +663,9 @@ class VllmInfer(BaseInfer):
         sampling_params: SamplingParams,
         raw_request: RawRequestProxy,
     ) -> AsyncGenerator[str, None]:
-        """Native streaming Responses path: feeds `ResponsesStreamTranslator` directly
+        """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `engine_ops.stream_chat_completion`'s typed chunks — no chat SSE text
-        round trip like the (unused-by-this-loader) `BaseInfer` default."""
+        round trip."""
         request_id = f"resp-{base_request_id(raw_request)}"
         tokenizer = self.openai_serving_render.renderer.tokenizer
         assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
@@ -687,27 +683,10 @@ class VllmInfer(BaseInfer):
             want_logprobs=False,
             num_output_top_logprobs=None,
         )
-        translator = ResponsesStreamTranslator(request)
-        for event in translator.start():
-            yield event
-        try:
-            async for chunk in self.run_cancellable_stream(stream, raw_request):
-                for event in translator.process(chunk):
-                    yield event
-        except ClientDisconnectedError:
-            logger.info("responses request %s aborted: client disconnected", request_id)
-            return
-        except VLLMValidationError as exc:
-            base = exc.args[0] if exc.args else str(exc)
-            for event in translator.fail(str(base)):
-                yield event
-            return
-        except Exception:
-            logger.exception("responses request %s failed mid-stream", request_id)
-            for event in translator.fail("Internal error during generation"):
-                yield event
-            return
-        for event in translator.finish():
+        chunks = self.run_cancellable_stream(stream, raw_request)
+        async for event in self._stream_responses(
+            request, chunks, request_id=request_id, client_error=_vllm_stream_error
+        ):
             yield event
 
     async def create_embedding(

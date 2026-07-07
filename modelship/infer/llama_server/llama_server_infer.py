@@ -21,9 +21,10 @@ from modelship.openai.chat_utils import (
     ParsedChatOutput,
     UnsupportedContentError,
     build_from_parsed,
-    build_responses_items_from_parsed,
+    build_response_from_parsed,
     encode_chat_sse_chunk,
     normalize_chat_messages,
+    responses_validation_error,
 )
 from modelship.openai.protocol import (
     ChatCompletionLogProbs,
@@ -47,12 +48,8 @@ from modelship.openai.protocol import (
 )
 from modelship.openai.protocol.responses.adapter import (
     UnsupportedResponsesFeatureError,
-    _status_for,
-    _usage_from_chat,
-    build_response_object,
     responses_request_to_chat,
 )
-from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id, random_uuid
 
@@ -467,7 +464,7 @@ class LlamaServerInfer(BaseInfer):
         except UnsupportedResponsesFeatureError as e:
             return create_error_response(e)
         except ValidationError as e:
-            return _responses_validation_error(e)
+            return responses_validation_error(e)
 
         request_id = f"resp-{base_request_id(raw_request)}"
         supports_image = bool(self.config.mmproj)
@@ -483,7 +480,7 @@ class LlamaServerInfer(BaseInfer):
         payload = _build_payload(chat_request, messages, model_name=self.model_config.name)
 
         if request.stream:
-            return self._stream_response(payload, request, request_id, raw_request)
+            return self._create_response_stream(payload, request, request_id, raw_request)
 
         try:
             return await self.run_cancellable(self._send_response(payload, request, request_id), raw_request)
@@ -568,45 +565,18 @@ class LlamaServerInfer(BaseInfer):
             if trace:
                 logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
 
-    async def _stream_response(
+    async def _create_response_stream(
         self, payload: dict[str, Any], request: ResponsesRequest, request_id: str, raw_request: RawRequestProxy
     ) -> AsyncGenerator[str, None]:
-        """Race the llama-server SSE stream against the client's disconnect signal —
-        the Responses counterpart of `_stream_chat_completion`."""
-        stream = self._stream_response_body(payload, request, request_id)
-        try:
-            async for chunk in self.run_cancellable_stream(stream, raw_request):
-                yield chunk
-        except ClientDisconnectedError:
-            logger.info("responses request %s aborted: client disconnected", request_id)
-            return
-
-    async def _stream_response_body(
-        self, payload: dict[str, Any], request: ResponsesRequest, request_id: str
-    ) -> AsyncGenerator[str, None]:
-        """Native streaming Responses path: feeds `ResponsesStreamTranslator` directly
+        """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `_raw_stream_chunks`'s typed chunks, same source `_stream_chat_completion_body`
-        uses — no chat SSE text round trip like the (unused-by-this-loader) `BaseInfer` default."""
+        uses — no chat SSE text round trip."""
         assert self._client is not None
-        translator = ResponsesStreamTranslator(request)
-        for event in translator.start():
-            yield event
-        try:
-            async for chunk in _raw_stream_chunks(
-                self._client, payload, model_name=self.model_config.name, request_id=request_id
-            ):
-                for event in translator.process(chunk):
-                    yield event
-        except _LlamaServerStreamError as e:
-            for event in translator.fail(str(e)):
-                yield event
-            return
-        except httpx.HTTPError as e:
-            logger.warning("responses request %s failed mid-stream: %s", request_id, e)
-            for event in translator.fail(f"llama-server request failed: {e}"):
-                yield event
-            return
-        for event in translator.finish():
+        stream = _raw_stream_chunks(self._client, payload, model_name=self.model_config.name, request_id=request_id)
+        chunks = self.run_cancellable_stream(stream, raw_request)
+        async for event in self._stream_responses(
+            request, chunks, request_id=request_id, client_error=_llama_stream_error
+        ):
             yield event
 
 
@@ -614,13 +584,6 @@ class LlamaServerInfer(BaseInfer):
 # Request / response projection — never relay llama-server's JSON verbatim,
 # it's `extra="allow"`-shaped and would leak extension fields (e.g. `timings`).
 # ---------------------------------------------------------------------------
-
-
-def _responses_validation_error(exc: ValidationError) -> ErrorResponse:
-    # Pydantic ValidationErrors surfaced by responses_request_to_chat (e.g. a
-    # bad reasoning.effort value) — same 400 shape as every other rejection here.
-    base = exc.args[0] if exc.args else str(exc)
-    return create_error_response(message=base, err_type="invalid_request_error")
 
 
 def _redact(args: list[str]) -> list[str]:
@@ -739,13 +702,12 @@ def _project_chat_response(data: dict, *, model_name: str, request_id: str) -> C
 
 def _project_response(data: dict, request: ResponsesRequest, *, model_name: str) -> ResponseObject:
     choices, finish_reasons, _logprobs_list = _parsed_choices_from_data(data)
-    status, incomplete = _status_for(finish_reasons[0] if finish_reasons else None)
-    return build_response_object(
+    parsed = choices[0] if choices else ParsedChatOutput(content=None, reasoning=None)
+    return build_response_from_parsed(
+        parsed,
         request,
-        status=status,
-        output=build_responses_items_from_parsed(choices[0]) if choices else [],
-        usage=_usage_from_chat(_project_usage(data.get("usage"))),
-        incomplete=incomplete,
+        usage=_project_usage(data.get("usage")),
+        finish_reason=finish_reasons[0] if finish_reasons else None,
         model=model_name,
     )
 
@@ -803,12 +765,24 @@ class _LlamaServerStreamError(Exception):
     """
 
 
+def _llama_stream_error(exc: Exception) -> str | None:
+    """`client_error` mapper for `BaseInfer._stream_responses`: both of
+    `_raw_stream_chunks`'s failure modes are client-safe to relay verbatim;
+    anything else falls through to the generic "Internal error during generation"
+    message."""
+    if isinstance(exc, _LlamaServerStreamError):
+        return str(exc)
+    if isinstance(exc, httpx.HTTPError):
+        return f"llama-server request failed: {exc}"
+    return None
+
+
 async def _raw_stream_chunks(
     client: httpx.AsyncClient, payload: dict[str, Any], *, model_name: str, request_id: str
 ) -> AsyncGenerator[ChatCompletionStreamResponse, None]:
     """Open the llama-server SSE stream and yield typed chunks.
 
-    Shared by `_stream_chat_completion_body` (chat) and `_stream_response_body`
+    Shared by `_stream_chat_completion_body` (chat) and `_create_response_stream`
     (Responses) — both need the same parsed chunks, just encoded differently.
     Raises `_LlamaServerStreamError` for a failure after the connection opens
     (HTTP error status, inline `error` field); `httpx.HTTPError` propagates
