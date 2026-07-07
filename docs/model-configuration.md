@@ -21,6 +21,7 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--log-target` | `MSHIP_LOG_TARGET` | `console` | Log target: `console` or syslog URI (e.g. `syslog://host:514`, `syslog+tcp://host:514`) |
 | `--otel-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OpenTelemetry OTLP endpoint (e.g. `http://collector:4317`) |
 | `--no-metrics` | `MSHIP_METRICS` | enabled | Disable Prometheus metrics |
+| `--no-preflight` | `MSHIP_PREFLIGHT` | enabled | Disable preflight hardware auto-sizing; models run on loader/library defaults plus explicit config. Useful for benchmarking |
 | `--api-keys` | `MSHIP_API_KEYS` | — | Comma-separated API keys |
 | `--max-request-body-bytes` | `MSHIP_MAX_REQUEST_BODY_BYTES` | `52428800` | Max request body size in bytes |
 

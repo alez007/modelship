@@ -117,6 +117,18 @@ class TestApplyArgsToEnv:
             apply_args_to_env(parse_args([]))
             assert "MSHIP_PRUNE_RAY_SESSIONS" not in os.environ
 
+    def test_no_preflight_sets_env(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_PREFLIGHT", None)
+            apply_args_to_env(parse_args(["--no-preflight"]))
+            assert os.environ["MSHIP_PREFLIGHT"] == "false"
+
+    def test_no_preflight_absent_leaves_env_untouched(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_PREFLIGHT", None)
+            apply_args_to_env(parse_args([]))
+            assert "MSHIP_PREFLIGHT" not in os.environ
+
 
 class TestRandSuffix:
     def test_default_length(self):
@@ -202,6 +214,7 @@ class TestBuildDeploymentOptions:
         # via runtime_env, else the replica defaults to metrics-on (inconsistent).
         monkeypatch.setenv("MSHIP_METRICS", "false")
         monkeypatch.setenv("MSHIP_GATEWAY_NAME", "edge")
+        monkeypatch.setenv("MSHIP_PREFLIGHT", "false")
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
@@ -212,10 +225,12 @@ class TestBuildDeploymentOptions:
         env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
         assert env_vars["MSHIP_METRICS"] == "false"
         assert env_vars["MSHIP_GATEWAY_NAME"] == "edge"
+        assert env_vars["MSHIP_PREFLIGHT"] == "false"
 
     def test_unset_passthrough_env_vars_not_forwarded(self, monkeypatch):
         # Unset on the driver → not forwarded, so the replica keeps its own default.
         monkeypatch.delenv("MSHIP_METRICS", raising=False)
+        monkeypatch.delenv("MSHIP_PREFLIGHT", raising=False)
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
@@ -225,6 +240,7 @@ class TestBuildDeploymentOptions:
         )
         env_vars = build_deployment_options(config)["ray_actor_options"]["runtime_env"]["env_vars"]
         assert "MSHIP_METRICS" not in env_vars
+        assert "MSHIP_PREFLIGHT" not in env_vars
 
     def test_log_level_in_passthrough_and_deployment_env(self):
         # The gateway-replica bug: MSHIP_LOG_LEVEL must flow through the shared

@@ -76,16 +76,21 @@ RUN apt-get update -y && \
         curl \
         espeak-ng \
         gcc \
+        g++ \
         gnupg \
         gosu \
         libc6-dev \
-        libgomp1 && \
+        libgomp1 \
+        libnuma1 \
+        ninja-build && \
     rm -rf /var/lib/apt/lists/*
 
-# Register the NVIDIA CUDA apt repo and install cuda-cudart (GPU variant only).
-# gcc + libc6-dev stay because torch/triton JIT-compile kernels at model-load
-# time and shell out to $CC; without them, vllm crashes in _inductor with
-# "Failed to find C compiler".
+# Register the NVIDIA CUDA apt repo and install cuda-cudart, cuda-nvcc, and
+# cuda-cuobjdump (GPU variant only). gcc/g++ + libc6-dev and ninja-build stay
+# because torch/triton and flashinfer JIT-compile kernels at model-load time
+# and shell out to $CC/nvcc; without them, vllm crashes in _inductor (needs
+# g++ for its CPU codegen backend, e.g. the vllm CPU loader's torch.compile
+# path) or flashinfer on newer architectures (such as Blackwell).
 RUN if [ "$MSHIP_VARIANT" = "gpu" ]; then \
     CUDA_VERSION_DASH=$(echo $CUDA_VERSION | cut -d. -f1,2 | tr '.' '-') && \
     curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub \
@@ -93,7 +98,11 @@ RUN if [ "$MSHIP_VARIANT" = "gpu" ]; then \
     echo "deb [signed-by=/usr/share/keyrings/cuda-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/ /" \
         > /etc/apt/sources.list.d/cuda.list && \
     apt-get update -y && \
-    apt-get install -y --no-install-recommends cuda-cudart-${CUDA_VERSION_DASH} && \
+    apt-get install -y --no-install-recommends \
+        cuda-cudart-${CUDA_VERSION_DASH} \
+        cuda-nvcc-${CUDA_VERSION_DASH} \
+        cuda-cuobjdump-${CUDA_VERSION_DASH} \
+        libcurand-dev-${CUDA_VERSION_DASH} && \
     apt-get purge -y --auto-remove gnupg && \
     rm -f /etc/apt/sources.list.d/cuda.list /usr/share/keyrings/cuda-keyring.gpg && \
     rm -rf /var/lib/apt/lists/*; \
