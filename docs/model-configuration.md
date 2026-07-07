@@ -304,9 +304,12 @@ The `llama_server` loader runs GGUF models by launching a [`llama-server`](https
 | `parallel` | int | `1` | Concurrent request slots (`--parallel`). When `max_ongoing_requests` isn't set explicitly, it defaults to this value so overflow queues in Ray Serve rather than inside llama-server |
 | `chat_template` | string | — | Built-in template name (e.g. `chatml`) or a path to a Jinja file. Omit to use the GGUF's embedded chat template |
 | `mmproj` | string | — | Multimodal projector file/repo ref (e.g. a CLIP model) for vision models — see [Vision](#vision-gguf) below |
+| `cache_reuse` | int | `0` | Min chunk size (tokens) for fuzzy KV-cache reuse via position-shifting (`--cache-reuse`). `0` means exact-prefix reuse only (llama-server's default); raise it to also reuse cached chunks after a mid-prompt divergence — e.g. a changed system-prompt header, or a swapped RAG document, where the surrounding context is unchanged |
+| `context_shift` | bool | `false` | Evict the oldest tokens and keep generating when a slot's context fills, instead of erroring (`--context-shift`) |
+| `cache_ram_mib` | int | `None` (llama-server's own default: `8192`) | In-RAM prompt-cache cap in MiB (`-cram`/`--cache-ram`). `-1` means no limit, `0` disables the cache |
 | `extra_args` | list[string] | `[]` | Escape hatch: extra flags appended verbatim to the `llama-server` launch command |
 
-> **Note:** there is no persistent on-disk prompt cache. llama-server manages request-level prefix caching internally and automatically within its slots, but has no equivalent to modelship's restart-persistent disk cache.
+> **Note on caching:** llama-server caches prompts in RAM by default (`--cache-prompt`, always on; an 8 GiB idle-slot cache via `--cache-ram`) — exact-prefix reuse works out of the box for ordinary append-only chat with no configuration needed. `cache_reuse`, `context_shift`, and `cache_ram_mib` above tune that further. There is still no persistent **on-disk** prompt cache — llama-server's caching is in-memory only and does not survive a process restart, unlike modelship's restart-persistent disk cache for other loaders.
 
 The fool-proof minimum — preflight fills in `n_ctx`, `n_gpu_layers`, and `threads`:
 

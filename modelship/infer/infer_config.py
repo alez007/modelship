@@ -122,6 +122,18 @@ class LlamaServerConfig(BaseModel):
     chat_template: str | None = None
     # Path to the multimodal projector file (e.g. clip-model-f16.gguf)
     mmproj: str | None = None
+    # Min chunk size for fuzzy KV-cache reuse via position-shifting
+    # (--cache-reuse). 0 (llama-server's default) means exact-prefix reuse
+    # only; raising it also reuses cached chunks after a mid-prompt
+    # divergence (e.g. a changed system-prompt header, a swapped RAG chunk).
+    cache_reuse: int = Field(default=0, ge=0)
+    # Evict the oldest tokens and keep generating when a slot's context
+    # fills, instead of erroring (--context-shift). Off by default, matching
+    # llama-server's own default.
+    context_shift: bool = False
+    # In-RAM prompt-cache cap in MiB (-cram). None keeps llama-server's own
+    # default (8192); -1 means no limit, 0 disables the cache.
+    cache_ram_mib: int | None = Field(default=None, ge=-1)
     # Escape hatch for launch flags not otherwise surfaced, appended verbatim.
     extra_args: list[str] = Field(default_factory=list)
 

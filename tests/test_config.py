@@ -24,6 +24,9 @@ class TestLlamaServerConfig:
         assert config.threads is None
         assert config.parallel == 1
         assert config.chat_template is None
+        assert config.cache_reuse == 0
+        assert config.context_shift is False
+        assert config.cache_ram_mib is None
         assert config.extra_args == []
 
     def test_custom_values(self):
@@ -34,6 +37,9 @@ class TestLlamaServerConfig:
             threads=8,
             parallel=4,
             chat_template="chatml",
+            cache_reuse=256,
+            context_shift=True,
+            cache_ram_mib=4096,
             extra_args=["--flash-attn"],
         )
         assert config.n_ctx == 4096
@@ -42,6 +48,9 @@ class TestLlamaServerConfig:
         assert config.threads == 8
         assert config.parallel == 4
         assert config.chat_template == "chatml"
+        assert config.cache_reuse == 256
+        assert config.context_shift is True
+        assert config.cache_ram_mib == 4096
         assert config.extra_args == ["--flash-attn"]
 
     def _num_gpus_model(self, num_gpus: float) -> ModelshipModelConfig:

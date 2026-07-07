@@ -255,6 +255,12 @@ class LlamaServerInfer(BaseInfer):
             args += ["--mmproj", self.config.mmproj]
         if self.model_config.usecase == ModelUsecase.embed:
             args += ["--embedding"]
+        if self.config.cache_reuse > 0:
+            args += ["--cache-reuse", str(self.config.cache_reuse)]
+        if self.config.context_shift:
+            args += ["--context-shift"]
+        if self.config.cache_ram_mib is not None:
+            args += ["--cache-ram", str(self.config.cache_ram_mib)]
         args += list(self.config.extra_args)
 
         logger.info("llama-server launch args for '%s': %s", self.model_config.name, _redact(args))
