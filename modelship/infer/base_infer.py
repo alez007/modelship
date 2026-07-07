@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from typing import Any, TypeVar
 
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy
@@ -171,7 +171,7 @@ class BaseInfer(ABC):
     async def _stream_responses(
         self,
         request: ResponsesRequest,
-        chunks: AsyncIterator[ChatCompletionStreamResponse],
+        chunks: AsyncGenerator[ChatCompletionStreamResponse, None],
         *,
         request_id: str,
         client_error: Callable[[Exception], str | None] = lambda _exc: None,
@@ -187,27 +187,39 @@ class BaseInfer(ABC):
         Any other exception is passed to `client_error`, which returns a
         client-safe message to report via `fail()`, or `None` to log a full
         stack trace and report a generic "Internal error during generation".
+
+        The `finally` block's `chunks.aclose()` is what guarantees `chunks` (and
+        transitively the native engine/subprocess stream it wraps) is torn down
+        even when neither of the `except` branches runs — e.g. the consumer
+        (Starlette/Ray Serve) closes *this* generator early while it's suspended
+        at one of the `yield`s below. `async for` does not propagate that closure
+        into the generator being iterated the way `yield from` would for a
+        synchronous generator, so without this `chunks` would otherwise be left
+        suspended forever, leaking its disconnect-poll task and underlying stream.
         """
         translator = ResponsesStreamTranslator(request)
-        for event in translator.start():
-            yield event
         try:
-            async for chunk in chunks:
-                for event in translator.process(chunk):
-                    yield event
-        except ClientDisconnectedError:
-            logger.info("responses request %s aborted: client disconnected", request_id)
-            return
-        except Exception as exc:
-            message = client_error(exc)
-            if message is None:
-                logger.exception("responses request %s failed mid-stream", request_id)
-                message = "Internal error during generation"
-            for event in translator.fail(message):
+            for event in translator.start():
                 yield event
-            return
-        for event in translator.finish():
-            yield event
+            try:
+                async for chunk in chunks:
+                    for event in translator.process(chunk):
+                        yield event
+            except ClientDisconnectedError:
+                logger.info("responses request %s aborted: client disconnected", request_id)
+                return
+            except Exception as exc:
+                message = client_error(exc)
+                if message is None:
+                    logger.exception("responses request %s failed mid-stream", request_id)
+                    message = "Internal error during generation"
+                for event in translator.fail(message):
+                    yield event
+                return
+            for event in translator.finish():
+                yield event
+        finally:
+            await chunks.aclose()
 
     async def on_generation_aborted(self) -> None:
         """Hook for loaders whose engine needs cleanup beyond task cancellation
