@@ -4,15 +4,22 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import ValidationError
+
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
     ChatCompletionStreamResponse,
     ChatMessage,
+    ErrorResponse,
+    ResponseObject,
+    ResponsesRequest,
     ToolCall,
     UsageInfo,
 )
+from modelship.openai.protocol.error import create_error_response
+from modelship.openai.protocol.responses.adapter import _status_for, _usage_from_chat, build_response_object
 from modelship.openai.protocol.responses.schemas import (
     ResponseFunctionToolCall,
     ResponseOutputItem,
@@ -306,3 +313,36 @@ def build_responses_items_from_parsed(parsed: ParsedChatOutput) -> list[Response
             )
         )
     return output
+
+
+def build_response_from_parsed(
+    parsed: ParsedChatOutput,
+    request: ResponsesRequest,
+    *,
+    usage: UsageInfo,
+    finish_reason: str | None,
+    model: str,
+) -> ResponseObject:
+    """Build a non-streaming ``ResponseObject`` from one loader's parsed chat output.
+
+    Shared by every loader's non-streaming `create_response`: each shapes its own
+    `ParsedChatOutput` from its native response format, then hands it here for the
+    status/usage/envelope assembly (`build_response_object` + `_status_for` +
+    `_usage_from_chat`) that used to be duplicated per loader.
+    """
+    status, incomplete = _status_for(finish_reason)
+    return build_response_object(
+        request,
+        status=status,
+        output=build_responses_items_from_parsed(parsed),
+        usage=_usage_from_chat(usage),
+        incomplete=incomplete,
+        model=model,
+    )
+
+
+def responses_validation_error(exc: ValidationError) -> ErrorResponse:
+    """400 for a pydantic ``ValidationError`` surfaced by ``responses_request_to_chat``
+    (e.g. a bad ``reasoning.effort`` value) — same shape as every other rejection."""
+    base = exc.args[0] if exc.args else str(exc)
+    return create_error_response(message=base, err_type="invalid_request_error")
