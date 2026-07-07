@@ -91,6 +91,8 @@ Two cross-checks back this up:
 
 ## Results
 
+### vllm / GPU
+
 Example run — 1×GPU, Qwen2.5-7B-AWQ, `--loader vllm --device gpu`, 100 prompts @ concurrency 8, median of 3:
 
 | metric | modelship | raw vllm | overhead |
@@ -102,7 +104,6 @@ Example run — 1×GPU, Qwen2.5-7B-AWQ, `--loader vllm --device gpu`, 100 prompt
 | ITL mean (ms) | 12.96 | 12.39 | +4.6% |
 | TPOT mean (ms) | 12.44 | 12.42 | +0.2% |
 | peak VRAM (MiB) | 14533 | 14020 | +513 MiB |
-| peak host RAM, anon (MiB) | 4957 | 3781 | **+1176 MiB** |
 
 Notes:
 
@@ -115,12 +116,58 @@ Notes:
   the mean/p50 gap (+13.9%/+1.6%) — occasional scheduling jitter through the Ray
   Serve proxy/router under concurrent load, not a fixed per-request cost. Still
   small in absolute terms (~25 ms) against a multi-second E2E latency.
-- **Host RAM (+1176 MiB)** is the real resource cost — the Ray + Serve control
-  plane (including the prewarmed idle-worker pool) plus the replica. This is `anon`
-  (real process memory); **don't** use the container-RSS delta, which is dominated
+- **VRAM overhead is modest** (an extra CUDA context, not KV cache). The real
+  host-RAM cost is the Ray + Serve control plane (including the prewarmed
+  idle-worker pool) plus the replica — but read it from `anon` in the
+  per-component table below, **not** the container-RSS delta, which is dominated
   by reclaimable page cache and swings multiple GB between runs depending on which
-  cgroup faulted the weights. VRAM overhead is modest (an extra CUDA context), not
-  KV cache.
+  cgroup faulted the weights.
+- Numbers are illustrative; they vary with model, hardware, load, loader, and device.
+
+### llama_server / GPU
+
+Example run — 1×GPU, Qwen2.5-7B-Instruct Q4_K_M GGUF (fully offloaded, `n_gpu_layers: 99`),
+`--loader llama_server --device gpu`, 100 prompts @ concurrency 8, greedy (`--temperature 0`), median of 3:
+
+| metric | modelship | vanilla llama-server | overhead |
+| --- | ---: | ---: | ---: |
+| completed / 100 | **100** | 93 | — |
+| failed | **0** | 7 | — |
+| throughput (req/s) | 0.495 | 0.501 | −1.2% |
+| output (tok/s) | 253.5 | 256.7 | −1.2% |
+| TTFT mean (ms) | 341.2 | 331.6 | +2.9% |
+| TTFT p95 (ms) | 491.3 | 443.9 | +10.7% |
+| ITL mean (ms) | 30.29 | 29.99 | +1.0% |
+| TPOT mean (ms) | 30.2 | 29.9 | +1.0% |
+| peak VRAM (MiB) | 5505 | 5372 | +133 MiB |
+
+Notes:
+
+- **Decode is at parity** — same `llama-server` binary and GPU, so the engine's
+  hot path is identical. TPOT/ITL sit within ~1%; modelship adds no per-token cost.
+- **modelship completes every request; the raw baseline drops ~7%.** Vanilla
+  `llama-server`'s failures are all `ServerDisconnectedError` — the bench client
+  (aiohttp) hits `llama-server`'s cpp-httplib keep-alive close behaviour directly,
+  a race that Ray Serve's uvicorn front door structurally absorbs. It is **not**
+  tunable away via `llama-server` flags (`--threads-http` sizes the worker pool,
+  not the keep-alive lifecycle). So the baseline's small throughput/TTFT edge is
+  partly **survivorship** — it decoded fewer requests. The survivorship-immune
+  per-token metrics (TPOT/ITL) are the honest read, and they're at parity.
+- **The load client runs greedy (`--temperature 0`).** Both arms then decode an
+  identical deterministic token stream, so the A/B is reproducible and any
+  *shared* engine-level in-band error appears symmetrically instead of landing on
+  one arm by sampling luck. (Under sampling, `--ignore-eos` occasionally makes the
+  model babble a malformed `<tool_call>` past EOS that `llama-server`'s **own**
+  grammar parser rejects mid-stream — modelship faithfully relays that as an
+  in-band SSE error, which greedy decoding eliminates.)
+- **The result-parity gate is relative between arms**: modelship dropping or
+  truncating *more* than the baseline hard-fails the run; the baseline dropping
+  more (as here) is reported as a **FINDING** and the run passes. This run is a
+  finding in modelship's favour — 0 drops vs 7.
+- **VRAM overhead is modest** (+133 MiB, an extra CUDA context). As with vllm,
+  read host-RAM cost from `anon` in the per-component table, not the container-RSS
+  delta (page-cache-dominated and non-deterministic — here the baseline's `file`
+  cache is actually ~4.4 GiB *higher*).
 - Numbers are illustrative; they vary with model, hardware, load, loader, and device.
 
 ## How the two phases stay comparable

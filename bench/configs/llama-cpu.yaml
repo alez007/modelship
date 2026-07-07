@@ -22,13 +22,15 @@ models:
       # num_gpus: 0 deploy regardless of this field (see llama_server_infer.py
       # and rawllama_entrypoint.py, which mirrors that branch), so both phases
       # run CPU-only either way.
-      # Size llama-server's HTTP worker pool to comfortably cover --concurrency
-      # (default 8). The baseline arm points the bench client's many concurrent
-      # short-lived connections *straight* at llama-server's cpp-httplib, which
-      # oversubscribes the default pool and resets connections (observed as
-      # ServerDisconnectedError → failed requests); the modelship arm hides this
-      # behind a single pooled httpx client, so without this the baseline drops
-      # requests the modelship phase doesn't and the two arms compare unequal
-      # populations. Applied to BOTH phases (both append extra_args verbatim),
-      # so launch parity is preserved.
-      extra_args: ["--threads-http", "16"]
+      # NOTE: the baseline arm drops ~4-7% of requests with ServerDisconnectedError
+      # because the bench client hits llama-server's cpp-httplib keep-alive close
+      # behaviour directly, while the modelship arm faces Ray Serve's uvicorn front
+      # door and never does. This is NOT tunable away via llama-server flags
+      # (--threads-http sizes the worker pool, not the keep-alive lifecycle, and
+      # was verified ineffective), so there is no extra_args mitigation here. The
+      # asymmetry is real and in modelship's favour: assert_result_parity compares
+      # drop/truncation counts BETWEEN the two arms — the baseline dropping more is
+      # reported as a FINDING (run passes), and only modelship dropping MORE than
+      # the baseline hard-fails. (The load client runs greedy, --temperature 0, so
+      # both arms process an identical token stream and any shared engine-level
+      # in-band error shows up in both rather than landing randomly on one.)
