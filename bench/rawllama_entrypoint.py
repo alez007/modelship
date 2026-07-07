@@ -75,6 +75,19 @@ def main() -> int:
     # when the modelship phase wouldn't.
     if m.num_gpus > 0:
         args += ["-ngl", str(k.n_gpu_layers)]
+        # Ray's GPU reservation restricts the modelship actor's
+        # CUDA_VISIBLE_DEVICES to exactly num_gpus device(s); this bare
+        # subprocess bypasses Ray entirely and would otherwise inherit every
+        # GPU the container's --gpus flag exposed. Without this,
+        # llama-server auto-splits the model across every visible device
+        # (no --tensor-split/--main-gpu is passed), giving the baseline more
+        # aggregate VRAM/bandwidth than the modelship phase on a multi-GPU
+        # host and invalidating the A/B.
+        # num_gpus is typed float on ModelConfig (shared with the vllm loader's
+        # fractional sharing), but the llama_server loader's own validator
+        # (validate_llama_server_num_gpus) rejects non-whole values — so the
+        # int() cast here is safe and just satisfies range()'s signature.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(int(m.num_gpus)))
     else:
         args += ["-ngl", "0"]
     if k.threads is not None:

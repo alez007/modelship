@@ -93,24 +93,29 @@ Two cross-checks back this up:
 
 Example run — 1×GPU, Qwen2.5-7B-AWQ, `--loader vllm --device gpu`, 100 prompts @ concurrency 8, median of 3:
 
-| metric | modelship | raw vllm | delta |
+| metric | modelship | raw vllm | overhead |
 | --- | ---: | ---: | ---: |
-| throughput (req/s) | 1.185 | 1.188 | −0.3% |
-| output (tok/s) | 606.7 | 608.2 | −0.3% |
-| TTFT mean (ms) | 71.3 | 63.4 | +8 ms |
-| ITL mean (ms) | 12.99 | 12.53 | +0.5 ms |
-| TPOT mean (ms) | 12.57 | 12.55 | ~0 |
-| peak VRAM (MiB) | 14671 | 14070 | +601 |
-| peak host RAM, anon (MiB) | 4598 | 3733 | **+865** |
+| throughput (req/s) | 1.199 | 1.203 | −0.4% |
+| output (tok/s) | 613.7 | 616.1 | −0.4% |
+| TTFT mean (ms) | 62.5 | 54.9 | +13.9% |
+| TTFT p95 (ms) | 89.5 | 65.0 | +37.8% |
+| ITL mean (ms) | 12.96 | 12.39 | +4.6% |
+| TPOT mean (ms) | 12.44 | 12.42 | +0.2% |
+| peak VRAM (MiB) | 14533 | 14020 | +513 MiB |
+| peak host RAM, anon (MiB) | 4957 | 3781 | **+1176 MiB** |
 
 Notes:
 
 - **Throughput and decode (TPOT) are at parity** — same vLLM wheel and GPU, so
   the engine's hot path is identical. modelship adds no per-token overhead.
 - **TTFT/ITL** carry modelship's expected cost: the extra hop through the Ray
-  Serve proxy/router adds a small *fixed* first-token latency (here ~8 ms) and a
+  Serve proxy/router adds a small *fixed* first-token latency (here ~7.6 ms) and a
   tiny per-chunk cost. Negligible for a 512-token response.
-- **Host RAM (~+0.9 GB)** is the real resource cost — the Ray + Serve control
+- **TTFT's tail is fatter than its mean**: p95 overhead (+37.8%) runs well above
+  the mean/p50 gap (+13.9%/+1.6%) — occasional scheduling jitter through the Ray
+  Serve proxy/router under concurrent load, not a fixed per-request cost. Still
+  small in absolute terms (~25 ms) against a multi-second E2E latency.
+- **Host RAM (+1176 MiB)** is the real resource cost — the Ray + Serve control
   plane (including the prewarmed idle-worker pool) plus the replica. This is `anon`
   (real process memory); **don't** use the container-RSS delta, which is dominated
   by reclaimable page cache and swings multiple GB between runs depending on which
@@ -122,11 +127,14 @@ Notes:
 
 - Both phases use the same image (same vLLM wheel / same `llama-server` binary)
   and the same config file.
+- The modelship phase runs with **`MSHIP_PREFLIGHT=false`** (passed via env). This is the linchpin: it disables hardware-aware automatic preflight tuning, ensuring that unset fields fall back to loader/pydantic defaults. Consequently, both phases run identical engine parameters out-of-the-box.
 - The baseline phase parses the config through modelship's own pydantic schema
   and translates the engine config into either `vllm serve` flags
   ([`rawvllm_entrypoint.py`](rawvllm_entrypoint.py)) or a `llama-server` launch
   command ([`rawllama_entrypoint.py`](rawllama_entrypoint.py), mirroring
   `modelship/infer/llama_server/llama_server_infer.py`'s `_launch`).
+- **Launch parity check**: After both phases run, the harness extracts each phase's effective launch command from its container logs, normalizes legitimately-different tokens (such as ports, hostnames, and api keys), and fails (exits non-zero) if there are any remaining differences. This guarantees that both phases run identical engine parameters.
+- **Tokenizer extraction**: GGUF configs (which use GGUF model paths) cannot be used directly as Hugging Face repository IDs by the bench client. To handle this, the harness looks for a `# bench-tokenizer: <repo-id>` comment inside the yaml config file (inert to modelship) and parses it using `yaml_scalar` to use as the tokenizer for the bench client. You can also override it using the `--tokenizer` CLI flag.
 - vLLM: keep `gpu_memory_utilization` equal to what modelship would pick for
   that `num_gpus` (0.9 GPU / 0.4 CPU) — for fractional `num_gpus` modelship
   overrides `gpu_memory_utilization` to `num_gpus`, and the raw phase reads the
@@ -135,6 +143,11 @@ Notes:
   (rather than the loader's `-1` auto-fit default) — the raw phase has no
   preflight to pick a matching value on its own, so an explicit, identical
   value keeps both phases offloading the same number of layers.
-
-> Caveat: modelship applies hardware-aware preflight defaults the baseline
-> phase does not, so this is a close A/B, not a byte-identical one.
+- llama_server on a multi-GPU host: `rawllama_entrypoint.py` sets
+  `CUDA_VISIBLE_DEVICES` to exactly `num_gpus` device(s) before exec'ing
+  `llama-server`, mirroring the GPU reservation Ray gives the modelship
+  actor. Without this the raw phase — a bare subprocess with no Ray actor —
+  inherits every GPU the container's `--gpus` flag exposed, and llama.cpp
+  auto-splits the model across all of them (no `--tensor-split`/`--main-gpu`
+  is passed), handing the baseline more aggregate VRAM/bandwidth than the
+  single-GPU modelship deploy and invalidating the comparison.

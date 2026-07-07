@@ -32,7 +32,12 @@ def main() -> int:
     args += ["--tensor-parallel-size", str(k.tensor_parallel_size)]
     args += ["--pipeline-parallel-size", str(k.pipeline_parallel_size)]
     args += ["--dtype", k.dtype]
-    args += ["--gpu-memory-utilization", str(k.gpu_memory_utilization)]
+    from modelship.infer.infer_config import default_gpu_memory_utilization
+
+    gmu = k.gpu_memory_utilization
+    if gmu is None:
+        gmu = default_gpu_memory_utilization(m)
+    args += ["--gpu-memory-utilization", str(gmu)]
     if k.max_model_len is not None:
         args += ["--max-model-len", str(k.max_model_len)]
     if k.tokenizer:

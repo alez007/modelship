@@ -10,7 +10,8 @@
 yaml_scalar() {
     local pattern="$1" file="$2"
     grep -m1 -E "$pattern" "$file" \
-        | sed -E "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*\$//; s/^(['\"])(.*)\1\$/\2/"
+        | sed -E "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*\$//; s/^(['\"])(.*)\1\$/\2/" \
+        || true
 }
 
 cleanup() {
@@ -22,7 +23,7 @@ cleanup() {
     done
     for c in "$MODELSHIP_CONTAINER" "$BASELINE_CONTAINER"; do
         if [[ -n "$c" ]] && docker inspect "$c" >/dev/null 2>&1; then
-            docker logs "$c" >"$RESULTS_DIR/${c}.container.log" 2>&1 || true
+            docker logs "$c" >"$RESULTS_DIR/${c}.log" 2>&1 || true
             docker rm -f "$c" >/dev/null 2>&1 || true
         fi
     done
@@ -33,9 +34,11 @@ wait_ready() {
     local deadline=$(( $(date +%s) + READY_TIMEOUT ))
     while (( $(date +%s) < deadline )); do
         # /v1/models reachable AND lists the served model id
-        if curl -fsS http://localhost:8000/v1/models 2>/dev/null \
-            | grep -q "\"id\":\"$SERVED_NAME\""; then
-            return 0
+        local response
+        if response=$(curl -fsS http://localhost:8000/v1/models 2>/dev/null); then
+            if python3 -c "import sys, json; data = json.loads(sys.argv[1]); print('match' if any(m.get('id') == sys.argv[2] for m in data.get('data', [])) else '')" "$response" "$SERVED_NAME" | grep -q "match"; then
+                return 0
+            fi
         fi
         if ! docker ps --filter "name=^${name}$" --format '{{.Names}}' | grep -q "$name"; then
             echo "container $name died" >&2
@@ -173,14 +176,48 @@ vram_gate() {
     echo "warn: VRAM not freed within 60s" >&2
 }
 
+# Read the model weights into the host page cache so both phases enter their
+# timed sweeps equally warm. drop_host_caches can't drop without privileges (it
+# warns and no-ops in most environments), and run.sh always runs modelship first
+# / baseline second against the same GGUF — so the baseline would otherwise
+# inherit a page cache the modelship phase had to cold-fault in. Called before
+# each phase's sweeps: cheap (a no-op re-read once cached) and symmetric.
+# Globs CACHE_DIR for *.gguf; on a cold host before the model is downloaded it
+# simply finds nothing and returns, which is fine (that phase faults it in during
+# its own model load, and the next phase is pre-warmed here).
+warm_model_cache() {
+    echo "  pre-warming model cache..."
+    local found=0
+    while IFS= read -r -d '' f; do
+        found=1
+        cat "$f" > /dev/null 2>&1 || true
+    done < <(find "$CACHE_DIR" -type f -name '*.gguf' -print0 2>/dev/null)
+    if (( found )); then
+        echo "  model cache warmed."
+    else
+        echo "  no .gguf found under cache dir yet — skipping warm."
+    fi
+}
+
+drop_host_caches() {
+    echo "  dropping host page caches..."
+    if { sync && echo 3 > /proc/sys/vm/drop_caches; } >/dev/null 2>&1; then
+        echo "  caches dropped successfully."
+    elif sudo -n sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches' >/dev/null 2>&1; then
+        echo "  caches dropped successfully via sudo."
+    else
+        echo "  warn: failed to drop host caches (no write access and no passwordless sudo, or unsupported in this environment). Page-cache states may differ." >&2
+    fi
+}
+
 # Run REPEATS timed sweeps against an already-ready stack, saving each to its
 # own result_<n>.json. The summary takes the median across them.
 run_stack() {
     local stack="$1"
     local out_dir="$RESULTS_DIR/$stack"
     mkdir -p "$out_dir"
-    chmod 777 "$out_dir"
     for i in $(seq 1 "$REPEATS"); do
+        drop_host_caches
         echo "  sweep $i/$REPEATS ($stack)..."
         run_sweep "$stack" "result_${i}.json"
     done
@@ -190,13 +227,32 @@ run_sweep() {
     local stack="$1"
     local fname="$2"
     local out_dir="$RESULTS_DIR/$stack"
-    docker run --rm --network host -v "$out_dir:/out:rw" "$IMAGE" \
+
+    local extra_client_args=()
+    # E3. Disjoint cores for client vs server on `--device cpu`
+    if [[ "$DEVICE" == "cpu" ]]; then
+        local num_cores
+        num_cores=$(nproc)
+        if (( num_cores > 2 )); then
+            local c_start=$(( num_cores - 2 ))
+            local c_end=$(( num_cores - 1 ))
+            extra_client_args+=(--cpuset-cpus "${c_start}-${c_end}")
+            echo "  pinning client container to cpuset ${c_start}-${c_end} (of ${num_cores} cores)"
+        else
+            extra_client_args+=(--cpuset-cpus "0")
+            echo "  pinning client container to cpuset 0"
+        fi
+    fi
+
+    docker run --rm --network host --user "$(id -u):$(id -g)" \
+        "${extra_client_args[@]}" \
+        -v "$out_dir:/out:rw" "$IMAGE" \
         bash -lc "cd /modelship && uv run --active --no-sync vllm bench serve \
             --backend openai-chat \
             --base-url http://localhost:8000 \
             --endpoint /v1/chat/completions \
             --model $SERVED_NAME \
-            --tokenizer $MODEL_ID \
+            --tokenizer $TOKENIZER \
             --dataset-name random \
             --random-input-len $INPUT_LEN \
             --random-output-len $OUTPUT_LEN \
@@ -204,6 +260,8 @@ run_sweep() {
             --max-concurrency $CONCURRENCY \
             --num-warmups $NUM_WARMUPS \
             --ignore-eos \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --metric-percentiles 50,95,99 \
             --save-result \
             --result-dir /out \
             --result-filename $fname"
@@ -219,6 +277,199 @@ scrape_prom() {
         | awk '/^ray_modelship_(request|generation)_duration_seconds_(sum|count)/ \
               || /^ray_serve_request_router_fulfillment_time_ms_(sum|count)/' \
         > "$out" || true
+}
+
+assert_launch_parity() {
+    echo "=== verifying launch-args parity ==="
+    python3 - "$RESULTS_DIR" "$LOADER" <<'PY'
+import sys, re, ast, shlex, os
+from pathlib import Path
+
+root = Path(sys.argv[1])
+loader = sys.argv[2]
+
+modelship_log = root / "bench-modelship.log"
+baseline_log = root / "bench-baseline.log"
+
+if not modelship_log.exists() or not baseline_log.exists():
+    sys.exit(f"Logs missing. modelship log exists: {modelship_log.exists()}, baseline log exists: {baseline_log.exists()}")
+
+m_content = modelship_log.read_text()
+b_content = baseline_log.read_text()
+
+def normalize_path(p):
+    if not p:
+        return ""
+    if p.startswith("/") or "/" in p:
+        return os.path.basename(p)
+    return p
+
+if loader == "llama_server":
+    m_match = re.search(r"llama-server launch args for '.*':\s*(\[.*\])", m_content)
+    if not m_match:
+        sys.exit("Could not find 'llama-server launch args for' in modelship log")
+    m_args = ast.literal_eval(m_match.group(1))
+
+    b_match = re.search(r"rawllama exec:\s*(.*)", b_content)
+    if not b_match:
+        sys.exit("Could not find 'rawllama exec:' in baseline log")
+    b_args = shlex.split(b_match.group(1))
+
+    def normalize_llama_args(args):
+        res = list(args[1:])
+        normalized = []
+        i = 0
+        while i < len(res):
+            arg = res[i]
+            if arg in ["--host", "--port", "--api-key"]:
+                i += 2
+            elif arg in ["--alias"]:
+                i += 2
+            elif arg in ["-m", "--mmproj", "--chat-template-file", "--chat-template"]:
+                if i + 1 < len(res):
+                    normalized.append((arg, normalize_path(res[i+1])))
+                    i += 2
+                else:
+                    normalized.append((arg, ""))
+                    i += 1
+            else:
+                normalized.append((arg, ""))
+                i += 1
+        return sorted(normalized)
+
+    m_norm = normalize_llama_args(m_args)
+    b_norm = normalize_llama_args(b_args)
+
+    with open(root / "launch-parity.txt", "w") as f:
+        f.write(f"Modelship normalized: {m_norm}\n")
+        f.write(f"Baseline normalized:  {b_norm}\n")
+
+    if m_norm != b_norm:
+        print("LAUNCH PARITY FAILED for llama_server!", file=sys.stderr)
+        print(f"Modelship: {m_norm}", file=sys.stderr)
+        print(f"Baseline:  {b_norm}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print("LAUNCH PARITY PASSED for llama_server.")
+
+elif loader == "vllm":
+    m_match = re.search(r"initialising vllm engine with args:\s*(\{.*\})", m_content)
+    if not m_match:
+        sys.exit("Could not find 'initialising vllm engine with args:' in modelship log")
+    m_dict = ast.literal_eval(m_match.group(1))
+
+    b_match = re.search(r"rawvllm exec:\s*(.*)", b_content)
+    if not b_match:
+        sys.exit("Could not find 'rawvllm exec:' in baseline log")
+    b_args = shlex.split(b_match.group(1))
+
+    def parse_vllm_flags(args):
+        parsed = {}
+        flag_start = 0
+        for idx, arg in enumerate(args):
+            if arg.startswith('--'):
+                flag_start = idx
+                break
+        
+        i = flag_start
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith('--'):
+                name = arg[2:].replace('-', '_')
+                if name in ['enforce_eager', 'trust_remote_code', 'enable_auto_tool_choice']:
+                    parsed[name] = True
+                elif i + 1 < len(args):
+                    val = args[i+1]
+                    if val.isdigit():
+                        parsed[name] = int(val)
+                    else:
+                        try:
+                            parsed[name] = float(val)
+                        except ValueError:
+                            parsed[name] = val
+                    i += 1
+            i += 1
+        return parsed
+
+    b_dict = parse_vllm_flags(b_args)
+
+    fields = [
+        'gpu_memory_utilization',
+        'tensor_parallel_size',
+        'pipeline_parallel_size',
+        'dtype',
+        'quantization',
+        'kv_cache_dtype',
+        'enforce_eager',
+        'trust_remote_code',
+        'max_model_len',
+    ]
+
+    m_norm = {}
+    b_norm = {}
+
+    for fld in fields:
+        mv = m_dict.get(fld)
+        bv = b_dict.get(fld)
+        if mv in [None, False]:
+            mv = None
+        if bv in [None, False]:
+            bv = None
+        if isinstance(mv, float) and isinstance(bv, float):
+            if abs(mv - bv) < 1e-5:
+                bv = mv
+        m_norm[fld] = mv
+        b_norm[fld] = bv
+
+    with open(root / "launch-parity.txt", "w") as f:
+        f.write(f"Modelship normalized: {m_norm}\n")
+        f.write(f"Baseline normalized:  {b_norm}\n")
+
+    if m_norm != b_norm:
+        print("LAUNCH PARITY FAILED for vllm!", file=sys.stderr)
+        print(f"Modelship: {m_norm}", file=sys.stderr)
+        print(f"Baseline:  {b_norm}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print("LAUNCH PARITY PASSED for vllm.")
+PY
+}
+
+# Gate the run on result-population parity. The latency/throughput medians in
+# summary.md are computed only over each arm's *successful* requests, with no
+# check that both arms completed the same population — so if one arm silently
+# drops its slowest requests as failures (e.g. the baseline's direct-to-
+# cpp-httplib connections resetting under load), its tail metrics look better
+# purely by survivorship. Fail loudly rather than publish a biased comparison.
+assert_result_parity() {
+    echo "=== verifying result-population parity ==="
+    python3 - "$RESULTS_DIR" <<'PY'
+import json, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+bad = False
+for stack in ("modelship", "baseline"):
+    for p in sorted((root / stack).glob("result_*.json")):
+        d = json.loads(p.read_text())
+        completed = d.get("completed", 0)
+        failed = d.get("failed", 0)
+        total = d.get("num_prompts", completed + failed)
+        if failed:
+            print(f"  {stack}/{p.name}: {failed} FAILED / {completed} completed of {total}", file=sys.stderr)
+            bad = True
+
+if bad:
+    print(
+        "RESULT PARITY FAILED: an arm dropped requests. The latency/throughput "
+        "medians compare unequal populations (survivorship bias) and are NOT "
+        "trustworthy. Re-run; if the baseline keeps failing, raise "
+        "--threads-http via llama_server_config.extra_args in the bench config.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+print("RESULT PARITY PASSED: both arms completed every request.")
+PY
 }
 
 # Renders the shared summary.md body: latency/throughput table (median across
@@ -245,11 +496,18 @@ def med(runs, key):
     return statistics.median(vals) if vals else None
 m = load(sys.argv[2]); r = load(sys.argv[3])
 keys = [
+    # Population first: latency/throughput below are over *successful* requests
+    # only, so these two rows are the caveat for reading the rest of the table.
+    # assert_result_parity fails the run when `failed` is non-zero on either arm,
+    # so in a passing run both these are N and 0 respectively.
+    ("completed",          "completed", 0),
+    ("failed",             "failed", 0),
     ("request_throughput", "req/s", 3),
     ("output_throughput",  "output tok/s", 2),
     ("mean_ttft_ms",       "TTFT mean (ms)", 1),
     ("p50_ttft_ms",        "TTFT p50 (ms)", 1),
     ("p95_ttft_ms",        "TTFT p95 (ms)", 1),
+    ("mean_tpot_ms",       "TPOT mean (ms)", 1),
     ("mean_itl_ms",        "ITL mean (ms)", 2),
     ("p95_itl_ms",         "ITL p95 (ms)", 2),
     ("mean_e2el_ms",       "E2E mean (ms)", 1),
@@ -265,7 +523,25 @@ for key, label, prec in keys:
     else:
         ratio = f"{(mv - rv) / rv * 100:+.1f}%"
     print(f"| {label} | {mv:.{prec}f} | {rv:.{prec}f} | {ratio} |")
+
+# Token-count parity: prove both arms ran equivalent prompts. total_input_tokens
+# is the client-side (shared --tokenizer) accounting; dividing by completed makes
+# it robust to any success-count gap. modelship drains its llama-server subprocess
+# logs at TRACE (suppressed in the bench container), so this reconciliation is the
+# only independent check that the two arms tokenized the same work — the launch
+# args being identical doesn't guarantee the prompt bodies were.
+def per_prompt_in(runs):
+    vals = [rr["total_input_tokens"] / rr["completed"] for rr in runs if rr.get("completed")]
+    return statistics.median(vals) if vals else None
+mi = per_prompt_in(m); ri = per_prompt_in(r)
+if mi is not None and ri is not None:
+    delta = mi - ri
+    flag = "⚠️ prompts differ" if abs(delta) > 1.0 else "✓"
+    print()
+    print(f"_input tokens/prompt (client tokenizer): modelship **{mi:.1f}** vs "
+          f"baseline **{ri:.1f}** (Δ {delta:+.1f}) {flag}_")
 PY
+
     echo
     echo "## memory (peak across all sweeps)"
     python3 - "$RESULTS_DIR" "$modelship_stack" "$baseline_stack" "$baseline_label" <<'PY'

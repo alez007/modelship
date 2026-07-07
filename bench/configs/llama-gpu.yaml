@@ -1,6 +1,7 @@
 models:
   - name: "llm"
     model: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF:*Q4_K_M.gguf"
+    # bench-tokenizer: Qwen/Qwen2.5-7B-Instruct
     usecase: "generate"
     loader: "llama_server"
     num_gpus: 1
@@ -8,6 +9,9 @@ models:
     # Lift Ray Serve's per-replica concurrency cap (default 100) so the model
     # deployment isn't the bottleneck during the sweep.
     max_ongoing_requests: 256
+    # Note: the bench runs modelship with MSHIP_PREFLIGHT=false, so both phases
+    # use loader defaults for unset fields; explicit values here are read
+    # identically by both.
     llama_server_config:
       # Concurrent llama-server request slots — must cover --concurrency (8 by
       # default) so requests overlap instead of queuing behind a full set of
@@ -19,3 +23,13 @@ models:
       # the two phases pick different offload counts. 99 exceeds Qwen2.5-7B's
       # 28 layers, i.e. full GPU offload for both phases.
       n_gpu_layers: 99
+      # Size llama-server's HTTP worker pool to comfortably cover --concurrency
+      # (default 8). The baseline arm points the bench client's many concurrent
+      # short-lived connections *straight* at llama-server's cpp-httplib, which
+      # oversubscribes the default pool and resets connections (observed as
+      # ServerDisconnectedError → failed requests); the modelship arm hides this
+      # behind a single pooled httpx client, so without this the baseline drops
+      # requests the modelship phase doesn't and the two arms compare unequal
+      # populations. Applied to BOTH phases (both append extra_args verbatim),
+      # so launch parity is preserved.
+      extra_args: ["--threads-http", "16"]
