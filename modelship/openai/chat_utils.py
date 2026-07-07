@@ -343,6 +343,9 @@ def build_response_from_parsed(
 
 def responses_validation_error(exc: ValidationError) -> ErrorResponse:
     """400 for a pydantic ``ValidationError`` surfaced by ``responses_request_to_chat``
-    (e.g. a bad ``reasoning.effort`` value) — same shape as every other rejection."""
-    base = exc.args[0] if exc.args else str(exc)
-    return create_error_response(message=base, err_type="invalid_request_error")
+    (e.g. a bad ``reasoning.effort`` value) — same shape as every other rejection.
+
+    ``ValidationError.args`` is always empty (pydantic never populates it), so
+    ``str(exc)`` — its full per-field error report — is the message to use.
+    """
+    return create_error_response(message=str(exc), err_type="invalid_request_error")
