@@ -14,7 +14,7 @@ Most self-hosted inference tools focus on running a single model. Modelship is f
 - **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so everything fits on your hardware
 - **Mix and match backends** — use vLLM for high-throughput GPU inference, vLLM or llama.cpp for CPU-only workloads, Diffusers for images, and plugins for custom backends — in the same deployment
 - **Agentic-ready** — reasoning (`<think>` → `reasoning_content`), universal tool/function calling, and the `/v1/responses` API work across the vLLM and llama.cpp (`llama_server`) loaders — the OpenAI-spec surface agents already target
-- **Drop-in OpenAI replacement** — any OpenAI SDK client works out of the box, making it easy to integrate with existing apps and tools like [Home Assistant](docs/home-assistant.md)
+- **Drop-in OpenAI replacement** — any OpenAI SDK client works out of the box, making it easy to integrate with existing apps and tools
 
 ## Architecture
 
@@ -179,7 +179,6 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 - [Model Configuration](docs/model-configuration.md) — full `models.yaml` reference, GPU pinning, environment variables
 - [Architecture](docs/architecture.md) — system design, request lifecycle, plugin loading
 - [Plugin Development](docs/plugins.md) — writing custom TTS/STT backends
-- [Home Assistant Integration](docs/home-assistant.md) — Wyoming protocol setup for voice automation
 - [Monitoring & Logging](docs/monitoring.md) — Prometheus metrics, Grafana dashboard, structured logging, health checks
 - [Troubleshooting](docs/troubleshooting.md) — common first-run errors and fixes
 
