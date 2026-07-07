@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-07-07
+
+### Added
+- pin greedy load client and make bench result-parity gate relative
+- extend bench to llama_server/CPU and add --no-preflight for fair A/B
+- fool-proof preflight sizing for vllm CPU deploys and llama_server GPU offload
+- make vllm loader installable on the cpu extra
+- add native streaming support to /v1/responses for vllm and llama_server
+- shape /v1/responses natively from ParsedChatOutput for vllm and llama_server
+- rewire vLLM streaming chat onto engine_ops
+- abort llama_server non-stream requests on client disconnect
+- rewire vLLM non-stream chat onto engine_ops
+- quarantine vLLM-internal touchpoints behind engine_ops
+- implement embeddings, vision, logprobs, and concurrency coupling for llama_server loader (Stage B4)
+- extract 3-field DTO and rewire llama_server non-stream projection (Stage B3)
+- ship llama-server in Docker images and wire GPU offload (Stage B2)
+- add llama_server loader (Stage B1 of the parser-migration roadmap)
+
+### Fixed
+- harden bench A/B harness for fair modelship-vs-raw comparisons
+- cancel the in-flight next_item before closing work on teardown
+- close stream generators and cancel embeddings on disconnect
+- guard vllm CPU preflight against an undiscoverable host RAM probe
+- count the output layer's weight in llama_server CPU-resident RAM sizing
+- don't let thread-alignment preflight starve declared parallel slots
+- vllm embed init, transcription/translation request construction, and Responses streaming usage
+- wire llama_server streaming chat onto client disconnect and stamp chunk ids
+- guard against out-of-bounds top_logprobs index in vLLM logprobs projection
+- replace assert with a defensive check for vLLM prompt_token_ids
+- resolve mmproj once on the driver instead of again in the actor
+- guard against malformed and non-object JSON responses from llama-server
+- derive finish_reason for out-of-range list entries instead of hardcoding stop
+- use explicit None check for created timestamp fallback in embeddings projection
+- suppress interpreter teardown exceptions inside __del__
+- secure pending_client_closes against python interpreter teardown
+- intercept and handle mid-stream JSON error payloads from llama-server
+- intercept and parse inline JSON error payloads on 2xx responses in llama_server loader
+- call self.shutdown() on any exception during llama-server startup
+- address concurrency, early-crash thread leaks, and closed-loop shutdown issues in llama_server loader
+- assert self._proc is not None to resolve pyright type-checking error
+- optimize llama_server loader concurrency, timeouts, and protocol alignment
+- reject non-positive parallel and close httpx client on shutdown
+- harden llama_server loader streaming and subprocess log draining
+
+### Changed
+- remove Home Assistant/Wyoming integration doc
+- resolve vllm gpu_memory_utilization default lazily instead of auto-flagging it
+- remove one-click profiles system
+- repoint driver preflight and the vllm actor at the new parser module
+- move vLLM parser detection out of driver preflight into the actor
+- delete dead raw-text parser engine from openai/parsers/
+- delete vLLM OpenAIServingChat monolith usage
+- repoint llama_cpp non-stream chat onto build_from_parsed
+- add missing llama_server integration coverage
+- document the llama_server loader
+- reposition Modelship around its agentic + GPU-sharing wedge
+
 ## [0.5.8] - 2026-07-01
 
 ### Added
