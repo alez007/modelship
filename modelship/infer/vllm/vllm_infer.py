@@ -8,23 +8,23 @@ from fastapi import UploadFile
 from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import Response
-from vllm.config.model import ModelDType
-from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.entrypoints.chat_utils import ChatTemplateConfig
+from vllm.config.model import ModelDType as VllmModelDType
+from vllm.engine.arg_utils import AsyncEngineArgs as VllmAsyncEngineArgs
+from vllm.entrypoints.chat_utils import ChatTemplateConfig as VllmChatTemplateConfig
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
 from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse as VllmErrorResponse,
 )
-from vllm.entrypoints.openai.models.protocol import BaseModelPath
-from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+from vllm.entrypoints.openai.models.protocol import BaseModelPath as VllmBaseModelPath
+from vllm.entrypoints.openai.models.serving import OpenAIServingModels as VllmOpenAIServingModels
 from vllm.entrypoints.pooling.embed.protocol import (
     EmbeddingCompletionRequest as VllmEmbeddingCompletionRequest,
 )
-from vllm.entrypoints.pooling.embed.serving import ServingEmbedding
-from vllm.entrypoints.serve.render.serving import OpenAIServingRender
-from vllm.entrypoints.serve.utils.request_logger import RequestLogger
+from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as VllmServingEmbedding
+from vllm.entrypoints.serve.render.serving import OpenAIServingRender as VllmOpenAIServingRender
+from vllm.entrypoints.serve.utils.request_logger import RequestLogger as VllmRequestLogger
 from vllm.entrypoints.speech_to_text.transcription.protocol import (
     TranscriptionRequest as VllmTranscriptionRequest,
 )
@@ -34,7 +34,9 @@ from vllm.entrypoints.speech_to_text.transcription.protocol import (
 from vllm.entrypoints.speech_to_text.transcription.protocol import (
     TranscriptionResponseVerbose as VllmTranscriptionResponseVerbose,
 )
-from vllm.entrypoints.speech_to_text.transcription.serving import OpenAIServingTranscription
+from vllm.entrypoints.speech_to_text.transcription.serving import (
+    OpenAIServingTranscription as VllmOpenAIServingTranscription,
+)
 from vllm.entrypoints.speech_to_text.translation.protocol import (
     TranslationRequest as VllmTranslationRequest,
 )
@@ -44,12 +46,14 @@ from vllm.entrypoints.speech_to_text.translation.protocol import (
 from vllm.entrypoints.speech_to_text.translation.protocol import (
     TranslationResponseVerbose as VllmTranslationResponseVerbose,
 )
-from vllm.entrypoints.speech_to_text.translation.serving import OpenAIServingTranslation
-from vllm.exceptions import VLLMValidationError
-from vllm.inputs import EngineInput
-from vllm.sampling_params import SamplingParams
-from vllm.usage.usage_lib import UsageContext
-from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.entrypoints.speech_to_text.translation.serving import (
+    OpenAIServingTranslation as VllmOpenAIServingTranslation,
+)
+from vllm.exceptions import VLLMValidationError as VllmValidationError
+from vllm.inputs import EngineInput as VllmEngineInput
+from vllm.sampling_params import SamplingParams as VllmSamplingParams
+from vllm.usage.usage_lib import UsageContext as VllmUsageContext
+from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
 from modelship.infer.base_infer import MINIMAL_WAV, BaseInfer, ClientDisconnectedError
 from modelship.infer.infer_config import (
@@ -103,8 +107,8 @@ def _encode_error(error: ErrorResponse) -> str:
     return f"data: {json.dumps(error.model_dump(mode='json'))}\n\n"
 
 
-def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
-    # VLLMValidationError.__str__ appends "(parameter=..., value=...)"; keep the
+def _validation_error(exc: VllmValidationError) -> ErrorResponse:
+    # VllmValidationError.__str__ appends "(parameter=..., value=...)"; keep the
     # original message and surface the offending field via the OpenAI `param` slot.
     base = exc.args[0] if exc.args else str(exc)
     return create_error_response(
@@ -117,9 +121,9 @@ def _validation_error(exc: VLLMValidationError) -> ErrorResponse:
 
 def _vllm_stream_error(exc: Exception) -> str | None:
     """`client_error` mapper for `BaseInfer._stream_responses`: a mid-stream
-    `VLLMValidationError` is client-safe to relay verbatim; anything else falls
+    `VllmValidationError` is client-safe to relay verbatim; anything else falls
     through to the generic "Internal error during generation" message."""
-    if isinstance(exc, VLLMValidationError):
+    if isinstance(exc, VllmValidationError):
         base = exc.args[0] if exc.args else str(exc)
         return str(base)
     return None
@@ -182,12 +186,12 @@ class VllmInfer(BaseInfer):
         if self.vllm_engine_kwargs.mm_processor_kwargs is not None:
             mm_kwargs["mm_processor_kwargs"] = self.vllm_engine_kwargs.mm_processor_kwargs
 
-        engine_args = AsyncEngineArgs(
+        engine_args = VllmAsyncEngineArgs(
             model=self.vllm_engine_kwargs.model,
             tensor_parallel_size=self.vllm_engine_kwargs.tensor_parallel_size,
             pipeline_parallel_size=self.vllm_engine_kwargs.pipeline_parallel_size,
             max_model_len=cast("int", self.vllm_engine_kwargs.max_model_len),
-            dtype=cast("ModelDType", self.vllm_engine_kwargs.dtype),
+            dtype=cast("VllmModelDType", self.vllm_engine_kwargs.dtype),
             tokenizer=self.vllm_engine_kwargs.tokenizer,
             trust_remote_code=self.vllm_engine_kwargs.trust_remote_code,
             gpu_memory_utilization=cast("float", self.vllm_engine_kwargs.gpu_memory_utilization),
@@ -205,16 +209,16 @@ class VllmInfer(BaseInfer):
             **mm_kwargs,
         )
 
-        usage_context = UsageContext.OPENAI_API_SERVER
+        usage_context = VllmUsageContext.OPENAI_API_SERVER
         vllm_config = engine_args.create_engine_config(usage_context=usage_context)
 
         stat_loggers: list | None = None
         if _METRICS_ENABLED:
-            from vllm.v1.metrics.ray_wrappers import RayPrometheusStatLogger
+            from vllm.v1.metrics.ray_wrappers import RayPrometheusStatLogger as VllmRayPrometheusStatLogger
 
-            stat_loggers = [RayPrometheusStatLogger]
+            stat_loggers = [VllmRayPrometheusStatLogger]
 
-        self.engine = AsyncLLM.from_vllm_config(
+        self.engine = VllmAsyncLLM.from_vllm_config(
             vllm_config=vllm_config,
             usage_context=usage_context,
             stat_loggers=stat_loggers,
@@ -301,9 +305,9 @@ class VllmInfer(BaseInfer):
         if not (self.model_config.usecase is ModelUsecase.generate and "generate" in self.supported_tasks):
             return
 
-        models = OpenAIServingModels(
+        models = VllmOpenAIServingModels(
             engine_client=self.engine,
-            base_model_paths=[BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)],
+            base_model_paths=[VllmBaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)],
         )
 
         # get_chat_template isn't in vLLM's TokenizerLike protocol (it's a plain
@@ -314,11 +318,11 @@ class VllmInfer(BaseInfer):
         reasoning_parser_name = resolve_reasoning_parser(self.model_config, template) or ""
 
         self._enable_auto_tools = enable_tools
-        self.openai_serving_render = OpenAIServingRender(
+        self.openai_serving_render = VllmOpenAIServingRender(
             model_config=self.engine.model_config,
             renderer=self.engine.renderer,
             model_registry=models.registry,
-            request_logger=RequestLogger(max_log_len=None),
+            request_logger=VllmRequestLogger(max_log_len=None),
             chat_template=None,
             chat_template_content_format=self.vllm_engine_kwargs.chat_template_content_format,
             enable_auto_tools=enable_tools,
@@ -326,55 +330,55 @@ class VllmInfer(BaseInfer):
             reasoning_parser=reasoning_parser_name,
         )
 
-    async def init_serving_embeding(self) -> ServingEmbedding | None:
+    async def init_serving_embeding(self) -> VllmServingEmbedding | None:
         logger.info("init_serving_embeding: %s, %s", self.supported_tasks, self.model_config.usecase)
         return (
-            ServingEmbedding(
+            VllmServingEmbedding(
                 engine_client=self.engine,
-                models=OpenAIServingModels(
+                models=VllmOpenAIServingModels(
                     engine_client=self.engine,
                     base_model_paths=[
-                        BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
+                        VllmBaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
                     ],
                 ),
-                request_logger=RequestLogger(max_log_len=None),
-                chat_template_config=ChatTemplateConfig(chat_template=None, chat_template_content_format="auto"),
+                request_logger=VllmRequestLogger(max_log_len=None),
+                chat_template_config=VllmChatTemplateConfig(chat_template=None, chat_template_content_format="auto"),
             )
             if self.model_config.usecase is ModelUsecase.embed
             and any(task in self.supported_tasks for task in ["embed", "embedding"])
             else None
         )
 
-    async def init_serving_transcription(self) -> OpenAIServingTranscription | None:
+    async def init_serving_transcription(self) -> VllmOpenAIServingTranscription | None:
         logger.info("init_serving_transcription: %s, %s", self.supported_tasks, self.model_config.usecase)
         return (
-            OpenAIServingTranscription(
+            VllmOpenAIServingTranscription(
                 engine_client=self.engine,
-                models=OpenAIServingModels(
+                models=VllmOpenAIServingModels(
                     engine_client=self.engine,
                     base_model_paths=[
-                        BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
+                        VllmBaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
                     ],
                 ),
-                request_logger=RequestLogger(max_log_len=None),
+                request_logger=VllmRequestLogger(max_log_len=None),
             )
             if (self.model_config.usecase in [ModelUsecase.transcription, ModelUsecase.translation])
             and "transcription" in self.supported_tasks
             else None
         )
 
-    async def init_serving_translation(self) -> OpenAIServingTranslation | None:
+    async def init_serving_translation(self) -> VllmOpenAIServingTranslation | None:
         logger.info("init_serving_translation: %s, %s", self.supported_tasks, self.model_config.usecase)
         return (
-            OpenAIServingTranslation(
+            VllmOpenAIServingTranslation(
                 engine_client=self.engine,
-                models=OpenAIServingModels(
+                models=VllmOpenAIServingModels(
                     engine_client=self.engine,
                     base_model_paths=[
-                        BaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
+                        VllmBaseModelPath(name=self.model_config.name, model_path=self.vllm_engine_kwargs.model)
                     ],
                 ),
-                request_logger=RequestLogger(max_log_len=None),
+                request_logger=VllmRequestLogger(max_log_len=None),
             )
             if (self.model_config.usecase in [ModelUsecase.transcription, ModelUsecase.translation])
             and "transcription" in self.supported_tasks
@@ -411,7 +415,7 @@ class VllmInfer(BaseInfer):
         request_id = f"chatcmpl-{base_request_id(raw_request)}"
         try:
             render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             yield _encode_error(_validation_error(exc))
             yield "data: [DONE]\n\n"
             return
@@ -449,7 +453,7 @@ class VllmInfer(BaseInfer):
         except ClientDisconnectedError:
             logger.info("chat request %s aborted: client disconnected", request_id)
             return
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             yield _encode_error(_validation_error(exc))
             yield "data: [DONE]\n\n"
             return
@@ -474,7 +478,7 @@ class VllmInfer(BaseInfer):
         """Non-stream chat path via `engine_ops`, bypassing `OpenAIServingChat`."""
         try:
             render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(render_result, VllmErrorResponse):
             return ErrorResponse.model_validate(render_result.model_dump())
@@ -507,7 +511,7 @@ class VllmInfer(BaseInfer):
             )
         except ClientDisconnectedError:
             return create_error_response("Client disconnected")
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
 
         choices, finish_reasons, logprobs_list = engine_ops.build_choices(
@@ -577,7 +581,7 @@ class VllmInfer(BaseInfer):
         returned as a plain `ErrorResponse` instead of a mid-stream `response.failed`."""
         try:
             render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(render_result, VllmErrorResponse):
             return ErrorResponse.model_validate(render_result.model_dump())
@@ -594,7 +598,7 @@ class VllmInfer(BaseInfer):
         `ParsedChatOutput` instead of round-tripping through a `ChatCompletionResponse`."""
         try:
             render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(render_result, VllmErrorResponse):
             return ErrorResponse.model_validate(render_result.model_dump())
@@ -625,7 +629,7 @@ class VllmInfer(BaseInfer):
             )
         except ClientDisconnectedError:
             return create_error_response("Client disconnected")
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
 
         choices, finish_reasons, _logprobs_list = engine_ops.build_choices(
@@ -659,8 +663,8 @@ class VllmInfer(BaseInfer):
         self,
         request: ResponsesRequest,
         vllm_request: VllmChatCompletionRequest,
-        engine_input: EngineInput,
-        sampling_params: SamplingParams,
+        engine_input: VllmEngineInput,
+        sampling_params: VllmSamplingParams,
         raw_request: RawRequestProxy,
     ) -> AsyncGenerator[str, None]:
         """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
@@ -697,7 +701,7 @@ class VllmInfer(BaseInfer):
         vllm_request = VllmEmbeddingCompletionRequest(**request.model_dump())
         try:
             result = await self.serving_embedding(vllm_request, cast("Request", raw_request))
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
@@ -717,7 +721,7 @@ class VllmInfer(BaseInfer):
             result = await self.serving_transcription.create_transcription(
                 audio_data, vllm_request, cast("Request", raw_request)
             )
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())
@@ -742,7 +746,7 @@ class VllmInfer(BaseInfer):
             result = await self.serving_translation.create_translation(
                 audio_data, vllm_request, cast("Request", raw_request)
             )
-        except VLLMValidationError as exc:
+        except VllmValidationError as exc:
             return _validation_error(exc)
         if isinstance(result, VllmErrorResponse):
             return ErrorResponse.model_validate(result.model_dump())

@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Any
 
 from vllm.entrypoints.openai.chat_completion.protocol import (
-    ChatCompletionNamedToolChoiceParam,
+    ChatCompletionNamedToolChoiceParam as VllmChatCompletionNamedToolChoiceParam,
 )
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
@@ -19,16 +19,17 @@ from vllm.entrypoints.openai.engine.protocol import DeltaMessage as VllmDeltaMes
 from vllm.entrypoints.openai.engine.protocol import DeltaToolCall as VllmDeltaToolCall
 from vllm.entrypoints.openai.engine.protocol import ErrorResponse as VllmErrorResponse
 from vllm.entrypoints.openai.engine.protocol import FunctionCall as VllmFunctionCall
-from vllm.entrypoints.serve.render.serving import OpenAIServingRender
-from vllm.entrypoints.serve.utils.api_utils import get_max_tokens
-from vllm.inputs import EngineInput
-from vllm.logprobs import Logprob
-from vllm.outputs import RequestOutput
-from vllm.parser import Parser
-from vllm.renderers.inputs.preprocess import extract_prompt_components, extract_prompt_len
-from vllm.sampling_params import SamplingParams
-from vllm.tokenizers import TokenizerLike
-from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.entrypoints.serve.render.serving import OpenAIServingRender as VllmOpenAIServingRender
+from vllm.entrypoints.serve.utils.api_utils import get_max_tokens as vllm_get_max_tokens
+from vllm.inputs import EngineInput as VllmEngineInput
+from vllm.logprobs import Logprob as VllmLogprob
+from vllm.outputs import RequestOutput as VllmRequestOutput
+from vllm.parser import Parser as VllmParser
+from vllm.renderers.inputs.preprocess import extract_prompt_components as vllm_extract_prompt_components
+from vllm.renderers.inputs.preprocess import extract_prompt_len as vllm_extract_prompt_len
+from vllm.sampling_params import SamplingParams as VllmSamplingParams
+from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
+from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
 from modelship.openai.chat_utils import ParsedChatOutput
 from modelship.openai.protocol import (
@@ -68,10 +69,10 @@ def build_vllm_request(
 
 
 async def render_and_params(
-    render: OpenAIServingRender,
+    render: VllmOpenAIServingRender,
     vllm_req: VllmChatCompletionRequest,
-) -> tuple[EngineInput, SamplingParams] | VllmErrorResponse:
-    """Render the chat template and derive `SamplingParams`, in that order.
+) -> tuple[VllmEngineInput, VllmSamplingParams] | VllmErrorResponse:
+    """Render the chat template and derive `VllmSamplingParams`, in that order.
 
     `render_chat` mutates `vllm_req` in place as a side effect of rendering
     (`ToolParser.adjust_request` sets `structured_outputs` /
@@ -88,10 +89,10 @@ async def render_and_params(
         raise RuntimeError(f"expected exactly 1 rendered engine prompt for a chat request, got {len(engine_inputs)}")
     engine_input = engine_inputs[0]
 
-    max_tokens = get_max_tokens(
+    max_tokens = vllm_get_max_tokens(
         render.model_config.max_model_len,
         vllm_req.max_completion_tokens if vllm_req.max_completion_tokens is not None else vllm_req.max_tokens,
-        extract_prompt_len(render.model_config, engine_input),
+        vllm_extract_prompt_len(render.model_config, engine_input),
         render.default_sampling_params,
         render.override_max_tokens,
         truncate_prompt_tokens=vllm_req.truncate_prompt_tokens,
@@ -100,21 +101,21 @@ async def render_and_params(
     return engine_input, sampling_params
 
 
-def extract_prompt_token_ids(render: OpenAIServingRender, engine_input: EngineInput) -> list[int]:
+def extract_prompt_token_ids(render: VllmOpenAIServingRender, engine_input: VllmEngineInput) -> list[int]:
     """Extract the rendered prompt's token IDs, needed for `derive_reasoning_ended`."""
-    return list(extract_prompt_components(render.model_config, engine_input).token_ids or [])
+    return list(vllm_extract_prompt_components(render.model_config, engine_input).token_ids or [])
 
 
 def make_parsers(
-    render: OpenAIServingRender,
-    tokenizer: TokenizerLike,
+    render: VllmOpenAIServingRender,
+    tokenizer: VllmTokenizerLike,
     vllm_req: VllmChatCompletionRequest,
     chat_template_kwargs: dict[str, Any] | None,
     n: int,
-) -> list[Parser | None]:
+) -> list[VllmParser | None]:
     """Instantiate one parser per choice.
 
-    Parsers carry per-choice streaming state (`Parser._stream_state`), so a
+    Parsers carry per-choice streaming state (`VllmParser._stream_state`), so a
     request with `n > 1` needs `n` independent instances — sharing one across
     choices corrupts state on every choice after the first. `render.parser`
     is the same class `render_chat` already resolved internally via
@@ -131,7 +132,7 @@ def make_parsers(
 
 def derive_reasoning_ended(
     vllm_req: VllmChatCompletionRequest,
-    parser: Parser | None,
+    parser: VllmParser | None,
     prompt_token_ids: list[int],
 ) -> bool | None:
     """Replicates the reasoning_ended precedence in vLLM's own chat completion serving.
@@ -155,19 +156,19 @@ def derive_reasoning_ended(
 
 
 def generate(
-    engine: AsyncLLM,
-    engine_input: EngineInput,
-    sampling_params: SamplingParams,
+    engine: VllmAsyncLLM,
+    engine_input: VllmEngineInput,
+    sampling_params: VllmSamplingParams,
     request_id: str,
     *,
     reasoning_ended: bool | None,
-    parser: Parser | None,
+    parser: VllmParser | None,
     chat_template_kwargs: dict[str, Any] | None,
     trace_headers: Mapping[str, str] | None = None,
     priority: int = 0,
     data_parallel_rank: int | None = None,
-) -> AsyncGenerator[RequestOutput, None]:
-    """Thin wrapper over `AsyncLLM.generate` — the only place this loader touches the engine directly."""
+) -> AsyncGenerator[VllmRequestOutput, None]:
+    """Thin wrapper over `VllmAsyncLLM.generate` — the only place this loader touches the engine directly."""
     reasoning_parser_kwargs = None
     if parser is not None and parser.reasoning_parser is not None:
         reasoning_parser_kwargs = {"chat_template_kwargs": chat_template_kwargs}
@@ -186,7 +187,7 @@ def generate(
 def project_tool_calls(vllm_tool_calls: list[VllmFunctionCall] | None) -> list[ToolCall]:
     """Project a parser's vLLM-shaped tool calls onto modelship's OpenAI `ToolCall`.
 
-    `vllm.parser.Parser.parse()`'s `FunctionCall` has the same `id`/`name`/`arguments`
+    `vllm.parser.VllmParser.parse()`'s `FunctionCall` has the same `id`/`name`/`arguments`
     shape as modelship's own; `id` is only set when the tool_call_id_type config
     minted one (e.g. kimi_k2), so most calls need one generated here.
     """
@@ -204,7 +205,7 @@ def project_delta_tool_calls(vllm_tool_calls: list[VllmDeltaToolCall]) -> list[D
 
     Unlike `project_tool_calls`, nothing is synthesized here: only the first
     delta for a given tool call carries `id`/`type`/`function.name` (per
-    `Parser.parse_delta`'s own streaming protocol) — later deltas for the same
+    `VllmParser.parse_delta`'s own streaming protocol) — later deltas for the same
     `index` carry only incremental `function.arguments`, which must pass
     through as-is for the client to accumulate correctly.
     """
@@ -225,8 +226,8 @@ def project_delta_tool_calls(vllm_tool_calls: list[VllmDeltaToolCall]) -> list[D
 
 def build_chat_logprobs(
     token_ids: Sequence[int],
-    top_logprobs: Sequence[dict[int, Logprob] | None],
-    tokenizer: TokenizerLike,
+    top_logprobs: Sequence[dict[int, VllmLogprob] | None],
+    tokenizer: VllmTokenizerLike,
     num_output_top_logprobs: int | None,
 ) -> ChatCompletionLogProbs:
     """Project a choice's per-token logprobs onto modelship's OpenAI logprobs shape.
@@ -270,24 +271,24 @@ def build_chat_logprobs(
 
 
 async def consume_final_output(
-    engine: AsyncLLM,
-    engine_input: EngineInput,
-    sampling_params: SamplingParams,
+    engine: VllmAsyncLLM,
+    engine_input: VllmEngineInput,
+    sampling_params: VllmSamplingParams,
     request_id: str,
     *,
     reasoning_ended: bool | None,
-    parser: Parser | None,
+    parser: VllmParser | None,
     chat_template_kwargs: dict[str, Any] | None,
-) -> RequestOutput:
-    """Drive `generate()` to completion and return the final `RequestOutput`.
+) -> VllmRequestOutput:
+    """Drive `generate()` to completion and return the final `VllmRequestOutput`.
 
     Non-streaming only needs the last output (it carries every choice's full
     text). Cancelling the task awaiting this coroutine (e.g. on client
-    disconnect) propagates into the `async for` below and into `AsyncLLM.generate`'s
+    disconnect) propagates into the `async for` below and into `VllmAsyncLLM.generate`'s
     own `except (CancelledError, GeneratorExit): abort(...)` — no separate abort
     call is needed here.
     """
-    final: RequestOutput | None = None
+    final: VllmRequestOutput | None = None
     async for res in generate(
         engine,
         engine_input,
@@ -317,26 +318,26 @@ def _finish_reason_for_choice(
     """
     if not has_tool_calls:
         return engine_finish_reason or "stop"
-    if isinstance(vllm_req.tool_choice, ChatCompletionNamedToolChoiceParam):
+    if isinstance(vllm_req.tool_choice, VllmChatCompletionNamedToolChoiceParam):
         return engine_finish_reason or "stop"
     return "tool_calls"
 
 
 def build_choices(
-    final_res: RequestOutput,
+    final_res: VllmRequestOutput,
     vllm_req: VllmChatCompletionRequest,
-    parser: Parser | None,
-    tokenizer: TokenizerLike,
+    parser: VllmParser | None,
+    tokenizer: VllmTokenizerLike,
     *,
     enable_auto_tools: bool,
     want_logprobs: bool,
     num_output_top_logprobs: int | None,
 ) -> tuple[list[ParsedChatOutput], list[str | None], list[ChatCompletionLogProbs | None]]:
-    """Parse every choice in a finished `RequestOutput` into modelship's response DTOs.
+    """Parse every choice in a finished `VllmRequestOutput` into modelship's response DTOs.
 
     Non-streaming reuses one shared `parser` instance across every choice —
     `.parse()` is stateless per full-text call, unlike the streaming path's
-    per-choice `Parser._stream_state` (see `make_parsers`).
+    per-choice `VllmParser._stream_state` (see `make_parsers`).
     """
     choices: list[ParsedChatOutput] = []
     finish_reasons: list[str | None] = []
@@ -368,21 +369,21 @@ def build_choices(
 
 
 async def stream_chat_completion(
-    engine: AsyncLLM,
-    render: OpenAIServingRender,
+    engine: VllmAsyncLLM,
+    render: VllmOpenAIServingRender,
     vllm_req: VllmChatCompletionRequest,
-    engine_input: EngineInput,
-    sampling_params: SamplingParams,
+    engine_input: VllmEngineInput,
+    sampling_params: VllmSamplingParams,
     request_id: str,
     model_name: str,
-    tokenizer: TokenizerLike,
+    tokenizer: VllmTokenizerLike,
     *,
     enable_auto_tools: bool,
     want_logprobs: bool,
     num_output_top_logprobs: int | None,
 ) -> AsyncGenerator[ChatCompletionStreamResponse, None]:
     """Drive one streaming chat completion end to end: per-choice parsers,
-    per-delta parsing via `Parser.parse_delta`, and the OpenAI streaming
+    per-delta parsing via `VllmParser.parse_delta`, and the OpenAI streaming
     chunk lifecycle (role chunk, content/tool/reasoning deltas, finish
     chunk, optional usage chunk) — the streaming counterpart of `build_choices`.
 
@@ -457,7 +458,7 @@ async def stream_chat_completion(
             previous_num_tokens[i] += len(output.token_ids)
 
             if vllm_delta is None:
-                # Parser swallowed a control token (e.g. a `<think>` marker) with
+                # VllmParser swallowed a control token (e.g. a `<think>` marker) with
                 # nothing yet emittable — skip unless this is the final delta,
                 # which still needs a (possibly empty) delta to carry finish_reason.
                 if output.finish_reason is None:

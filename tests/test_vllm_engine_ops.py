@@ -21,9 +21,9 @@ import pytest
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
-from vllm.entrypoints.serve.render.serving import OpenAIServingRender
-from vllm.parser import Parser
-from vllm.tokenizers import TokenizerLike
+from vllm.entrypoints.serve.render.serving import OpenAIServingRender as VllmOpenAIServingRender
+from vllm.parser import Parser as VllmParser
+from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
 
 from modelship.infer.vllm import engine_ops
 from modelship.openai.protocol import ChatCompletionRequest
@@ -74,7 +74,7 @@ class TestDeriveReasoningEnded:
 
     def test_reasoning_parser_present_defers_to_is_reasoning_end(self):
         vllm_req = _vllm_req()
-        parser = Mock(spec=Parser)
+        parser = Mock(spec=VllmParser)
         parser.reasoning_parser = Mock()
         parser.is_reasoning_end.return_value = True
         result = engine_ops.derive_reasoning_ended(vllm_req, parser=parser, prompt_token_ids=[1, 2, 3])
@@ -83,7 +83,7 @@ class TestDeriveReasoningEnded:
 
     def test_no_reasoning_parser_and_no_grammar_flag_is_none(self):
         vllm_req = _vllm_req()
-        parser = Mock(spec=Parser)
+        parser = Mock(spec=VllmParser)
         parser.reasoning_parser = None
         assert engine_ops.derive_reasoning_ended(vllm_req, parser=parser, prompt_token_ids=[]) is None
 
@@ -94,13 +94,13 @@ class TestDeriveReasoningEnded:
 
 class TestMakeParsers:
     def test_no_parser_class_returns_n_nones(self):
-        render = Mock(spec=OpenAIServingRender)
+        render = Mock(spec=VllmOpenAIServingRender)
         render.parser = None
         result = engine_ops.make_parsers(render, tokenizer=Mock(), vllm_req=_vllm_req(), chat_template_kwargs=None, n=3)
         assert result == [None, None, None]
 
     def test_instantiates_one_independent_parser_per_choice(self):
-        render = Mock(spec=OpenAIServingRender)
+        render = Mock(spec=VllmOpenAIServingRender)
         parser_cls = Mock()
         instances = [Mock(), Mock(), Mock()]
         parser_cls.side_effect = instances
@@ -127,9 +127,9 @@ class TestSignaturesGuardVllmBump:
     """
 
     def test_async_llm_generate_accepts_reasoning_kwargs(self):
-        from vllm.v1.engine.async_llm import AsyncLLM
+        from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
-        params = inspect.signature(AsyncLLM.generate).parameters
+        params = inspect.signature(VllmAsyncLLM.generate).parameters
         assert "reasoning_ended" in params
         assert "reasoning_parser_kwargs" in params
 
@@ -143,7 +143,7 @@ class TestSignaturesGuardVllmBump:
         assert list(params)[1:] == ["max_tokens", "default_sampling_params"]
 
     def test_render_chat_signature_unchanged(self):
-        params = inspect.signature(OpenAIServingRender.render_chat).parameters
+        params = inspect.signature(VllmOpenAIServingRender.render_chat).parameters
         assert "request" in params
 
 
@@ -159,32 +159,32 @@ class TestVllmParserAcceptsOurRequest:
 
     def _build_render(
         self, model: str, *, tokenizer_mode: str = "auto", **tool_reasoning_kwargs: Any
-    ) -> tuple[OpenAIServingRender, TokenizerLike]:
-        from vllm.engine.arg_utils import AsyncEngineArgs
-        from vllm.entrypoints.openai.models.protocol import BaseModelPath
-        from vllm.entrypoints.openai.models.serving import OpenAIModelRegistry
-        from vllm.entrypoints.serve.utils.request_logger import RequestLogger
-        from vllm.renderers import renderer_from_config
-        from vllm.usage.usage_lib import UsageContext
+    ) -> tuple[VllmOpenAIServingRender, VllmTokenizerLike]:
+        from vllm.engine.arg_utils import AsyncEngineArgs as VllmAsyncEngineArgs
+        from vllm.entrypoints.openai.models.protocol import BaseModelPath as VllmBaseModelPath
+        from vllm.entrypoints.openai.models.serving import OpenAIModelRegistry as VllmOpenAIModelRegistry
+        from vllm.entrypoints.serve.utils.request_logger import RequestLogger as VllmRequestLogger
+        from vllm.renderers import renderer_from_config as vllm_renderer_from_config
+        from vllm.usage.usage_lib import UsageContext as VllmUsageContext
 
         try:
-            engine_args = AsyncEngineArgs(
+            engine_args = VllmAsyncEngineArgs(
                 model=model, tokenizer_mode=tokenizer_mode, max_model_len=4096, enforce_eager=True
             )
-            vllm_config = engine_args.create_engine_config(usage_context=UsageContext.OPENAI_API_SERVER)
-            renderer = renderer_from_config(vllm_config)
+            vllm_config = engine_args.create_engine_config(usage_context=VllmUsageContext.OPENAI_API_SERVER)
+            renderer = vllm_renderer_from_config(vllm_config)
         except Exception as e:
             pytest.skip(f"could not build a GPU-free render pipeline for {model!r}: {e}")
 
-        registry = OpenAIModelRegistry(
+        registry = VllmOpenAIModelRegistry(
             model_config=vllm_config.model_config,
-            base_model_paths=[BaseModelPath(name="test-model", model_path=model)],
+            base_model_paths=[VllmBaseModelPath(name="test-model", model_path=model)],
         )
-        render = OpenAIServingRender(
+        render = VllmOpenAIServingRender(
             model_config=vllm_config.model_config,
             renderer=renderer,
             model_registry=registry,
-            request_logger=RequestLogger(max_log_len=None),
+            request_logger=VllmRequestLogger(max_log_len=None),
             chat_template=None,
             chat_template_content_format="auto",
             enable_auto_tools=True,

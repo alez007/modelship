@@ -86,9 +86,9 @@ def resolve_tool_parser(cfg: ModelshipModelConfig, template: str | None) -> str 
         logger.info("Tool-call resolution skipped for '%s' (explicit opt-out).", cfg.name)
         return None
 
-    from vllm.tool_parsers import ToolParserManager
+    from vllm.tool_parsers import ToolParserManager as VllmToolParserManager
 
-    registered = set(ToolParserManager.list_registered())
+    registered = set(VllmToolParserManager.list_registered())
 
     explicit = cfg.vllm_engine_kwargs.tool_call_parser
     if explicit is not None:
@@ -132,9 +132,9 @@ def resolve_reasoning_parser(cfg: ModelshipModelConfig, template: str | None) ->
         logger.info("Reasoning resolution skipped for '%s' (explicit opt-out).", cfg.name)
         return None
 
-    from vllm.reasoning import ReasoningParserManager
+    from vllm.reasoning import ReasoningParserManager as VllmReasoningParserManager
 
-    registered = set(ReasoningParserManager.list_registered())
+    registered = set(VllmReasoningParserManager.list_registered())
 
     explicit = cfg.vllm_engine_kwargs.reasoning_parser
     if explicit is not None:

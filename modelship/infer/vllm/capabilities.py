@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from vllm.config.model import ModelConfig
+from vllm.config.model import ModelConfig as VllmModelConfig
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class VllmCapabilities:
     supports_audio: bool = False  # audio chat input not wired through the vLLM serving_chat path
 
     @classmethod
-    def detect(cls, model_config: ModelConfig) -> "VllmCapabilities":
+    def detect(cls, model_config: VllmModelConfig) -> "VllmCapabilities":
         # vLLM's own ModelConfig inspects the loaded HF config and registry to
         # decide whether the architecture is multimodal — far more reliable than
         # sniffing model names or task strings.
