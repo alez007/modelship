@@ -60,6 +60,7 @@ from modelship.deploy.serve_utils import (  # noqa: E402
 )
 from modelship.deploy.strategy import DeployContext, compute_deploy_plan, run_deploy_loop  # noqa: E402
 from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator  # noqa: E402
+from modelship.infer.replica_coordinator import get_or_create_replica_coordinator  # noqa: E402
 from modelship.logging import configure_logging, get_lib_log_config, get_logger  # noqa: E402
 from modelship.metrics import DEPLOY_DURATION_SECONDS, DEPLOY_MODELS_CHANGED_TOTAL  # noqa: E402
 from modelship.state import get_state_store  # noqa: E402
@@ -125,9 +126,11 @@ def main(argv: list[str] | None = None) -> None:
 
     plugin_wheels = resolve_all_plugin_wheels(yml_conf)
 
-    # The detached coordinator holds the cross-operator deploy lock and the durable
-    # ownership registry (used for the deploy lock + gateway-restart self-heal).
+    # The detached coordinator holds the cross-operator deploy lock; the detached
+    # replica coordinator holds the durable ownership registry (used for
+    # gateway-restart self-heal).
     coordinator = get_or_create_coordinator()
+    replica_coord = get_or_create_replica_coordinator()
     # Scope reconcile-removal to deployments this gateway's effective set managed
     # BEFORE this run, so a fresh/empty effective config (e.g. migration over
     # pre-existing live models) removes nothing.
@@ -168,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
         # AFTER the gateway is up so /health and /readyz answer during downloads.
         resolve_all_model_sources(yml_conf)
 
-        seed_expected_models(coordinator, gateway_name, yml_conf)
+        seed_expected_models(replica_coord, gateway_name, yml_conf)
 
         # Purge registry entries for previously-effective deployments that are no
         # longer desired and have no live Serve app (e.g. resurrected from the
@@ -178,7 +181,7 @@ def main(argv: list[str] | None = None) -> None:
         if plan.registry_only_drop:
             try:
                 ray.get(
-                    [coordinator.unregister_deployment.remote(gateway_name, name) for name in plan.registry_only_drop]
+                    [replica_coord.unregister_deployment.remote(gateway_name, name) for name in plan.registry_only_drop]
                 )
             except Exception:
                 logger.exception("Failed to drop stale registry entries: %s", plan.registry_only_drop)
@@ -187,7 +190,7 @@ def main(argv: list[str] | None = None) -> None:
         # freed resources are available for the deploy loop. Used when the
         # cluster can't fit old + new at the same time.
         if args.replace_strategy == "stop_start":
-            remove_apps(apps_to_remove, coordinator, gateway_name)
+            remove_apps(apps_to_remove, replica_coord, gateway_name)
             apps_to_remove = []
 
         # The probe is driver-owned so Ray force-releases the coordinator lock if
@@ -199,6 +202,7 @@ def main(argv: list[str] | None = None) -> None:
         ctx = DeployContext(
             plugin_wheels=plugin_wheels,
             coordinator=coordinator,
+            replica_coordinator=replica_coord,
             probe=probe,
             operator_id=operator_id,
             gateway_name=gateway_name,
@@ -218,7 +222,7 @@ def main(argv: list[str] | None = None) -> None:
         # round-robins across both old and new handles for the same model,
         # so no requests are lost.
         if apps_to_remove:
-            remove_apps(apps_to_remove, coordinator, gateway_name)
+            remove_apps(apps_to_remove, replica_coord, gateway_name)
 
         # Persist the achieved effective config (desired minus permanently-failed
         # models) so a re-assert after cluster loss restores exactly this set and

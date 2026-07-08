@@ -381,35 +381,36 @@ class TestReservationTotals:
 
 class TestRemoveApps:
     def test_noop_on_empty_list(self):
-        coordinator = MagicMock()
+        replica_coordinator = MagicMock()
         with patch("modelship.deploy.serve_utils.serve.delete") as mock_delete:
-            mship_deploy.remove_apps([], coordinator, "gw")
-        coordinator.unregister_deployment.remote.assert_not_called()
+            mship_deploy.remove_apps([], replica_coordinator, "gw")
+        replica_coordinator.unregister_deployment.remote.assert_not_called()
         mock_delete.assert_not_called()
 
     def test_unregisters_then_deletes(self):
-        coordinator = MagicMock()
+        replica_coordinator = MagicMock()
         apps = ["qwen-aaaaaaaaaa", "kokoro-bbbbbbbbbb"]
         with (
             patch("modelship.deploy.serve_utils.ray.get") as mock_get,
             patch("modelship.deploy.serve_utils.serve.delete") as mock_delete,
         ):
-            mship_deploy.remove_apps(apps, coordinator, "gw")
+            mship_deploy.remove_apps(apps, replica_coordinator, "gw")
 
-        # Each app is dropped from the coordinator registry (which bumps the gateway
-        # generation so replicas stop routing) before serve.delete tears it down.
-        coordinator.unregister_deployment.remote.assert_any_call("gw", "qwen-aaaaaaaaaa")
-        coordinator.unregister_deployment.remote.assert_any_call("gw", "kokoro-bbbbbbbbbb")
+        # Each app is dropped from the replica coordinator's registry (which bumps
+        # the gateway generation so replicas stop routing) before serve.delete tears
+        # it down.
+        replica_coordinator.unregister_deployment.remote.assert_any_call("gw", "qwen-aaaaaaaaaa")
+        replica_coordinator.unregister_deployment.remote.assert_any_call("gw", "kokoro-bbbbbbbbbb")
         mock_get.assert_called_once()  # batched ray.get over the unregister calls
         assert mock_delete.call_args_list == [(("qwen-aaaaaaaaaa",),), (("kokoro-bbbbbbbbbb",),)]
 
     def test_continues_on_serve_delete_error(self):
-        coordinator = MagicMock()
+        replica_coordinator = MagicMock()
         with (
             patch("modelship.deploy.serve_utils.ray.get"),
             patch("modelship.deploy.serve_utils.serve.delete", side_effect=[Exception("gone"), None]) as mock_delete,
         ):
-            mship_deploy.remove_apps(["a-1234567890", "b-1234567890"], coordinator, "gw")
+            mship_deploy.remove_apps(["a-1234567890", "b-1234567890"], replica_coordinator, "gw")
         # Both deletes attempted even though the first raised.
         assert mock_delete.call_count == 2
 
