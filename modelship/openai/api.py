@@ -573,8 +573,6 @@ class ModelshipAPI:
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_embeddings")
         headers = dict(raw_request.headers)
         logger.info("embeddings model=%s", model)
-        # EmbeddingRequest is a UnionType — force resolution before Ray pickle boundary.
-        request = type(request).model_validate_json(request.model_dump_json())
         response_gen = handle.embed.options(stream=True).remote(request, headers, watcher.registry, req_id)
         return await self._handle_response(response_gen, watcher, model, "create_embeddings")
 

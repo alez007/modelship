@@ -9,11 +9,13 @@ import contextlib
 import stat
 import sys
 import textwrap
+from typing import ClassVar
 from unittest.mock import patch
 
 import httpx
 import pytest
 
+from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import (
     LlamaServerConfig,
     ModelLoader,
@@ -287,15 +289,29 @@ def _request(**kwargs) -> ChatCompletionRequest:
 
 class _DisconnectingRawRequest:
     """A RawRequestProxy stand-in whose is_disconnected() flips to True after
-    `disconnect_after` seconds, for exercising BaseInfer.run_cancellable."""
+    `disconnect_after` seconds, for exercising BaseInfer.run_cancellable.
+
+    Self-registers by id so a patched BaseInfer._poll_disconnected_ids (the
+    shared per-replica pump's registry lookup) can consult it directly instead
+    of hitting a real DisconnectRegistry actor."""
+
+    _by_id: ClassVar[dict[str, _DisconnectingRawRequest]] = {}
 
     def __init__(self, disconnect_after: float):
         self._disconnect_after = disconnect_after
         self._start = asyncio.get_event_loop().time()
         self.request_id = "req-1"
+        self.is_watchable = True
+        _DisconnectingRawRequest._by_id[self.request_id] = self
 
     async def is_disconnected(self) -> bool:
         return asyncio.get_event_loop().time() - self._start >= self._disconnect_after
+
+
+async def _poll_disconnected_via_fakes(request_ids: list[str]) -> list[str]:
+    """Test-only BaseInfer._poll_disconnected_ids replacement: consults
+    _DisconnectingRawRequest's self-registry instead of a real Ray actor."""
+    return [rid for rid in request_ids if await _DisconnectingRawRequest._by_id[rid].is_disconnected()]
 
 
 class TestNonStreamingProjection:
@@ -417,7 +433,8 @@ class TestNonStreamingProjection:
             return httpx.Response(200, json={"choices": [], "usage": {}})
 
         infer = _infer_with_client(handler)
-        result = await infer.create_chat_completion(_request(), _DisconnectingRawRequest(disconnect_after=0.05))
+        with patch.object(BaseInfer, "_poll_disconnected_ids", staticmethod(_poll_disconnected_via_fakes)):
+            result = await infer.create_chat_completion(_request(), _DisconnectingRawRequest(disconnect_after=0.05))
 
         assert isinstance(result, ErrorResponse)
         assert "disconnect" in result.error.message.lower()
@@ -875,14 +892,15 @@ class TestResponsesProjection:
             return httpx.Response(200, content=b"data: [DONE]\n\n")  # pragma: no cover - never reached
 
         infer = _infer_with_client(handler)
-        result = await infer.create_response(
-            _responses_request(stream=True), _DisconnectingRawRequest(disconnect_after=0.05)
-        )
+        with patch.object(BaseInfer, "_poll_disconnected_ids", staticmethod(_poll_disconnected_via_fakes)):
+            result = await infer.create_response(
+                _responses_request(stream=True), _DisconnectingRawRequest(disconnect_after=0.05)
+            )
 
-        # translator.start()'s two events are synchronous and yield immediately;
-        # the disconnect only bites once the generator would block on the (never
-        # answered) HTTP call — no response.completed/failed ever follows.
-        body = "".join([chunk async for chunk in result])
+            # translator.start()'s two events are synchronous and yield immediately;
+            # the disconnect only bites once the generator would block on the (never
+            # answered) HTTP call — no response.completed/failed ever follows.
+            body = "".join([chunk async for chunk in result])
         assert "event: response.created" in body
         assert "event: response.completed" not in body
         assert "event: response.failed" not in body

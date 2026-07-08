@@ -25,7 +25,12 @@ from modelship.openai.protocol import (
 
 
 class _FakeRawRequest:
+    """Never disconnects — is_watchable=False keeps it out of BaseInfer's
+    per-replica disconnect pump entirely (same as RawRequestProxy(registry=None)),
+    which also sidesteps needing a real DisconnectRegistry actor in these tests."""
+
     request_id = "req-1"
+    is_watchable = False
 
     async def is_disconnected(self) -> bool:
         return False
