@@ -28,6 +28,7 @@ class _FakeRegistry:
         self.disconnected: set[str] = set()
         self.set = self._Method(self._set)
         self.is_set = self._Method(self._is_set)
+        self.is_set_many = self._Method(self._is_set_many)
         self.clear = self._Method(self._clear)
 
     async def _set(self, rid):
@@ -35,6 +36,9 @@ class _FakeRegistry:
 
     async def _is_set(self, rid):
         return rid in self.disconnected
+
+    async def _is_set_many(self, rids):
+        return [rid for rid in rids if rid in self.disconnected]
 
     async def _clear(self, rid):
         self.disconnected.discard(rid)
@@ -54,6 +58,7 @@ class _DeadRegistry:
     def __init__(self):
         self.set = self._Method()
         self.is_set = self._Method()
+        self.is_set_many = self._Method()
         self.clear = self._Method()
 
     class _Method:
@@ -130,6 +135,19 @@ def test_disconnect_store_clear_removes_entry():
     store.clear("req-1")
     assert store.is_set("req-1") is False
     store.clear("never-set")  # clearing an absent id is a no-op
+
+
+def test_disconnect_store_is_set_many_filters_to_disconnected_subset():
+    clock = {"t": 0.0}
+    store = _DisconnectStore(ttl_seconds=10.0, now=lambda: clock["t"])
+
+    store.set("a")
+    store.set("b")
+
+    assert store.is_set_many(["a", "b", "never-set"]) == ["a", "b"]
+
+    clock["t"] += 11.0  # past both deadlines
+    assert store.is_set_many(["a", "b", "never-set"]) == []
 
 
 @pytest.mark.asyncio

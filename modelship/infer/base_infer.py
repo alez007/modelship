@@ -5,6 +5,9 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from typing import Any, TypeVar
 
+from ray.exceptions import RayActorError
+
+from modelship.infer import infer_config
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
@@ -71,6 +74,12 @@ class BaseInfer(ABC):
     def __init__(self, model_config: ModelshipModelConfig):
         self.model_config = model_config
         self.max_context_length: int | None = None
+        # request_id -> local event, set by the shared disconnect pump below.
+        # One pump per replica (this instance) amortizes disconnect polling
+        # across every request the replica is currently serving, instead of
+        # each request polling the DisconnectRegistry actor independently.
+        self._watched: dict[str, asyncio.Event] = {}
+        self._pump_task: asyncio.Task[None] | None = None
 
     def _get_memory_fraction(self) -> float | None:
         """Return the GPU memory fraction if explicitly set and < 1.0, otherwise None."""
@@ -101,19 +110,23 @@ class BaseInfer(ABC):
         whose engine needs cleanup beyond task cancellation (freeing a
         connection/slot, etc.) should override `on_generation_aborted`.
         """
-        task = asyncio.ensure_future(work)
-        watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
-        done, _pending = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
-        if task in done:
-            watch.cancel()
+        event = self._watch_disconnect(raw_request)
+        try:
+            task = asyncio.ensure_future(work)
+            watch = asyncio.ensure_future(event.wait())
+            done, _pending = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                watch.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watch
+                return task.result()
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await watch
-            return task.result()
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        await self.on_generation_aborted()
-        raise ClientDisconnectedError
+                await task
+            await self.on_generation_aborted()
+            raise ClientDisconnectedError
+        finally:
+            self._unwatch_disconnect(raw_request)
 
     async def run_cancellable_stream(
         self, work: AsyncGenerator[T, None], raw_request: RawRequestProxy
@@ -139,7 +152,8 @@ class BaseInfer(ABC):
         aclose(): asynchronous generator is already running`. It must be
         cancelled and awaited first, same as the disconnect branch above does.
         """
-        watch = asyncio.ensure_future(self._poll_disconnect(raw_request))
+        event = self._watch_disconnect(raw_request)
+        watch = asyncio.ensure_future(event.wait())
         next_item: asyncio.Task[T] | None = None
         try:
             while True:
@@ -162,6 +176,7 @@ class BaseInfer(ABC):
             watch.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watch
+            self._unwatch_disconnect(raw_request)
             if next_item is not None and not next_item.done():
                 next_item.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -229,12 +244,61 @@ class BaseInfer(ABC):
         interrupted early regardless of what happens here)."""
         return None
 
-    @staticmethod
-    async def _poll_disconnect(raw_request: RawRequestProxy) -> None:
-        while True:
-            if await raw_request.is_disconnected():
-                return
+    def _watch_disconnect(self, raw_request: RawRequestProxy) -> asyncio.Event:
+        """Register `raw_request` with the shared per-replica disconnect pump and
+        return a local event that fires once it disconnects. Unwatchable proxies
+        (no registry/id — e.g. an internal warmup request) get an event that
+        simply never fires, matching `is_disconnected()`'s "always connected"
+        behavior for them.
+        """
+        event = asyncio.Event()
+        if not raw_request.is_watchable:
+            return event
+        assert raw_request.request_id is not None
+        self._watched[raw_request.request_id] = event
+        if self._pump_task is None or self._pump_task.done():
+            self._pump_task = asyncio.ensure_future(self._disconnect_pump())
+        return event
+
+    def _unwatch_disconnect(self, raw_request: RawRequestProxy) -> None:
+        """Drop `raw_request` from the pump's watch set. Stops the pump once
+        nothing is left to poll, rather than leaving it spinning idle. Mirrors
+        `_watch_disconnect`'s `is_watchable` guard — an unwatchable proxy was
+        never registered, so there's nothing to remove."""
+        if not raw_request.is_watchable:
+            return
+        assert raw_request.request_id is not None
+        self._watched.pop(raw_request.request_id, None)
+        if not self._watched and self._pump_task is not None:
+            self._pump_task.cancel()
+            self._pump_task = None
+
+    async def _disconnect_pump(self) -> None:
+        """One background poller per replica, shared by every in-flight request's
+        `run_cancellable`/`run_cancellable_stream` call. Batches what would
+        otherwise be one DisconnectRegistry RPC per request per poll interval
+        into a single `is_set_many` RPC per interval, fanning results out to
+        each request's local event.
+        """
+        while self._watched:
+            disconnected = await self._poll_disconnected_ids(list(self._watched))
+            for request_id in disconnected:
+                event = self._watched.get(request_id)
+                if event is not None:
+                    event.set()
             await asyncio.sleep(_DISCONNECT_POLL_INTERVAL_S)
+
+    @staticmethod
+    async def _poll_disconnected_ids(request_ids: list[str]) -> list[str]:
+        """Injectable seam for `_disconnect_pump`: which of `request_ids` are
+        disconnected right now, per the shared DisconnectRegistry. Degrades to
+        "none disconnected" on a dead registry, same as `is_disconnected()`."""
+        try:
+            return await infer_config.get_disconnect_registry().is_set_many.remote(request_ids)
+        except RayActorError:
+            logger.warning("Disconnect registry unavailable; assuming clients connected")
+            infer_config.reset_disconnect_registry()
+            return []
 
     @abstractmethod
     def shutdown(self) -> None:

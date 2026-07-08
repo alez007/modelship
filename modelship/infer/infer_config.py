@@ -458,6 +458,9 @@ class _DisconnectStore:
             return False
         return True
 
+    def is_set_many(self, request_ids: list[str]) -> list[str]:
+        return [request_id for request_id in request_ids if self.is_set(request_id)]
+
     def clear(self, request_id: str) -> None:
         self._deadlines.pop(request_id, None)
 
@@ -483,6 +486,9 @@ class DisconnectRegistry:
 
     async def is_set(self, request_id: str) -> bool:
         return self._store.is_set(request_id)
+
+    async def is_set_many(self, request_ids: list[str]) -> list[str]:
+        return self._store.is_set_many(request_ids)
 
     async def clear(self, request_id: str) -> None:
         self._store.clear(request_id)
@@ -583,6 +589,12 @@ class RawRequestProxy:
         self.headers = Headers(headers=headers)
         self.state = State()  # vllm writes per-request state here; lives in the actor process
         self.request_id = request_id
+
+    @property
+    def is_watchable(self) -> bool:
+        """Whether this proxy has a real registry + id to poll — false for internal
+        requests (e.g. warmup) that have no client to disconnect."""
+        return self._registry is not None and self.request_id is not None
 
     async def is_disconnected(self) -> bool:
         if self._registry is None:

@@ -4,28 +4,43 @@ generic disconnect guards.
 Non-streaming Ray Serve calls don't get a socket to watch (unlike streaming,
 where Starlette's own StreamingResponse races disconnect against the body
 iterator and cancellation propagates all the way down automatically).
-run_cancellable polls RawRequestProxy.is_disconnected() alongside an arbitrary
-coroutine and cancels whichever loses, calling the on_generation_aborted()
-hook so a loader can free engine-side resources. run_cancellable_stream does
-the same thing per-item for an async generator, so a loader can opt into
-explicit disconnect handling for streaming too instead of relying solely on
-the ASGI layer's own cancellation-on-disconnect. No GPU/Ray needed — both
-race participants are plain asyncio coroutines/generators against a minimal
-BaseInfer subclass.
+run_cancellable races an arbitrary coroutine against the shared per-replica
+disconnect pump (BaseInfer._disconnect_pump) and cancels whichever loses,
+calling the on_generation_aborted() hook so a loader can free engine-side
+resources. run_cancellable_stream does the same thing per-item for an async
+generator, so a loader can opt into explicit disconnect handling for
+streaming too instead of relying solely on the ASGI layer's own
+cancellation-on-disconnect. No GPU/Ray needed — the pump's registry lookup
+(_poll_disconnected_ids) is overridden to consult plain fakes instead of the
+real DisconnectRegistry actor, so both race participants stay plain asyncio
+coroutines/generators against a minimal BaseInfer subclass.
 """
 
 import asyncio
+import itertools
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 
 from modelship.infer.base_infer import _DISCONNECT_POLL_INTERVAL_S, BaseInfer, ClientDisconnectedError
 
+_request_id_counter = itertools.count()
+
 
 class _FakeRawRequest:
+    """Registers itself in a class-level id -> instance map so `_Infer`'s
+    overridden `_poll_disconnected_ids` can consult it by id, the same way the
+    real pump consults the DisconnectRegistry actor by id."""
+
+    _by_id: ClassVar[dict[str, "_FakeRawRequest"]] = {}
+
     def __init__(self, *, disconnect_after: float | None):
         self._disconnect_after = disconnect_after
         self._start = asyncio.get_event_loop().time()
+        self.request_id = f"req-{next(_request_id_counter)}"
+        self.is_watchable = True
+        _FakeRawRequest._by_id[self.request_id] = self
 
     async def is_disconnected(self) -> bool:
         if self._disconnect_after is None:
@@ -51,6 +66,10 @@ class _Infer(BaseInfer):
 
     async def on_generation_aborted(self) -> None:
         self.aborted = True
+
+    @staticmethod
+    async def _poll_disconnected_ids(request_ids: list[str]) -> list[str]:
+        return [rid for rid in request_ids if await _FakeRawRequest._by_id[rid].is_disconnected()]
 
 
 @pytest.mark.asyncio
