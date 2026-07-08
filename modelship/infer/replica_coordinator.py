@@ -62,13 +62,15 @@ class ReplicaCoordinator:
             )
         saved = self._store.get(_STATE_KEY)
         saved = saved if isinstance(saved, dict) else {}
-        self._registry: dict[str, dict[str, str]] = saved.get("registry") or {}
+        registry = saved.get("registry")
+        self._registry: dict[str, dict[str, str]] = registry if isinstance(registry, dict) else {}
         # Per-gateway change notification driving the gateway watch loop: a
         # monotonic generation bumped on every routing/expected change, plus an
         # asyncio.Event woken on each bump so a long-polling replica returns at
         # once. _expected is the desired model set used for gateway readiness.
         self._generation: dict[str, int] = {}
-        self._expected: dict[str, list[str]] = saved.get("expected") or {}
+        expected = saved.get("expected")
+        self._expected: dict[str, list[str]] = expected if isinstance(expected, dict) else {}
         self._change: dict[str, asyncio.Event] = {}
 
     # These are async so every registry / generation / Event mutation runs on the
