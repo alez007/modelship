@@ -109,6 +109,34 @@ async def test_disconnect_cancels_work_and_calls_abort_hook():
 
 
 @pytest.mark.asyncio
+async def test_outer_cancellation_during_wait_cancels_work_without_leaking():
+    """If the task driving run_cancellable is itself cancelled from outside
+    (e.g. replica shutdown) while suspended in the internal asyncio.wait,
+    `work` must not be left running unobserved in the background — it has to
+    be cancelled too, same as an explicit client disconnect would do."""
+    work_cancelled = asyncio.Event()
+
+    async def slow_work():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            work_cancelled.set()
+            raise
+
+    infer = _Infer()
+    raw_request = _FakeRawRequest(disconnect_after=None)  # never disconnects on its own
+
+    outer = asyncio.ensure_future(infer.run_cancellable(slow_work(), raw_request))
+    await asyncio.sleep(0.01)  # let it enter asyncio.wait
+    outer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+
+    assert work_cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_work_exception_propagates_without_aborting():
     async def failing_work():
         raise ValueError("boom")

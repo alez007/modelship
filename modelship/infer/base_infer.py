@@ -111,14 +111,11 @@ class BaseInfer(ABC):
         connection/slot, etc.) should override `on_generation_aborted`.
         """
         event = self._watch_disconnect(raw_request)
+        task = asyncio.ensure_future(work)
+        watch = asyncio.ensure_future(event.wait())
         try:
-            task = asyncio.ensure_future(work)
-            watch = asyncio.ensure_future(event.wait())
             done, _pending = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
             if task in done:
-                watch.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await watch
                 return task.result()
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -126,6 +123,17 @@ class BaseInfer(ABC):
             await self.on_generation_aborted()
             raise ClientDisconnectedError
         finally:
+            # Unconditional, regardless of how the try exits — including this
+            # coroutine's own task being cancelled from outside (e.g. replica
+            # shutdown) while suspended in asyncio.wait above, which otherwise
+            # leaves `task` (the actual inference work) running unobserved.
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             self._unwatch_disconnect(raw_request)
 
     async def run_cancellable_stream(
