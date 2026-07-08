@@ -300,12 +300,20 @@ class BaseInfer(ABC):
     async def _poll_disconnected_ids(request_ids: list[str]) -> list[str]:
         """Injectable seam for `_disconnect_pump`: which of `request_ids` are
         disconnected right now, per the shared DisconnectRegistry. Degrades to
-        "none disconnected" on a dead registry, same as `is_disconnected()`."""
+        "none disconnected" on any failure, not just a dead actor — this pump is
+        shared by every concurrent request on the replica, so letting an
+        unhandled exception escape would silently kill disconnect detection for
+        all of them at once (until a later request happens to restart the pump),
+        not just break one request's poll the way the old per-request loop did.
+        """
         try:
             return await infer_config.get_disconnect_registry().is_set_many.remote(request_ids)
         except RayActorError:
             logger.warning("Disconnect registry unavailable; assuming clients connected")
             infer_config.reset_disconnect_registry()
+            return []
+        except Exception as exc:
+            logger.warning("Unexpected error polling disconnect registry; assuming clients connected: %r", exc)
             return []
 
     @abstractmethod

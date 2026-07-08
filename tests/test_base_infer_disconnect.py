@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from modelship.infer import infer_config
 from modelship.infer.base_infer import _DISCONNECT_POLL_INTERVAL_S, BaseInfer, ClientDisconnectedError
 
 _request_id_counter = itertools.count()
@@ -70,6 +71,28 @@ class _Infer(BaseInfer):
     @staticmethod
     async def _poll_disconnected_ids(request_ids: list[str]) -> list[str]:
         return [rid for rid in request_ids if await _FakeRawRequest._by_id[rid].is_disconnected()]
+
+
+@pytest.mark.asyncio
+async def test_poll_disconnected_ids_degrades_on_unexpected_registry_exception(monkeypatch):
+    """The real (un-overridden) _poll_disconnected_ids must swallow more than
+    just RayActorError: it's called from the shared per-replica pump, so an
+    unhandled exception here would kill disconnect detection for every
+    concurrent request on the replica, not just break one request's poll the
+    way the old per-request loop did."""
+
+    class _BrokenRemote:
+        def remote(self, request_ids):
+            raise TypeError("boom")
+
+    class _BrokenRegistry:
+        is_set_many = _BrokenRemote()
+
+    monkeypatch.setattr(infer_config, "get_disconnect_registry", lambda: _BrokenRegistry())
+
+    result = await BaseInfer._poll_disconnected_ids(["req-x"])
+
+    assert result == []
 
 
 @pytest.mark.asyncio
