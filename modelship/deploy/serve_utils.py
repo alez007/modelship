@@ -56,15 +56,15 @@ def delete_apps_quietly(app_names) -> None:
             logger.exception("Failed to delete deployment: %s", name)
 
 
-def remove_apps(app_names: list[str], coordinator, gateway_name: str) -> None:
-    """Drop the given deployment apps from the coordinator's ownership registry
+def remove_apps(app_names: list[str], replica_coordinator, gateway_name: str) -> None:
+    """Drop the given deployment apps from the replica coordinator's ownership registry
     (which bumps the gateway generation so every replica's watch loop stops routing
     to them), then delete them from Ray Serve (`serve.delete` drains in-flight
     requests first)."""
     if not app_names:
         return
     try:
-        ray.get([coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
+        ray.get([replica_coordinator.unregister_deployment.remote(gateway_name, a) for a in app_names])
     except Exception:
         logger.exception("Failed to drop deployments from registry: %s", app_names)
     delete_apps_quietly(app_names)
@@ -228,11 +228,11 @@ def start_gateway(gateway_name: str, serve_logging_config: LoggingConfig) -> Non
     )
 
 
-def seed_expected_models(coordinator, gateway_name: str, yml_conf: ModelshipConfig) -> None:
-    # Record the full desired set on the coordinator (the gateway's readiness
-    # baseline) — already-deployed models also count toward "ready". Bumping the
-    # generation makes every replica adopt it via its watch loop.
+def seed_expected_models(replica_coordinator, gateway_name: str, yml_conf: ModelshipConfig) -> None:
+    # Record the full desired set on the replica coordinator (the gateway's
+    # readiness baseline) — already-deployed models also count toward "ready".
+    # Bumping the generation makes every replica adopt it via its watch loop.
     try:
-        ray.get(coordinator.set_expected.remote(gateway_name, [c.name for c in yml_conf.models]))
+        ray.get(replica_coordinator.set_expected.remote(gateway_name, [c.name for c in yml_conf.models]))
     except Exception:
         logger.exception("Failed to seed expected model list on coordinator (non-fatal).")

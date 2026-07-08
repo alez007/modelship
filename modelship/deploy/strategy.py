@@ -100,6 +100,7 @@ def compute_deploy_plan(
 class DeployContext:
     plugin_wheels: dict[str, Path]
     coordinator: Any
+    replica_coordinator: Any
     probe: Any
     operator_id: str
     gateway_name: str
@@ -149,11 +150,11 @@ def try_reserve_and_deploy(config: ModelshipModelConfig, ctx: DeployContext) -> 
             route_prefix=None,
         )
         logger.info("Model ready: %s (deployment: %s)", config.name, deployment_name)
-        # Record ownership in the coordinator — the single source of truth. This
-        # bumps the gateway's generation, so every gateway replica's watch loop
+        # Record ownership in the replica coordinator — the single source of truth.
+        # This bumps the gateway's generation, so every gateway replica's watch loop
         # picks the new deployment up (the driver never pushes to replicas directly).
         try:
-            ray.get(ctx.coordinator.register_deployment.remote(ctx.gateway_name, deployment_name, config.name))
+            ray.get(ctx.replica_coordinator.register_deployment.remote(ctx.gateway_name, deployment_name, config.name))
         except Exception:
             logger.exception("Failed to record %s in deploy registry", deployment_name)
         return "deployed", None
