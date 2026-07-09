@@ -45,6 +45,7 @@ def _make_infer() -> VllmInfer:
     infer.model_config.name = "m"
     infer.model_config.chat_template_kwargs = {}
     infer.openai_serving_render = MagicMock()
+    infer._tokenizer = MagicMock()
     infer.engine = MagicMock()
     infer._enable_auto_tools = True
     return infer
@@ -105,7 +106,6 @@ async def test_stream_prevalidation_error_returns_plain_error_not_generator():
 @pytest.mark.asyncio
 async def test_stream_success_produces_native_responses_events():
     infer = _make_infer()
-    infer.openai_serving_render.renderer.tokenizer = MagicMock()
     request = ResponsesRequest(model="m", input="hi", stream=True)
 
     async def fake_stream(*_args, **_kwargs):
@@ -132,7 +132,6 @@ async def test_stream_success_produces_native_responses_events():
 @pytest.mark.asyncio
 async def test_stream_mid_stream_exception_emits_failed_event():
     infer = _make_infer()
-    infer.openai_serving_render.renderer.tokenizer = MagicMock()
     request = ResponsesRequest(model="m", input="hi", stream=True)
 
     async def fake_stream(*_args, **_kwargs):
