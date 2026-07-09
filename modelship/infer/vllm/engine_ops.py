@@ -187,7 +187,7 @@ def generate(
 def project_tool_calls(vllm_tool_calls: list[VllmFunctionCall] | None) -> list[ToolCall]:
     """Project a parser's vLLM-shaped tool calls onto modelship's OpenAI `ToolCall`.
 
-    `vllm.parser.VllmParser.parse()`'s `FunctionCall` has the same `id`/`name`/`arguments`
+    `vllm.parser.Parser.parse()`'s `FunctionCall` has the same `id`/`name`/`arguments`
     shape as modelship's own; `id` is only set when the tool_call_id_type config
     minted one (e.g. kimi_k2), so most calls need one generated here.
     """
