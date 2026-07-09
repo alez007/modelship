@@ -249,7 +249,7 @@ class VllmInfer(BaseInfer):
         logger.info("vllm capabilities for '%s': %s", self.model_config.name, self._caps)
 
         await self.init_serving_chat()
-        self.serving_embedding = await self.init_serving_embeding()
+        self.serving_embedding = await self.init_serving_embedding()
         self.serving_transcription = await self.init_serving_transcription()
         self.serving_translation = await self.init_serving_translation()
 
@@ -330,8 +330,8 @@ class VllmInfer(BaseInfer):
             reasoning_parser=reasoning_parser_name,
         )
 
-    async def init_serving_embeding(self) -> VllmServingEmbedding | None:
-        logger.info("init_serving_embeding: %s, %s", self.supported_tasks, self.model_config.usecase)
+    async def init_serving_embedding(self) -> VllmServingEmbedding | None:
+        logger.info("init_serving_embedding: %s, %s", self.supported_tasks, self.model_config.usecase)
         return (
             VllmServingEmbedding(
                 engine_client=self.engine,
