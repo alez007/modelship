@@ -1,6 +1,6 @@
 import io
-import json
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, ClassVar, cast
 
@@ -51,7 +51,9 @@ from vllm.entrypoints.speech_to_text.translation.serving import (
 )
 from vllm.exceptions import VLLMValidationError as VllmValidationError
 from vllm.inputs import EngineInput as VllmEngineInput
+from vllm.parser import Parser as VllmParser
 from vllm.sampling_params import SamplingParams as VllmSamplingParams
+from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
 from vllm.usage.usage_lib import UsageContext as VllmUsageContext
 from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
@@ -73,6 +75,7 @@ from modelship.openai.chat_utils import (
     build_from_parsed,
     build_response_from_parsed,
     encode_chat_sse_chunk,
+    encode_error_sse,
     normalize_chat_messages,
     responses_validation_error,
 )
@@ -103,20 +106,33 @@ from modelship.utils import base_request_id
 logger = get_logger("infer.vllm")
 
 
-def _encode_error(error: ErrorResponse) -> str:
-    return f"data: {json.dumps(error.model_dump(mode='json'))}\n\n"
+def _to_error_response(
+    err: VllmValidationError | VllmErrorResponse | Exception | str,
+    *,
+    err_type: str = "invalid_request_error",
+    status_code: HTTPStatus | int = HTTPStatus.BAD_REQUEST,
+) -> ErrorResponse:
+    """The one place this loader converts any failure into a client-facing
+    `ErrorResponse`, funnelling every shape through `create_error_response`.
 
-
-def _validation_error(exc: VllmValidationError) -> ErrorResponse:
-    # VllmValidationError.__str__ appends "(parameter=..., value=...)"; keep the
-    # original message and surface the offending field via the OpenAI `param` slot.
-    base = exc.args[0] if exc.args else str(exc)
-    return create_error_response(
-        message=base,
-        err_type="invalid_request_error",
-        status_code=HTTPStatus.BAD_REQUEST,
-        param=exc.parameter,
-    )
+    """
+    if isinstance(err, VllmValidationError):
+        base = err.args[0] if err.args else str(err)
+        return create_error_response(
+            message=base,
+            err_type="invalid_request_error",
+            status_code=HTTPStatus.BAD_REQUEST,
+            param=err.parameter,
+        )
+    if isinstance(err, VllmErrorResponse):
+        info = err.error
+        return create_error_response(
+            message=info.message,
+            err_type=info.type,
+            status_code=info.code,
+            param=info.param,
+        )
+    return create_error_response(err, err_type=err_type, status_code=status_code)
 
 
 def _vllm_stream_error(exc: Exception) -> str | None:
@@ -129,7 +145,17 @@ def _vllm_stream_error(exc: Exception) -> str | None:
     return None
 
 
-class VllmInfer(BaseInfer):
+@dataclass
+class _VllmPrepared:
+    """Everything a stream/no-stream seam needs once `_prepare_chat`/`_prepare_responses`
+    has rendered the chat template and derived sampling params."""
+
+    vllm_request: VllmChatCompletionRequest
+    engine_input: VllmEngineInput
+    sampling_params: VllmSamplingParams
+
+
+class VllmInfer(BaseInfer[_VllmPrepared]):
     _vllm_usecases: ClassVar[list[ModelUsecase]] = [
         ModelUsecase.generate,
         ModelUsecase.embed,
@@ -329,6 +355,32 @@ class VllmInfer(BaseInfer):
             tool_parser=tool_parser_name,
             reasoning_parser=reasoning_parser_name,
         )
+        tokenizer = self.openai_serving_render.renderer.tokenizer
+        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+        self._tokenizer: VllmTokenizerLike = tokenizer
+
+    def _make_parsers(self, vllm_request: VllmChatCompletionRequest, n: int) -> list[VllmParser | None]:
+        """One stateful parser instance per choice — the streaming path (see `engine_ops.make_parsers`)."""
+        return engine_ops.make_parsers(
+            self.openai_serving_render, self._tokenizer, vllm_request, vllm_request.chat_template_kwargs, n
+        )
+
+    def _make_parser(self, vllm_request: VllmChatCompletionRequest) -> VllmParser | None:
+        """Single parser instance for the non-streaming path, which reuses it
+        (stateless `.parse()` call) across every choice — see `engine_ops.build_choices`."""
+        return self._make_parsers(vllm_request, n=1)[0]
+
+    async def _render_bundle(self, vllm_request: VllmChatCompletionRequest) -> ErrorResponse | _VllmPrepared:
+        """Render the chat template and derive sampling params — the single place
+        this happens, so every seam sees a pre-generation failure the same way."""
+        try:
+            result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
+        except VllmValidationError as exc:
+            return _to_error_response(exc)
+        if isinstance(result, VllmErrorResponse):
+            return _to_error_response(result)
+        engine_input, sampling_params = result
+        return _VllmPrepared(vllm_request, engine_input, sampling_params)
 
     async def init_serving_embedding(self) -> VllmServingEmbedding | None:
         logger.info("init_serving_embedding: %s, %s", self.supported_tasks, self.model_config.usecase)
@@ -385,11 +437,11 @@ class VllmInfer(BaseInfer):
             else None
         )
 
-    async def create_chat_completion(
+    async def _prepare_chat(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | _VllmPrepared:
         if not hasattr(self, "openai_serving_render"):
-            return await super().create_chat_completion(request, raw_request)
+            return await super()._prepare_chat(request, raw_request)
         try:
             request.messages = normalize_chat_messages(
                 request.messages,
@@ -397,46 +449,30 @@ class VllmInfer(BaseInfer):
                 supports_audio=self._caps.supports_audio,
             )
         except UnsupportedContentError as exc:
-            return create_error_response(exc)
+            return _to_error_response(exc)
         vllm_request = engine_ops.build_vllm_request(request, self.model_config.chat_template_kwargs)
-
-        if request.stream:
-            return self._create_chat_completion_stream(request, vllm_request, raw_request)
-
-        return await self._create_chat_completion_no_stream(request, vllm_request, raw_request)
+        return await self._render_bundle(vllm_request)
 
     async def _create_chat_completion_stream(
         self,
         request: ChatCompletionRequest,
-        vllm_request: VllmChatCompletionRequest,
+        prepared: _VllmPrepared,
         raw_request: RawRequestProxy,
     ) -> AsyncGenerator[str, None]:
-        """Streaming chat path via `engine_ops`, bypassing `OpenAIServingChat`."""
+        """Streaming chat path via `engine_ops`, bypassing `OpenAIServingChat`.
+        Rendering already succeeded in `_prepare_chat` — this only drives generation."""
         request_id = f"chatcmpl-{base_request_id(raw_request)}"
-        try:
-            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VllmValidationError as exc:
-            yield _encode_error(_validation_error(exc))
-            yield "data: [DONE]\n\n"
-            return
-        if isinstance(render_result, VllmErrorResponse):
-            yield _encode_error(ErrorResponse.model_validate(render_result.model_dump()))
-            yield "data: [DONE]\n\n"
-            return
-        engine_input, sampling_params = render_result
-
-        tokenizer = self.openai_serving_render.renderer.tokenizer
-        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+        vllm_request = prepared.vllm_request
 
         stream = engine_ops.stream_chat_completion(
             self.engine,
             self.openai_serving_render,
             vllm_request,
-            engine_input,
-            sampling_params,
+            prepared.engine_input,
+            prepared.sampling_params,
             request_id,
             self.model_config.name,
-            tokenizer,
+            self._tokenizer,
             enable_auto_tools=self._enable_auto_tools,
             want_logprobs=bool(request.logprobs),
             num_output_top_logprobs=request.top_logprobs,
@@ -454,13 +490,13 @@ class VllmInfer(BaseInfer):
             logger.info("chat request %s aborted: client disconnected", request_id)
             return
         except VllmValidationError as exc:
-            yield _encode_error(_validation_error(exc))
+            yield encode_error_sse(_to_error_response(exc))
             yield "data: [DONE]\n\n"
             return
         except Exception:
             logger.exception("chat request %s failed mid-stream", request_id)
-            yield _encode_error(
-                create_error_response("Internal error during generation", err_type="api_error", status_code=500)
+            yield encode_error_sse(
+                _to_error_response("Internal error during generation", err_type="api_error", status_code=500)
             )
             yield "data: [DONE]\n\n"
             return
@@ -472,26 +508,14 @@ class VllmInfer(BaseInfer):
     async def _create_chat_completion_no_stream(
         self,
         request: ChatCompletionRequest,
-        vllm_request: VllmChatCompletionRequest,
+        prepared: _VllmPrepared,
         raw_request: RawRequestProxy,
     ) -> ErrorResponse | ChatCompletionResponse:
         """Non-stream chat path via `engine_ops`, bypassing `OpenAIServingChat`."""
-        try:
-            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VllmValidationError as exc:
-            return _validation_error(exc)
-        if isinstance(render_result, VllmErrorResponse):
-            return ErrorResponse.model_validate(render_result.model_dump())
-        engine_input, sampling_params = render_result
+        vllm_request = prepared.vllm_request
+        engine_input, sampling_params = prepared.engine_input, prepared.sampling_params
 
-        tokenizer = self.openai_serving_render.renderer.tokenizer
-        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
-
-        # Non-streaming reuses one parser instance across every choice (see
-        # engine_ops.build_choices), so only one is needed here regardless of n.
-        parser = engine_ops.make_parsers(
-            self.openai_serving_render, tokenizer, vllm_request, vllm_request.chat_template_kwargs, n=1
-        )[0]
+        parser = self._make_parser(vllm_request)
         prompt_token_ids = engine_ops.extract_prompt_token_ids(self.openai_serving_render, engine_input)
         reasoning_ended = engine_ops.derive_reasoning_ended(vllm_request, parser, prompt_token_ids)
 
@@ -510,22 +534,22 @@ class VllmInfer(BaseInfer):
                 raw_request,
             )
         except ClientDisconnectedError:
-            return create_error_response("Client disconnected")
+            return _to_error_response("Client disconnected")
         except VllmValidationError as exc:
-            return _validation_error(exc)
+            return _to_error_response(exc)
 
         choices, finish_reasons, logprobs_list = engine_ops.build_choices(
             final_res,
             vllm_request,
             parser,
-            tokenizer,
+            self._tokenizer,
             enable_auto_tools=self._enable_auto_tools,
             want_logprobs=bool(request.logprobs),
             num_output_top_logprobs=request.top_logprobs,
         )
 
         if final_res.prompt_token_ids is None:
-            return create_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
+            return _to_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
 
@@ -542,16 +566,16 @@ class VllmInfer(BaseInfer):
             logprobs=logprobs_list,
         )
 
-    async def create_response(
+    async def _prepare_responses(
         self, request: ResponsesRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | _VllmPrepared:
         if not hasattr(self, "openai_serving_render"):
-            return await super().create_response(request, raw_request)
+            return await super()._prepare_responses(request, raw_request)
 
         try:
             chat_request = responses_request_to_chat(request)
         except UnsupportedResponsesFeatureError as e:
-            return create_error_response(e)
+            return _to_error_response(e)
         except ValidationError as e:
             return responses_validation_error(e)
 
@@ -562,54 +586,23 @@ class VllmInfer(BaseInfer):
                 supports_audio=self._caps.supports_audio,
             )
         except UnsupportedContentError as exc:
-            return create_error_response(exc)
+            return _to_error_response(exc)
         chat_request.stream = request.stream or False
         vllm_request = engine_ops.build_vllm_request(chat_request, self.model_config.chat_template_kwargs)
-
-        if request.stream:
-            return await self._create_response_stream_or_error(request, vllm_request, raw_request)
-        return await self._create_response_no_stream(request, vllm_request, raw_request)
-
-    async def _create_response_stream_or_error(
-        self,
-        request: ResponsesRequest,
-        vllm_request: VllmChatCompletionRequest,
-        raw_request: RawRequestProxy,
-    ) -> ErrorResponse | AsyncGenerator[str, None]:
-        """Render + derive sampling params before committing to a Responses event
-        stream, so a pre-generation failure (e.g. context overflow) can still be
-        returned as a plain `ErrorResponse` instead of a mid-stream `response.failed`."""
-        try:
-            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VllmValidationError as exc:
-            return _validation_error(exc)
-        if isinstance(render_result, VllmErrorResponse):
-            return ErrorResponse.model_validate(render_result.model_dump())
-        engine_input, sampling_params = render_result
-        return self._create_response_stream(request, vllm_request, engine_input, sampling_params, raw_request)
+        return await self._render_bundle(vllm_request)
 
     async def _create_response_no_stream(
         self,
         request: ResponsesRequest,
-        vllm_request: VllmChatCompletionRequest,
+        prepared: _VllmPrepared,
         raw_request: RawRequestProxy,
     ) -> ErrorResponse | ResponseObject:
         """Non-stream Responses path via `engine_ops`, shaping items directly from
         `ParsedChatOutput` instead of round-tripping through a `ChatCompletionResponse`."""
-        try:
-            render_result = await engine_ops.render_and_params(self.openai_serving_render, vllm_request)
-        except VllmValidationError as exc:
-            return _validation_error(exc)
-        if isinstance(render_result, VllmErrorResponse):
-            return ErrorResponse.model_validate(render_result.model_dump())
-        engine_input, sampling_params = render_result
+        vllm_request = prepared.vllm_request
+        engine_input, sampling_params = prepared.engine_input, prepared.sampling_params
 
-        tokenizer = self.openai_serving_render.renderer.tokenizer
-        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
-
-        parser = engine_ops.make_parsers(
-            self.openai_serving_render, tokenizer, vllm_request, vllm_request.chat_template_kwargs, n=1
-        )[0]
+        parser = self._make_parser(vllm_request)
         prompt_token_ids = engine_ops.extract_prompt_token_ids(self.openai_serving_render, engine_input)
         reasoning_ended = engine_ops.derive_reasoning_ended(vllm_request, parser, prompt_token_ids)
 
@@ -628,22 +621,22 @@ class VllmInfer(BaseInfer):
                 raw_request,
             )
         except ClientDisconnectedError:
-            return create_error_response("Client disconnected")
+            return _to_error_response("Client disconnected")
         except VllmValidationError as exc:
-            return _validation_error(exc)
+            return _to_error_response(exc)
 
         choices, finish_reasons, _logprobs_list = engine_ops.build_choices(
             final_res,
             vllm_request,
             parser,
-            tokenizer,
+            self._tokenizer,
             enable_auto_tools=self._enable_auto_tools,
             want_logprobs=False,
             num_output_top_logprobs=None,
         )
 
         if final_res.prompt_token_ids is None:
-            return create_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
+            return _to_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
 
@@ -662,27 +655,24 @@ class VllmInfer(BaseInfer):
     async def _create_response_stream(
         self,
         request: ResponsesRequest,
-        vllm_request: VllmChatCompletionRequest,
-        engine_input: VllmEngineInput,
-        sampling_params: VllmSamplingParams,
+        prepared: _VllmPrepared,
         raw_request: RawRequestProxy,
     ) -> AsyncGenerator[str, None]:
         """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `engine_ops.stream_chat_completion`'s typed chunks — no chat SSE text
-        round trip."""
+        round trip. Rendering already succeeded in `_prepare_responses`."""
         request_id = f"resp-{base_request_id(raw_request)}"
-        tokenizer = self.openai_serving_render.renderer.tokenizer
-        assert tokenizer is not None, "vllm renderer has no tokenizer (skip_tokenizer_init=True is unsupported here)"
+        vllm_request = prepared.vllm_request
 
         stream = engine_ops.stream_chat_completion(
             self.engine,
             self.openai_serving_render,
             vllm_request,
-            engine_input,
-            sampling_params,
+            prepared.engine_input,
+            prepared.sampling_params,
             request_id,
             self.model_config.name,
-            tokenizer,
+            self._tokenizer,
             enable_auto_tools=self._enable_auto_tools,
             want_logprobs=False,
             num_output_top_logprobs=None,
@@ -702,9 +692,9 @@ class VllmInfer(BaseInfer):
         try:
             result = await self.serving_embedding(vllm_request, cast("Request", raw_request))
         except VllmValidationError as exc:
-            return _validation_error(exc)
+            return _to_error_response(exc)
         if isinstance(result, VllmErrorResponse):
-            return ErrorResponse.model_validate(result.model_dump())
+            return _to_error_response(result)
         return cast("ErrorResponse | Response", result)
 
     async def create_transcription(
@@ -722,9 +712,9 @@ class VllmInfer(BaseInfer):
                 audio_data, vllm_request, cast("Request", raw_request)
             )
         except VllmValidationError as exc:
-            return _validation_error(exc)
+            return _to_error_response(exc)
         if isinstance(result, VllmErrorResponse):
-            return ErrorResponse.model_validate(result.model_dump())
+            return _to_error_response(result)
         if isinstance(result, VllmTranscriptionResponseVerbose):
             return TranscriptionResponseVerbose.model_validate(result.model_dump())
         if isinstance(result, VllmTranscriptionResponse):
@@ -747,9 +737,9 @@ class VllmInfer(BaseInfer):
                 audio_data, vllm_request, cast("Request", raw_request)
             )
         except VllmValidationError as exc:
-            return _validation_error(exc)
+            return _to_error_response(exc)
         if isinstance(result, VllmErrorResponse):
-            return ErrorResponse.model_validate(result.model_dump())
+            return _to_error_response(result)
         if isinstance(result, VllmTranslationResponseVerbose):
             return TranslationResponseVerbose.model_validate(result.model_dump())
         if isinstance(result, VllmTranslationResponse):

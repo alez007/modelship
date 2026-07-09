@@ -23,6 +23,7 @@ from modelship.openai.chat_utils import (
     build_from_parsed,
     build_response_from_parsed,
     encode_chat_sse_chunk,
+    encode_error_sse,
     normalize_chat_messages,
     responses_validation_error,
 )
@@ -85,7 +86,7 @@ class _EarlyCrashError(RuntimeError):
 _pending_client_closes: set[asyncio.Task] = set()
 
 
-class LlamaServerInfer(BaseInfer):
+class LlamaServerInfer(BaseInfer[dict[str, Any]]):
     """Drives a `llama-server` subprocess over its native OpenAI-compatible
     HTTP API. llama-server does its own chat templating, tool-call, and
     reasoning parsing — this loader is a thin, concurrency-safe proxy that
@@ -416,11 +417,11 @@ class LlamaServerInfer(BaseInfer):
             return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
         return _project_embedding_response(data, model_name=self.model_config.name)
 
-    async def create_chat_completion(
+    async def _prepare_chat(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | dict[str, Any]:
         if self._client is None:
-            return await super().create_chat_completion(request, raw_request)
+            return await super()._prepare_chat(request, raw_request)
 
         request_id = f"chat-{base_request_id(raw_request)}"
         logger.info("chat completion request %s: stream=%s", request_id, request.stream)
@@ -440,13 +441,14 @@ class LlamaServerInfer(BaseInfer):
             logger.warning("chat request %s rejected: %s", request_id, e)
             return create_error_response(e)
 
-        payload = _build_payload(request, messages, model_name=self.model_config.name)
+        return _build_payload(request, messages, model_name=self.model_config.name)
 
-        if request.stream:
-            return self._stream_chat_completion(payload, request_id, raw_request)
-
+    async def _create_chat_completion_no_stream(
+        self, request: ChatCompletionRequest, prepared: dict[str, Any], raw_request: RawRequestProxy
+    ) -> ErrorResponse | ChatCompletionResponse:
+        request_id = f"chat-{base_request_id(raw_request)}"
         try:
-            return await self.run_cancellable(self._send_chat_completion(payload, request_id), raw_request)
+            return await self.run_cancellable(self._send_chat_completion(prepared, request_id), raw_request)
         except ClientDisconnectedError:
             logger.info("chat request %s aborted: client disconnected", request_id)
             return create_error_response("Client disconnected")
@@ -459,11 +461,11 @@ class LlamaServerInfer(BaseInfer):
             return data
         return _project_chat_response(data, model_name=self.model_config.name, request_id=request_id)
 
-    async def create_response(
+    async def _prepare_responses(
         self, request: ResponsesRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | dict[str, Any]:
         if self._client is None:
-            return await super().create_response(request, raw_request)
+            return await super()._prepare_responses(request, raw_request)
 
         try:
             chat_request = responses_request_to_chat(request)
@@ -483,13 +485,14 @@ class LlamaServerInfer(BaseInfer):
             return create_error_response(e)
 
         chat_request.stream = bool(request.stream)
-        payload = _build_payload(chat_request, messages, model_name=self.model_config.name)
+        return _build_payload(chat_request, messages, model_name=self.model_config.name)
 
-        if request.stream:
-            return self._create_response_stream(payload, request, request_id, raw_request)
-
+    async def _create_response_no_stream(
+        self, request: ResponsesRequest, prepared: dict[str, Any], raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject:
+        request_id = f"resp-{base_request_id(raw_request)}"
         try:
-            return await self.run_cancellable(self._send_response(payload, request, request_id), raw_request)
+            return await self.run_cancellable(self._send_response(prepared, request, request_id), raw_request)
         except ClientDisconnectedError:
             logger.info("responses request %s aborted: client disconnected", request_id)
             return create_error_response("Client disconnected")
@@ -528,8 +531,8 @@ class LlamaServerInfer(BaseInfer):
             return create_error_response(message or "Unknown error returned from llama-server", status_code=502)
         return data
 
-    async def _stream_chat_completion(
-        self, payload: dict[str, Any], request_id: str, raw_request: RawRequestProxy
+    async def _create_chat_completion_stream(
+        self, request: ChatCompletionRequest, prepared: dict[str, Any], raw_request: RawRequestProxy
     ) -> AsyncGenerator[str, None]:
         """Race the llama-server SSE stream against the client's disconnect signal.
 
@@ -538,7 +541,8 @@ class LlamaServerInfer(BaseInfer):
         (and its `httpx` stream against llama-server) running to completion,
         holding a `--parallel` slot until the response finishes on its own.
         """
-        stream = self._stream_chat_completion_body(payload, request_id)
+        request_id = f"chat-{base_request_id(raw_request)}"
+        stream = self._stream_chat_completion_body(prepared, request_id)
         try:
             async for chunk in self.run_cancellable_stream(stream, raw_request):
                 yield chunk
@@ -561,24 +565,27 @@ class LlamaServerInfer(BaseInfer):
                 yield encode_chat_sse_chunk(chunk)
             yield "data: [DONE]\n\n"
         except _LlamaServerStreamError as e:
-            yield _encode_error(str(e))
+            yield encode_error_sse(create_error_response(str(e), err_type="api_error", status_code=502))
             yield "data: [DONE]\n\n"
         except httpx.HTTPError as e:
             logger.warning("chat request %s failed mid-stream: %s", request_id, e)
-            yield _encode_error(f"llama-server request failed: {e}")
+            yield encode_error_sse(
+                create_error_response(f"llama-server request failed: {e}", err_type="api_error", status_code=502)
+            )
             yield "data: [DONE]\n\n"
         finally:
             if trace:
                 logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
 
     async def _create_response_stream(
-        self, payload: dict[str, Any], request: ResponsesRequest, request_id: str, raw_request: RawRequestProxy
+        self, request: ResponsesRequest, prepared: dict[str, Any], raw_request: RawRequestProxy
     ) -> AsyncGenerator[str, None]:
         """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `_raw_stream_chunks`'s typed chunks, same source `_stream_chat_completion_body`
         uses — no chat SSE text round trip."""
         assert self._client is not None
-        stream = _raw_stream_chunks(self._client, payload, model_name=self.model_config.name, request_id=request_id)
+        request_id = f"resp-{base_request_id(raw_request)}"
+        stream = _raw_stream_chunks(self._client, prepared, model_name=self.model_config.name, request_id=request_id)
         chunks = self.run_cancellable_stream(stream, raw_request)
         async for event in self._stream_responses(
             request, chunks, request_id=request_id, client_error=_llama_stream_error
@@ -846,7 +853,3 @@ def _project_embedding_response(data: dict, *, model_name: str) -> EmbeddingResp
         data=projected_data,
         usage=usage,
     )
-
-
-def _encode_error(detail: str) -> str:
-    return f"data: {json.dumps({'error': {'message': detail, 'type': 'api_error'}})}\n\n"

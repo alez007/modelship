@@ -70,7 +70,7 @@ class ClientDisconnectedError(Exception):
     the guarded work finishes."""
 
 
-class BaseInfer(ABC):
+class BaseInfer[Prepared](ABC):
     def __init__(self, model_config: ModelshipModelConfig):
         self.model_config = model_config
         self.max_context_length: int | None = None
@@ -339,12 +339,73 @@ class BaseInfer(ABC):
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ChatCompletionResponse | AsyncGenerator[str, None]:
-        return _NOT_SUPPORTED
+        """Prepare the request, then dispatch to the loader's stream/no-stream seam.
+
+        `_prepare_chat` is the single place a loader shapes/renders the request and
+        can fail — a pre-generation failure (bad content, context overflow, ...)
+        comes back here as a plain `ErrorResponse`, matching `create_response` and
+        OpenAI's own behavior: a streaming request that fails before any token is
+        produced gets a normal HTTP 4xx JSON body, not a `200` SSE stream carrying
+        an error chunk.
+        """
+        prepared = await self._prepare_chat(request, raw_request)
+        if isinstance(prepared, ErrorResponse):
+            return prepared
+        if request.stream:
+            return self._create_chat_completion_stream(request, prepared, raw_request)
+        return await self._create_chat_completion_no_stream(request, prepared, raw_request)
 
     async def create_response(
         self, request: ResponsesRequest, raw_request: RawRequestProxy
     ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+        """Responses counterpart of `create_chat_completion` — see its docstring."""
+        prepared = await self._prepare_responses(request, raw_request)
+        if isinstance(prepared, ErrorResponse):
+            return prepared
+        if request.stream:
+            return self._create_response_stream(request, prepared, raw_request)
+        return await self._create_response_no_stream(request, prepared, raw_request)
+
+    async def _prepare_chat(
+        self, request: ChatCompletionRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | Prepared:
+        """Shape/validate/render a chat request into whatever the loader's
+        stream/no-stream seams need. Default: unsupported. Loaders that override
+        `create_chat_completion`'s seams must override this instead."""
         return _NOT_SUPPORTED
+
+    async def _prepare_responses(
+        self, request: ResponsesRequest, raw_request: RawRequestProxy
+    ) -> ErrorResponse | Prepared:
+        """Responses counterpart of `_prepare_chat`."""
+        return _NOT_SUPPORTED
+
+    def _create_chat_completion_stream(
+        self, request: ChatCompletionRequest, prepared: Prepared, raw_request: RawRequestProxy
+    ) -> AsyncGenerator[str, None]:
+        """Streaming chat seam. `prepared` is whatever `_prepare_chat` returned —
+        rendering/validation already succeeded, so this only drives generation and
+        encodes SSE chunks. Unreachable unless a loader overrides `_prepare_chat`
+        without overriding this."""
+        raise NotImplementedError
+
+    async def _create_chat_completion_no_stream(
+        self, request: ChatCompletionRequest, prepared: Prepared, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ChatCompletionResponse:
+        """Non-streaming chat seam. See `_create_chat_completion_stream`."""
+        raise NotImplementedError
+
+    def _create_response_stream(
+        self, request: ResponsesRequest, prepared: Prepared, raw_request: RawRequestProxy
+    ) -> AsyncGenerator[str, None]:
+        """Streaming Responses seam. See `_create_chat_completion_stream`."""
+        raise NotImplementedError
+
+    async def _create_response_no_stream(
+        self, request: ResponsesRequest, prepared: Prepared, raw_request: RawRequestProxy
+    ) -> ErrorResponse | ResponseObject:
+        """Non-streaming Responses seam. See `_create_chat_completion_stream`."""
+        raise NotImplementedError
 
     async def create_embedding(self, request: EmbeddingRequest, raw_request: RawRequestProxy) -> ErrorResponse:
         return _NOT_SUPPORTED
