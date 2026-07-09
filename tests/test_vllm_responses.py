@@ -11,7 +11,7 @@ mocks `engine_ops` out entirely to isolate VllmInfer.create_response's own logic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from vllm.exceptions import VLLMValidationError
+from vllm.exceptions import VLLMValidationError as VllmValidationError
 
 from modelship.infer.vllm.capabilities import VllmCapabilities
 from modelship.infer.vllm.vllm_infer import VllmInfer
@@ -87,7 +87,7 @@ async def test_invalid_reasoning_effort_returns_400():
 
 @pytest.mark.asyncio
 async def test_stream_prevalidation_error_returns_plain_error_not_generator():
-    """A VLLMValidationError from render_and_params must short-circuit to a
+    """A VllmValidationError from render_and_params must short-circuit to a
     plain ErrorResponse before any generator is created — the client gets a
     400 body, not a broken/empty event stream."""
     infer = _make_infer()
@@ -95,7 +95,7 @@ async def test_stream_prevalidation_error_returns_plain_error_not_generator():
 
     with patch("modelship.infer.vllm.vllm_infer.engine_ops") as mock_ops:
         mock_ops.build_vllm_request.return_value = MagicMock()
-        mock_ops.render_and_params = AsyncMock(side_effect=VLLMValidationError("too long", parameter="messages"))
+        mock_ops.render_and_params = AsyncMock(side_effect=VllmValidationError("too long", parameter="messages"))
         result = await infer.create_response(request, raw_request=_FakeRawRequest())
 
     assert isinstance(result, ErrorResponse)
