@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - 2026-07-10
+
+### Added
+- expose llama-server prompt-cache tuning flags
+
+### Fixed
+- rename init_serving_embeding to init_serving_embedding
+- correct docstring reference to vllm.parser.Parser after alias rename
+- validate registry/expected shape when loading replica coordinator state
+- degrade _poll_disconnected_ids on any exception, not just RayActorError
+- cancel work in run_cancellable when the caller itself is cancelled
+- drop stale EmbeddingRequest re-validation workaround
+- close chunks generator on every exit path of _stream_responses
+
+### Changed
+- unify infer stream/no-stream seams and error handling
+- prefix all third-party vLLM imports with Vllm/vllm_
+- split deploy coordinator into mutex and replica-routing actors
+- batch client-disconnect polling per replica instead of per request
+- consolidate the /v1/responses streaming and non-stream lifecycle
+
 ## [0.6.0] - 2026-07-07
 
 ### Added
