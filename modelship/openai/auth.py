@@ -119,10 +119,8 @@ def resolve_identity(request: Request) -> tuple[str, str]:
     identity_key() and identity_tier() both delegate here so the header lookup, token
     extraction, and constant-time key match happen once per request instead of twice.
     """
-    # isinstance-gated rather than an `is not None` check: a MagicMock `request` (used
-    # throughout the test suite) auto-vivifies `.state._identity` as another MagicMock
-    # rather than raising AttributeError, which would otherwise look like a valid cache hit.
-    cached = getattr(request.state, "_identity", None)
+    state = getattr(request, "state", None)
+    cached = getattr(state, "_identity", None) if state is not None else None
     if isinstance(cached, tuple):
         return cached
 
@@ -131,19 +129,25 @@ def resolve_identity(request: Request) -> tuple[str, str]:
         value = request.headers.get(header_name, "").strip()
         if value:
             key = value if _SAFE_IDENTITY_RE.match(value) else hashlib.sha256(value.encode()).hexdigest()
-            request.state._identity = (key, "header")
-            return request.state._identity
+            result = (key, "header")
+            if state is not None:
+                state._identity = result
+            return result
 
     auth = request.headers.get("authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ""
     if token:
         matched = _matched_api_key(token, get_api_keys())
         if matched is not None:
-            request.state._identity = (hashlib.sha256(matched.encode()).hexdigest(), "api_key")
-            return request.state._identity
+            result = (hashlib.sha256(matched.encode()).hexdigest(), "api_key")
+            if state is not None:
+                state._identity = result
+            return result
 
-    request.state._identity = (UNSCOPED_IDENTITY, "unscoped")
-    return request.state._identity
+    result = (UNSCOPED_IDENTITY, "unscoped")
+    if state is not None:
+        state._identity = result
+    return result
 
 
 def identity_key(request: Request) -> str:

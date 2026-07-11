@@ -274,3 +274,18 @@ class TestResolveIdentityCaching:
             tier = identity_tier(request)
         assert key == hashlib.sha256(b"sk-a").hexdigest()
         assert tier == "api_key"
+
+    def test_request_like_object_without_state_attribute(self):
+        """A request-like object with no `state` attribute at all must not raise —
+        caching is simply skipped, resolution still succeeds every call."""
+
+        class _NoStateRequest:
+            def __init__(self, headers: dict[str, str]) -> None:
+                self.headers = headers
+
+        with patch.dict(os.environ, {"MSHIP_API_KEYS": "sk-a"}, clear=False):
+            os.environ.pop("MSHIP_TRUSTED_IDENTITY_HEADER", None)
+            request = _NoStateRequest({"authorization": "Bearer sk-a"})
+            assert not hasattr(request, "state")
+            result = resolve_identity(request)  # type: ignore[arg-type]
+        assert result == (hashlib.sha256(b"sk-a").hexdigest(), "api_key")
