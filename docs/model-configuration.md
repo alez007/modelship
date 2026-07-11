@@ -23,6 +23,7 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--no-metrics` | `MSHIP_METRICS` | enabled | Disable Prometheus metrics |
 | `--no-preflight` | `MSHIP_PREFLIGHT` | enabled | Disable preflight hardware auto-sizing; models run on loader/library defaults plus explicit config. Useful for benchmarking |
 | `--api-keys` | `MSHIP_API_KEYS` | — | Comma-separated API keys |
+| `--trusted-identity-header` | `MSHIP_TRUSTED_IDENTITY_HEADER` | — | Header name (e.g. `X-Consumer-Id`) a fronting credentials layer sets with a caller identity it already resolved and authorized. See [Trusted identity header](#trusted-identity-header) below |
 | `--max-request-body-bytes` | `MSHIP_MAX_REQUEST_BODY_BYTES` | `52428800` | Max request body size in bytes |
 
 ### Cache Directory Structure
@@ -63,6 +64,19 @@ Multiple gateways can run independently by using `--gateway-name`:
 python mship_deploy.py --config config/llm.yaml --gateway-name "llm-api"
 python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 ```
+
+## Trusted Identity Header
+
+modelship never authenticates callers itself — that's `MSHIP_API_KEYS`' job, and it stops at "is this caller allowed at all." modelship also has no concept of login, permissions, or per-model access control, and never will; those belong entirely to whatever sits in front of it (nginx, Kong, LiteLLM, a custom credentials layer). `MSHIP_TRUSTED_IDENTITY_HEADER` lets that fronting layer forward a caller identity it already resolved (e.g. a consumer/tenant id), which modelship uses purely for log correlation today and for scoping server-side state in the future — never for authorization.
+
+modelship trusts the header's value **unconditionally** — there is no signature check. That trust is only valid if both of the following hold:
+
+1. **The fronting layer unconditionally overwrites the header, stripping any client-supplied copy.** If it only sets the header when absent (or otherwise passes through a client-supplied value), a client can send `X-Consumer-Id: someone-elses-id` and impersonate them — this is independent of network placement and is the more common way this pattern is misconfigured.
+2. **modelship is reachable only from that fronting layer** — via network policy, a private subnet, or co-locating them on the same pod — never directly from any client. Anyone who can reach modelship's port directly can set this header themselves.
+
+For stronger guarantees than network isolation alone, add mTLS on that one internal hop (a service-mesh sidecar, Kong, or a local proxy terminating the connection) so the peer's certificate — not just network placement — proves the request came from the trusted layer. This is infrastructure the operator configures; modelship does not implement or verify certificates itself.
+
+If `MSHIP_TRUSTED_IDENTITY_HEADER` is unset (the default), modelship falls back to hashing the matched `MSHIP_API_KEYS` entry, and falls back further to a single shared bucket if no key matches either (or auth is disabled) — unchanged from today's behavior either way.
 
 ## Fields
 
