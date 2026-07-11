@@ -32,7 +32,7 @@ from modelship.metrics import (
     STREAM_CHUNKS_TOTAL,
     stamp_gateway,
 )
-from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, identity_key, identity_tier
+from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, resolve_identity
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -362,9 +362,9 @@ class ModelshipAPI:
     def _set_identity(raw_request: Request) -> str:
         from modelship.logging import identity_tier_var, identity_var
 
-        identity = identity_key(raw_request)
+        identity, tier = resolve_identity(raw_request)
         identity_var.set(identity)
-        identity_tier_var.set(identity_tier(raw_request))
+        identity_tier_var.set(tier)
         return identity
 
     def _get_handle(self, model_name: str | None) -> DeploymentHandle:

@@ -13,8 +13,10 @@ from modelship.openai.auth import (
     UNSCOPED_IDENTITY,
     ApiKeyMiddleware,
     get_api_keys,
+    get_trusted_identity_header,
     identity_key,
     identity_tier,
+    resolve_identity,
 )
 
 
@@ -231,3 +233,44 @@ class TestIdentityTier:
             os.environ.pop("MSHIP_TRUSTED_IDENTITY_HEADER", None)
             request = _make_request()
             assert identity_tier(request) == "unscoped"
+
+
+class TestEnvCaching:
+    """get_api_keys()/get_trusted_identity_header() cache on the raw env string, so a
+    changed env value must still be picked up (only an unchanged raw string should hit cache)."""
+
+    def test_get_api_keys_reflects_env_change(self):
+        with patch.dict(os.environ, {"MSHIP_API_KEYS": "sk-a"}, clear=False):
+            assert get_api_keys() == {"sk-a"}
+        with patch.dict(os.environ, {"MSHIP_API_KEYS": "sk-b"}, clear=False):
+            assert get_api_keys() == {"sk-b"}
+
+    def test_get_trusted_identity_header_reflects_env_change(self):
+        with patch.dict(os.environ, {"MSHIP_TRUSTED_IDENTITY_HEADER": "X-A"}, clear=False):
+            assert get_trusted_identity_header() == "X-A"
+        with patch.dict(os.environ, {"MSHIP_TRUSTED_IDENTITY_HEADER": "X-B"}, clear=False):
+            assert get_trusted_identity_header() == "X-B"
+
+
+class TestResolveIdentityCaching:
+    """resolve_identity() caches its result on request.state so a second call for the
+    same request is free and stable even if env vars change in between."""
+
+    def test_result_is_cached_on_request_state(self):
+        with patch.dict(os.environ, {"MSHIP_API_KEYS": "sk-a"}, clear=False):
+            os.environ.pop("MSHIP_TRUSTED_IDENTITY_HEADER", None)
+            request = _make_request({"Authorization": "Bearer sk-a"})
+            first = resolve_identity(request)
+            os.environ["MSHIP_API_KEYS"] = "sk-b"
+            second = resolve_identity(request)
+        assert first == second == (hashlib.sha256(b"sk-a").hexdigest(), "api_key")
+
+    def test_identity_key_and_identity_tier_share_one_resolution(self):
+        with patch.dict(os.environ, {"MSHIP_API_KEYS": "sk-a"}, clear=False):
+            os.environ.pop("MSHIP_TRUSTED_IDENTITY_HEADER", None)
+            request = _make_request({"Authorization": "Bearer sk-a"})
+            key = identity_key(request)
+            os.environ["MSHIP_API_KEYS"] = "sk-b"
+            tier = identity_tier(request)
+        assert key == hashlib.sha256(b"sk-a").hexdigest()
+        assert tier == "api_key"

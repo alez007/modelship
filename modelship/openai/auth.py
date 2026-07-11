@@ -26,6 +26,13 @@ UNSCOPED_IDENTITY = "unscoped"
 # ever propagating untrusted bytes into a log line or a state-store key.
 _SAFE_IDENTITY_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
+# (raw env string, parsed value) caches for get_api_keys()/get_trusted_identity_header().
+# Keyed on the raw string rather than parsed once at import time so tests using
+# patch.dict(os.environ, ...) still see up-to-date values with no manual cache clearing —
+# the cache only pays off across the many requests within one unchanging-env process.
+_api_keys_cache: tuple[str, set[str]] | None = None
+_trusted_header_cache: tuple[str, str | None] | None = None
+
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Validates ``Authorization: Bearer <key>`` against a set of allowed API keys."""
@@ -73,17 +80,30 @@ def _matched_api_key(token: str, keys: set[str]) -> str | None:
 
 def get_api_keys() -> set[str]:
     """Read allowed API keys from the ``MSHIP_API_KEYS`` environment variable (comma-separated)."""
+    global _api_keys_cache
     raw = os.environ.get("MSHIP_API_KEYS", "")
-    return {k.strip() for k in raw.split(",") if k.strip()}
+    cached = _api_keys_cache
+    if cached is not None and cached[0] == raw:
+        return cached[1]
+    keys = {k.strip() for k in raw.split(",") if k.strip()}
+    _api_keys_cache = (raw, keys)
+    return keys
 
 
 def get_trusted_identity_header() -> str | None:
     """Read the trusted identity header name from ``MSHIP_TRUSTED_IDENTITY_HEADER``, if set."""
-    return os.environ.get("MSHIP_TRUSTED_IDENTITY_HEADER", "").strip() or None
+    global _trusted_header_cache
+    raw = os.environ.get("MSHIP_TRUSTED_IDENTITY_HEADER", "")
+    cached = _trusted_header_cache
+    if cached is not None and cached[0] == raw:
+        return cached[1]
+    value = raw.strip() or None
+    _trusted_header_cache = (raw, value)
+    return value
 
 
-def identity_key(request: Request) -> str:
-    """Resolve a stable per-caller identity string for log correlation and future state-keying.
+def resolve_identity(request: Request) -> tuple[str, str]:
+    """Resolve (identity_key, identity_tier) in one pass and cache the result on ``request.state``.
 
     Not an auth check — never rejects a request. Resolution order:
 
@@ -91,40 +111,50 @@ def identity_key(request: Request) -> str:
        raw header value (sanitized) — a non-secret identifier an operator's
        credentials layer assigned, kept legible in logs/state keys. Requires that
        layer to unconditionally overwrite the header and modelship to be
-       unreachable except from it (see docs/model-configuration.md).
+       unreachable except from it (see docs/model-configuration.md). Tier: "header".
     2. The matched ``MSHIP_API_KEYS`` entry: sha256 hex (key material never
-       appears in logs or keys).
-    3. Neither: ``UNSCOPED_IDENTITY`` — every such caller shares one bucket.
+       appears in logs or keys). Tier: "api_key".
+    3. Neither: ``UNSCOPED_IDENTITY`` — every such caller shares one bucket. Tier: "unscoped".
+
+    identity_key() and identity_tier() both delegate here so the header lookup, token
+    extraction, and constant-time key match happen once per request instead of twice.
     """
+    # isinstance-gated rather than an `is not None` check: a MagicMock `request` (used
+    # throughout the test suite) auto-vivifies `.state._identity` as another MagicMock
+    # rather than raising AttributeError, which would otherwise look like a valid cache hit.
+    cached = getattr(request.state, "_identity", None)
+    if isinstance(cached, tuple):
+        return cached
+
     header_name = get_trusted_identity_header()
     if header_name:
         value = request.headers.get(header_name, "").strip()
         if value:
-            return value if _SAFE_IDENTITY_RE.match(value) else hashlib.sha256(value.encode()).hexdigest()
+            key = value if _SAFE_IDENTITY_RE.match(value) else hashlib.sha256(value.encode()).hexdigest()
+            request.state._identity = (key, "header")
+            return request.state._identity
 
     auth = request.headers.get("authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ""
     if token:
         matched = _matched_api_key(token, get_api_keys())
         if matched is not None:
-            return hashlib.sha256(matched.encode()).hexdigest()
+            request.state._identity = (hashlib.sha256(matched.encode()).hexdigest(), "api_key")
+            return request.state._identity
 
-    return UNSCOPED_IDENTITY
+    request.state._identity = (UNSCOPED_IDENTITY, "unscoped")
+    return request.state._identity
+
+
+def identity_key(request: Request) -> str:
+    """Resolve a stable per-caller identity string for log correlation and future state-keying."""
+    return resolve_identity(request)[0]
 
 
 def identity_tier(request: Request) -> str:
-    """Return which identity_key() tier would resolve for *request*: "header" / "api_key" / "unscoped".
+    """Return which identity_key() tier resolved for *request*: "header" / "api_key" / "unscoped".
 
     For logging/observability only — lets an unexpected shift to "unscoped" (e.g. a
     fronting proxy that stopped setting the trusted header) show up in logs.
     """
-    header_name = get_trusted_identity_header()
-    if header_name and request.headers.get(header_name, "").strip():
-        return "header"
-
-    auth = request.headers.get("authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
-    if token and _matched_api_key(token, get_api_keys()) is not None:
-        return "api_key"
-
-    return "unscoped"
+    return resolve_identity(request)[1]
