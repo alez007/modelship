@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="docs/assets/logo.svg" alt="Modelship" width="160">
+</div>
+
 # Modelship
 
 [![CI](https://github.com/alez007/modelship/actions/workflows/ci.yml/badge.svg)](https://github.com/alez007/modelship/actions/workflows/ci.yml)
