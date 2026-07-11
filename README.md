@@ -1,5 +1,9 @@
 <div align="center">
-  <img src="docs/assets/logo.svg" alt="Modelship" width="160">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+    <img alt="Modelship" src="docs/assets/logo-light.svg" width="160">
+  </picture>
 </div>
 
 # Modelship
