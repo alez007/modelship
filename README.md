@@ -1,3 +1,11 @@
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+    <img alt="Modelship" src="docs/assets/logo-light.svg" width="160">
+  </picture>
+</div>
+
 # Modelship
 
 [![CI](https://github.com/alez007/modelship/actions/workflows/ci.yml/badge.svg)](https://github.com/alez007/modelship/actions/workflows/ci.yml)
