@@ -21,10 +21,11 @@ _PUBLIC_PATHS = {"/health"}
 UNSCOPED_IDENTITY = "unscoped"
 
 # Charset a trusted-header identity value must match to be used raw (as a log
-# field / state-key segment). Anything outside this — newlines, "/", "..",
-# control chars, or overlong values — falls back to a sha256 hash instead of
-# ever propagating untrusted bytes into a log line or a state-store key.
-_SAFE_IDENTITY_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# field / state-key segment). Anything outside this — newlines, "/", control
+# chars, or overlong values — falls back to a sha256 hash instead of ever
+# propagating untrusted bytes into a log line or a state-store key. "." is in
+_SAFE_IDENTITY_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9_.:-]{1,128}$")
+
 
 # (raw env string, parsed value) caches for get_api_keys()/get_trusted_identity_header().
 # Keyed on the raw string rather than parsed once at import time so tests using

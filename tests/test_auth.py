@@ -214,6 +214,22 @@ class TestIdentityKey:
             result = identity_key(request)
         assert result == hashlib.sha256(overlong.encode()).hexdigest()
 
+    def test_dot_dot_header_value_falls_back_to_hash(self):
+        """ ".." matches the charset (dots are allowed mid-value, e.g. "svc.billing") but as
+        a whole segment would traverse a future file-based state store keyed by this value."""
+        env = {"MSHIP_TRUSTED_IDENTITY_HEADER": "X-Consumer-Id"}
+        with patch.dict(os.environ, env):
+            request = _make_request({"X-Consumer-Id": ".."})
+            result = identity_key(request)
+        assert result == hashlib.sha256(b"..").hexdigest()
+
+    def test_single_dot_header_value_falls_back_to_hash(self):
+        env = {"MSHIP_TRUSTED_IDENTITY_HEADER": "X-Consumer-Id"}
+        with patch.dict(os.environ, env):
+            request = _make_request({"X-Consumer-Id": "."})
+            result = identity_key(request)
+        assert result == hashlib.sha256(b".").hexdigest()
+
 
 class TestIdentityTier:
     def test_header_tier(self):
