@@ -7,13 +7,21 @@ from logging.handlers import SysLogHandler
 from urllib.parse import urlparse
 
 request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
+# Caller-identity fields for log correlation (see modelship.openai.auth.identity_key).
+# identity_tier records which resolution tier produced the identity ("header" /
+# "api_key" / "unscoped") so an unexpected shift to "unscoped" — e.g. a fronting
+# proxy that stopped setting the trusted header — is visible in logs.
+identity_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("identity", default=None)
+identity_tier_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("identity_tier", default=None)
 
 _configured = False
 
 
-class RequestIdFilter(logging.Filter):
+class RequestContextFilter(logging.Filter):
     def filter(self, record):
         record.request_id = request_id_var.get(None)
+        record.identity = identity_var.get(None)
+        record.identity_tier = identity_tier_var.get(None)
         return True
 
 
@@ -29,6 +37,12 @@ class ModelshipJsonFormatter(logging.Formatter):
         req_id = getattr(record, "request_id", None)
         if req_id:
             msg["request_id"] = req_id
+        identity = getattr(record, "identity", None)
+        if identity:
+            msg["identity"] = identity
+        identity_tier = getattr(record, "identity_tier", None)
+        if identity_tier:
+            msg["identity_tier"] = identity_tier
         if record.exc_info and record.exc_info[1] is not None:
             msg["exception"] = self.formatException(record.exc_info)
         return json.dumps(msg)
@@ -39,7 +53,9 @@ class ModelshipTextFormatter(logging.Formatter):
         ts = self.formatTime(record, self.datefmt)
         req_id = getattr(record, "request_id", None)
         req_part = f" [{req_id}]" if req_id else ""
-        base = f"[{ts}] {record.levelname:<8} {record.name}{req_part} | {record.getMessage()}"
+        identity = getattr(record, "identity", None)
+        id_part = f" id={identity}" if identity else ""
+        base = f"[{ts}] {record.levelname:<8} {record.name}{req_part}{id_part} | {record.getMessage()}"
         if record.exc_info and record.exc_info[1] is not None:
             base += "\n" + self.formatException(record.exc_info)
         return base
@@ -160,7 +176,7 @@ def configure_logging() -> None:
     else:
         handler.setFormatter(ModelshipTextFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
 
-    handler.addFilter(RequestIdFilter())
+    handler.addFilter(RequestContextFilter())
     root_logger.addHandler(handler)
 
     # OpenTelemetry: add an OTLP log exporter as a second handler when configured.

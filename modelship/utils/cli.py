@@ -16,6 +16,7 @@ _STRING_ARG_TO_ENV: dict[str, str] = {
     "log_target": "MSHIP_LOG_TARGET",
     "otel_endpoint": "OTEL_EXPORTER_OTLP_ENDPOINT",
     "api_keys": "MSHIP_API_KEYS",
+    "trusted_identity_header": "MSHIP_TRUSTED_IDENTITY_HEADER",
     "gateway_name": "MSHIP_GATEWAY_NAME",
 }
 
@@ -83,6 +84,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--api-keys", help="Comma-separated API keys (env: MSHIP_API_KEYS)")
+    parser.add_argument(
+        "--trusted-identity-header",
+        help=(
+            "Header name (e.g. X-Consumer-Id) whose value a fronting credentials layer has "
+            "already resolved and authorized; modelship trusts it unconditionally for log "
+            "correlation and future state-keying (env: MSHIP_TRUSTED_IDENTITY_HEADER). "
+            "Only enable when modelship is reachable exclusively from that layer — see "
+            "docs/model-configuration.md."
+        ),
+    )
     parser.add_argument(
         "--max-request-body-bytes", type=int, help="Max request body size in bytes (env: MSHIP_MAX_REQUEST_BODY_BYTES)"
     )

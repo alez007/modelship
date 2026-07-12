@@ -221,14 +221,22 @@ class ModelDeployment:
 
         request_id_var.set(request_id)
 
+    @staticmethod
+    def _set_identity(identity: str | None) -> None:
+        from modelship.logging import identity_var
+
+        identity_var.set(identity)
+
     async def generate(
         self,
         request: ChatCompletionRequest,
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_chat_completion(request, proxy)
@@ -251,8 +259,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_response(request, proxy)
@@ -272,8 +282,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_embedding(request, proxy)
@@ -291,8 +303,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_transcription(audio_data, request, proxy)
@@ -310,8 +324,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_translation(audio_data, request, proxy)
@@ -328,8 +344,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_speech(request, proxy)
@@ -346,8 +364,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_generation(request, proxy)
@@ -366,8 +386,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_edit(image_data, mask_data, request, proxy)
@@ -385,8 +407,10 @@ class ModelDeployment:
         request_headers: dict[str, str],
         disconnect_registry: Any,
         request_id: str | None = None,
+        identity: str | None = None,
     ):
         self._set_request_id(request_id)
+        self._set_identity(identity)
         proxy = RawRequestProxy(disconnect_registry, request_headers, request_id)
         start = time.monotonic()
         result = await self.infer.create_image_variation(image_data, request, proxy)

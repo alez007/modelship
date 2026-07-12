@@ -15,11 +15,13 @@ from modelship.logging import (
     _LOWERCASE_LEVEL_LIBS,
     ModelshipJsonFormatter,
     ModelshipTextFormatter,
-    RequestIdFilter,
+    RequestContextFilter,
     _parse_syslog_target,
     _setup_otel,
     configure_logging,
     get_logger,
+    identity_tier_var,
+    identity_var,
     propagate_lib_log_env,
     request_id_var,
 )
@@ -43,8 +45,12 @@ def _reset_logging():
     for k in _LIB_ENV_VARS:
         os.environ.pop(k, None)
     token = request_id_var.set(None)
+    identity_token = identity_var.set(None)
+    identity_tier_token = identity_tier_var.set(None)
     yield
     request_id_var.reset(token)
+    identity_var.reset(identity_token)
+    identity_tier_var.reset(identity_tier_token)
     yl._configured = False
     root.handlers.clear()
     for name, lvl in saved_lib_levels.items():
@@ -157,19 +163,30 @@ class TestVllmConfigureLoggingOptOut:
             assert os.environ["VLLM_CONFIGURE_LOGGING"] == "1"
 
 
-class TestRequestIdFilter:
+class TestRequestContextFilter:
     def test_injects_request_id(self):
-        filt = RequestIdFilter()
+        filt = RequestContextFilter()
         record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
         request_id_var.set("abc-123")
         filt.filter(record)
         assert record.request_id == "abc-123"
 
     def test_none_when_not_set(self):
-        filt = RequestIdFilter()
+        filt = RequestContextFilter()
         record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
         filt.filter(record)
         assert record.request_id is None
+        assert record.identity is None
+        assert record.identity_tier is None
+
+    def test_injects_identity_and_tier(self):
+        filt = RequestContextFilter()
+        record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
+        identity_var.set("customer-42")
+        identity_tier_var.set("header")
+        filt.filter(record)
+        assert record.identity == "customer-42"
+        assert record.identity_tier == "header"
 
 
 class TestModelshipJsonFormatter:
@@ -214,6 +231,26 @@ class TestModelshipJsonFormatter:
         assert "exception" in parsed
         assert "ValueError: boom" in parsed["exception"]
 
+    def test_includes_identity_and_tier(self):
+        formatter = ModelshipJsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+        record = logging.LogRecord("modelship.api", logging.INFO, "", 0, "test", (), None)
+        record.identity = "customer-42"
+        record.identity_tier = "header"
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert parsed["identity"] == "customer-42"
+        assert parsed["identity_tier"] == "header"
+
+    def test_excludes_identity_when_none(self):
+        formatter = ModelshipJsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S")
+        record = logging.LogRecord("modelship.api", logging.INFO, "", 0, "test", (), None)
+        record.identity = None
+        record.identity_tier = None
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert "identity" not in parsed
+        assert "identity_tier" not in parsed
+
 
 class TestModelshipTextFormatter:
     def test_basic_format(self):
@@ -239,6 +276,20 @@ class TestModelshipTextFormatter:
         output = formatter.format(record)
         assert "None" not in output
 
+    def test_includes_identity(self):
+        formatter = ModelshipTextFormatter(datefmt="%Y-%m-%d %H:%M:%S")
+        record = logging.LogRecord("modelship.api", logging.INFO, "", 0, "hello", (), None)
+        record.identity = "customer-42"
+        output = formatter.format(record)
+        assert "id=customer-42" in output
+
+    def test_excludes_identity_when_none(self):
+        formatter = ModelshipTextFormatter(datefmt="%Y-%m-%d %H:%M:%S")
+        record = logging.LogRecord("modelship.api", logging.INFO, "", 0, "hello", (), None)
+        record.identity = None
+        output = formatter.format(record)
+        assert "id=" not in output
+
 
 class TestEndToEnd:
     def test_log_output_with_request_id(self, capsys):
@@ -260,6 +311,18 @@ class TestEndToEnd:
         parsed = json.loads(captured.err)
         assert parsed["request_id"] == "json-test-id"
         assert parsed["message"] == "json test"
+
+    @patch.dict(os.environ, {"MSHIP_LOG_FORMAT": "json"})
+    def test_json_log_output_includes_identity(self, capsys):
+        configure_logging()
+        log = get_logger("test")
+        identity_var.set("customer-42")
+        identity_tier_var.set("header")
+        log.info("identity test")
+        captured = capsys.readouterr()
+        parsed = json.loads(captured.err)
+        assert parsed["identity"] == "customer-42"
+        assert parsed["identity_tier"] == "header"
 
 
 class TestParseSyslogTarget:

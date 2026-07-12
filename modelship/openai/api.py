@@ -32,7 +32,7 @@ from modelship.metrics import (
     STREAM_CHUNKS_TOTAL,
     stamp_gateway,
 )
-from modelship.openai.auth import ApiKeyMiddleware, get_api_keys
+from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, resolve_identity
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -358,6 +358,15 @@ class ModelshipAPI:
 
         request_id_var.set(request_id)
 
+    @staticmethod
+    def _set_identity(raw_request: Request) -> str:
+        from modelship.logging import identity_tier_var, identity_var
+
+        identity, tier = resolve_identity(raw_request)
+        identity_var.set(identity)
+        identity_tier_var.set(tier)
+        return identity
+
     def _get_handle(self, model_name: str | None) -> DeploymentHandle:
         self._ensure_watching()
         if model_name is None or model_name not in self.models:
@@ -516,6 +525,7 @@ class ModelshipAPI:
     async def create_chat_completion(self, request: ChatCompletionRequest, raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         model = request.model or ""
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_chat_completion")
@@ -537,13 +547,14 @@ class ModelshipAPI:
             request.max_tokens,
         )
         logger.debug("chat_completion full request: %s", request.model_dump_json())
-        response_gen = handle.generate.options(stream=True).remote(request, headers, watcher.registry, req_id)
+        response_gen = handle.generate.options(stream=True).remote(request, headers, watcher.registry, req_id, identity)
         return await self._handle_response(response_gen, watcher, model, "create_chat_completion")
 
     @app.post("/v1/responses")
     async def create_response(self, request: ResponsesRequest, raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         model = request.model or ""
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_response")
@@ -560,7 +571,7 @@ class ModelshipAPI:
         # doesn't overload on the stream literal, so narrow it explicitly.
         response_gen = cast(
             "DeploymentResponseGenerator[Any]",
-            handle.respond.options(stream=True).remote(request, headers, watcher.registry, req_id),
+            handle.respond.options(stream=True).remote(request, headers, watcher.registry, req_id, identity),
         )
         return await self._handle_response(response_gen, watcher, model, "create_response")
 
@@ -568,18 +579,20 @@ class ModelshipAPI:
     async def create_embeddings(self, request: EmbeddingRequest, raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         model = request.model or ""
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_embeddings")
         headers = dict(raw_request.headers)
         logger.info("embeddings model=%s", model)
-        response_gen = handle.embed.options(stream=True).remote(request, headers, watcher.registry, req_id)
+        response_gen = handle.embed.options(stream=True).remote(request, headers, watcher.registry, req_id, identity)
         return await self._handle_response(response_gen, watcher, model, "create_embeddings")
 
     @app.post("/v1/audio/transcriptions")
     async def create_transcriptions(self, request: Annotated[TranscriptionRequest, Form()], raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         model = request.model or ""
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_transcriptions")
@@ -593,7 +606,7 @@ class ModelshipAPI:
             await request.file.close()
         request_no_file = TranscriptionRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.transcribe.options(stream=True).remote(
-            audio_data, request_no_file, headers, watcher.registry, req_id
+            audio_data, request_no_file, headers, watcher.registry, req_id, identity
         )
         return await self._handle_response(response_gen, watcher, model, "create_transcriptions")
 
@@ -601,6 +614,7 @@ class ModelshipAPI:
     async def create_translations(self, request: Annotated[TranslationRequest, Form()], raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         model = request.model or ""
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_translations")
@@ -614,7 +628,7 @@ class ModelshipAPI:
             await request.file.close()
         request_no_file = TranslationRequest.model_construct(**request.model_dump(exclude={"file"}))
         response_gen = handle.translate.options(stream=True).remote(
-            audio_data, request_no_file, headers, watcher.registry, req_id
+            audio_data, request_no_file, headers, watcher.registry, req_id, identity
         )
         return await self._handle_response(response_gen, watcher, model, "create_translations")
 
@@ -622,31 +636,34 @@ class ModelshipAPI:
     async def create_speech(self, request: SpeechRequest, raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         logger.info("speech model=%s voice=%s format=%s", request.model, request.voice, request.response_format)
         logger.debug("speech full request: %s", request.model_dump_json())
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_speech")
         headers = dict(raw_request.headers)
-        response_gen = handle.speak.options(stream=True).remote(request, headers, watcher.registry, req_id)
+        response_gen = handle.speak.options(stream=True).remote(request, headers, watcher.registry, req_id, identity)
         return await self._handle_response(response_gen, watcher, request.model, "create_speech")
 
     @app.post("/v1/images/generations")
     async def create_image(self, request: ImageGenerationRequest, raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         logger.info(
             "image_generation model=%s prompt=%r n=%d size=%s", request.model, request.prompt, request.n, request.size
         )
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_image")
         headers = dict(raw_request.headers)
-        response_gen = handle.imagine.options(stream=True).remote(request, headers, watcher.registry, req_id)
+        response_gen = handle.imagine.options(stream=True).remote(request, headers, watcher.registry, req_id, identity)
         return await self._handle_response(response_gen, watcher, request.model, "create_image")
 
     @app.post("/v1/images/edits")
     async def create_image_edit(self, request: Annotated[ImageEditRequest, Form()], raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         logger.info(
             "image_edit model=%s prompt=%r n=%d size=%s mask=%s",
             request.model,
@@ -672,7 +689,7 @@ class ModelshipAPI:
                 await request.mask.close()
         request_no_file = ImageEditRequest.model_construct(**request.model_dump(exclude={"image", "mask"}))
         response_gen = handle.edit_image.options(stream=True).remote(
-            image_data, mask_data, request_no_file, headers, watcher.registry, req_id
+            image_data, mask_data, request_no_file, headers, watcher.registry, req_id, identity
         )
         return await self._handle_response(response_gen, watcher, request.model, "create_image_edit")
 
@@ -680,6 +697,7 @@ class ModelshipAPI:
     async def create_image_variation(self, request: Annotated[ImageVariationRequest, Form()], raw_request: Request):
         req_id = random_uuid()
         self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
         logger.info("image_variation model=%s n=%d size=%s", request.model, request.n, request.size)
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=request.model, endpoint="create_image_variation")
@@ -694,6 +712,6 @@ class ModelshipAPI:
             await request.image.close()
         request_no_file = ImageVariationRequest.model_construct(**request.model_dump(exclude={"image"}))
         response_gen = handle.vary_image.options(stream=True).remote(
-            image_data, request_no_file, headers, watcher.registry, req_id
+            image_data, request_no_file, headers, watcher.registry, req_id, identity
         )
         return await self._handle_response(response_gen, watcher, request.model, "create_image_variation")
