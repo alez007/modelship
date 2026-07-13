@@ -12,13 +12,15 @@ One arg covers a full Redis connection, and a new backend is one entry in
 from ``MSHIP_STATE_STORE``.
 """
 
+from __future__ import annotations
+
 import os
 import time
 from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 
 from modelship.metrics import STATE_STORE_OPERATION_DURATION_SECONDS, STATE_STORE_OPERATIONS_TOTAL
-from modelship.state.base import JsonValue, StateStore
+from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
 from modelship.state.file import FileStateStore
 from modelship.state.memory import MemoryStateStore
 
@@ -27,6 +29,7 @@ __all__ = [
     "JsonValue",
     "MemoryStateStore",
     "StateStore",
+    "StateStoreUnavailableError",
     "get_state_store",
     "state_store_from_uri",
 ]
@@ -58,6 +61,16 @@ class _InstrumentedStateStore(StateStore):
             raise AttributeError(name)
         return getattr(self._inner, name)
 
+    def _record(self, op: str, start: float, result: str) -> None:
+        # Best-effort: a metrics-agent hiccup must never mask the real op error.
+        try:
+            STATE_STORE_OPERATION_DURATION_SECONDS.observe(
+                time.perf_counter() - start, tags={"backend": self._backend, "op": op}
+            )
+            STATE_STORE_OPERATIONS_TOTAL.inc(tags={"backend": self._backend, "op": op, "result": result})
+        except Exception:
+            pass
+
     def _run(self, op: str, fn):
         start = time.perf_counter()
         result = "ok"
@@ -67,23 +80,42 @@ class _InstrumentedStateStore(StateStore):
             result = "error"
             raise
         finally:
-            # Best-effort: a metrics-agent hiccup must never mask the real op error.
-            try:
-                STATE_STORE_OPERATION_DURATION_SECONDS.observe(
-                    time.perf_counter() - start, tags={"backend": self._backend, "op": op}
-                )
-                STATE_STORE_OPERATIONS_TOTAL.inc(tags={"backend": self._backend, "op": op, "result": result})
-            except Exception:
-                pass
+            self._record(op, start, result)
+
+    async def _arun(self, op: str, coro):
+        start = time.perf_counter()
+        result = "ok"
+        try:
+            return await coro
+        except Exception:
+            result = "error"
+            raise
+        finally:
+            self._record(op, start, result)
 
     def get(self, key: str) -> JsonValue | None:
         return self._run("get", lambda: self._inner.get(key))
 
-    def set(self, key: str, value: JsonValue) -> None:
-        self._run("set", lambda: self._inner.set(key, value))
+    def set(self, key: str, value: JsonValue, *, ttl_seconds: float | None = None) -> None:
+        self._run("set", lambda: self._inner.set(key, value, ttl_seconds=ttl_seconds))
 
     def delete(self, key: str) -> None:
         self._run("delete", lambda: self._inner.delete(key))
+
+    def list(self, prefix: str) -> list[str]:
+        return self._run("list", lambda: self._inner.list(prefix))
+
+    async def get_async(self, key: str) -> JsonValue | None:
+        return await self._arun("get", self._inner.get_async(key))
+
+    async def set_async(self, key: str, value: JsonValue, *, ttl_seconds: float | None = None) -> None:
+        await self._arun("set", self._inner.set_async(key, value, ttl_seconds=ttl_seconds))
+
+    async def delete_async(self, key: str) -> None:
+        await self._arun("delete", self._inner.delete_async(key))
+
+    async def list_async(self, prefix: str) -> list[str]:
+        return await self._arun("list", self._inner.list_async(prefix))
 
 
 def _default_file_dir() -> Path:

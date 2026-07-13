@@ -5,14 +5,20 @@ dir defaults into the model cache, which is already a mounted volume (Docker), a
 PVC (k8s), or a local dir — so it survives the Ray cluster dying. Plain atomic
 JSON writes (vs. an embedded DB) stay reliable on NFS-style RWX volumes and match
 the ``JsonValue`` contract exactly.
+
+Each file holds an envelope ``{_MARKER: {"exp": <epoch|null>}, "value": <value>}``
+so a TTL can travel with the value; a file without the marker is read as a legacy
+raw value (back-compat with pre-envelope effective-config state).
 """
 
+import contextlib
 import json
 import re
+import time
 from pathlib import Path
 
 from modelship.logging import get_logger
-from modelship.state.base import JsonValue, StateStore
+from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
 
 logger = get_logger("startup")
 
@@ -20,9 +26,21 @@ logger = get_logger("startup")
 # slugify each before using it as a path component.
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
+# Envelope marker. Deliberately unusual so a real stored value never collides.
+_MARKER = "__mship_state_v1__"
+
 
 def _slug(segment: str) -> str:
     return _SLUG_RE.sub("-", segment).strip("-") or "_"
+
+
+def _unwrap(doc: JsonValue) -> tuple[JsonValue | None, float | None]:
+    """Return (value, expires_at) from a stored doc; a doc without the marker is a
+    legacy raw value with no expiry."""
+    if isinstance(doc, dict) and _MARKER in doc:
+        meta = doc.get(_MARKER) or {}
+        return doc.get("value"), meta.get("exp") if isinstance(meta, dict) else None
+    return doc, None
 
 
 class FileStateStore(StateStore):
@@ -38,22 +56,58 @@ class FileStateStore(StateStore):
 
     def get(self, key: str) -> JsonValue | None:
         path = self._path(key)
-        if not path.exists():
-            return None
         try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            logger.exception("Corrupt/unreadable state at %s; treating as missing.", path)
+            raw = path.read_text()
+        except FileNotFoundError:
             return None
+        except OSError as exc:
+            raise StateStoreUnavailableError(f"reading state at {path}") from exc
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.exception("Corrupt state at %s; treating as missing.", path)
+            return None
+        value, expires_at = _unwrap(doc)
+        if expires_at is not None and time.time() >= expires_at:
+            with contextlib.suppress(OSError):
+                path.unlink()  # opportunistic cleanup; harmless if it fails
+            return None
+        return value
 
-    def set(self, key: str, value: JsonValue) -> None:
+    def set(self, key: str, value: JsonValue, *, ttl_seconds: float | None = None) -> None:
         path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic replace: a crash mid-write never leaves a torn file the next read
-        # would choke on.
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(value, indent=2))
-        tmp.replace(path)
+        expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
+        doc = {_MARKER: {"exp": expires_at}, "value": value}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic replace: a crash mid-write never leaves a torn file the next
+            # read would choke on.
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(doc, indent=2))
+            tmp.replace(path)
+        except OSError as exc:
+            raise StateStoreUnavailableError(f"writing state at {path}") from exc
 
     def delete(self, key: str) -> None:
-        self._path(key).unlink(missing_ok=True)
+        try:
+            self._path(key).unlink(missing_ok=True)
+        except OSError as exc:
+            raise StateStoreUnavailableError(f"deleting state {key!r}") from exc
+
+    def list(self, prefix: str) -> list[str]:
+        if not self.base_dir.exists():
+            return []
+        try:
+            files = list(self.base_dir.rglob("*.json"))
+        except OSError as exc:
+            raise StateStoreUnavailableError(f"listing state under {self.base_dir}") from exc
+        keys = []
+        for path in files:
+            if path.name.endswith(".tmp"):
+                continue
+            # Reconstruct the (slugged) key from the path; lossy for keys with
+            # unsafe chars, so list() round-trips only already-safe segments.
+            key = "/".join(path.relative_to(self.base_dir).with_suffix("").parts)
+            if key.startswith(prefix):
+                keys.append(key)
+        return keys
