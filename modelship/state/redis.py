@@ -24,7 +24,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from modelship.logging import get_logger
-from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
+from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError, normalize_prefix
 
 logger = get_logger("startup")
 
@@ -100,6 +100,7 @@ class RedisStateStore(StateStore):
             self._sync().delete(_slug(key))
 
     def list(self, prefix: str) -> list[str]:
+        prefix = normalize_prefix(prefix)
         match = _slug(prefix) + "*"
         with _mapped(f"redis scan {prefix!r}"):
             keys = list(self._sync().scan_iter(match=match))
@@ -119,6 +120,7 @@ class RedisStateStore(StateStore):
             await self._async().delete(_slug(key))
 
     async def list_async(self, prefix: str) -> list[str]:
+        prefix = normalize_prefix(prefix)
         match = _slug(prefix) + "*"
         keys = []
         with _mapped(f"redis scan {prefix!r}"):

@@ -69,6 +69,13 @@ class TestBackends:
             "responses/u2/c",
         ]
 
+    def test_list_prefix_trailing_slash(self, store):
+        # A trailing slash on the prefix must not turn the boundary check into a
+        # literal "//" that can never match.
+        store.set("responses/u1/a", {"n": 1})
+        store.set("responses/u1/b", {"n": 2})
+        assert sorted(store.list("responses/u1/")) == ["responses/u1/a", "responses/u1/b"]
+
     @pytest.mark.asyncio
     async def test_async_mirrors_sync(self, store):
         await store.set_async("k", {"x": 1})

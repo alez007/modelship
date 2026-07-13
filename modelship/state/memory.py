@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import time
 
-from modelship.state.base import JsonValue, StateStore
+from modelship.state.base import JsonValue, StateStore, normalize_prefix
 
 
 class MemoryStateStore(StateStore):
@@ -38,6 +38,7 @@ class MemoryStateStore(StateStore):
         self._data.pop(key, None)
 
     def list(self, prefix: str) -> list[str]:
+        prefix = normalize_prefix(prefix)
         now = time.time()
         return [
             k

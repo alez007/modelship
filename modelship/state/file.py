@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 from modelship.logging import get_logger
-from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
+from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError, normalize_prefix
 
 logger = get_logger("startup")
 
@@ -99,6 +99,7 @@ class FileStateStore(StateStore):
             raise StateStoreUnavailableError(f"deleting state {key!r}") from exc
 
     def list(self, prefix: str) -> list[str]:
+        prefix = normalize_prefix(prefix)
         if not self.base_dir.exists():
             return []
         try:

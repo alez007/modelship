@@ -26,6 +26,14 @@ from abc import ABC, abstractmethod
 JsonValue = dict | list
 
 
+def normalize_prefix(prefix: str) -> str:
+    """Canonicalize a ``list()`` prefix the same way keys themselves are built (see
+    each backend's key-building), so a trailing/leading/doubled slash — e.g.
+    ``"responses/u1/"`` — still matches ``"responses/u1/x"`` instead of never
+    matching due to a literal ``"//"`` in the comparison."""
+    return "/".join(p for p in prefix.split("/") if p)
+
+
 class StateStoreUnavailableError(Exception):
     """The backend is unreachable/errored — distinct from a key being absent.
 
