@@ -47,6 +47,8 @@ def build_cache_env_vars() -> dict[str, str]:
         "FLASHINFER_CACHE_DIR": os.environ.get("FLASHINFER_CACHE_DIR", f"{base_cache}/flashinfer"),
         # Triton JITs kernels at import for some archs
         "TRITON_CACHE_DIR": os.environ.get("TRITON_CACHE_DIR", f"{base_cache}/triton"),
+        # vLLM's usage-stats thread writes usage_stats.json/do_not_track here
+        "VLLM_CONFIG_ROOT": os.environ.get("VLLM_CONFIG_ROOT", f"{base_cache}/vllm-config"),
     }
 
 
