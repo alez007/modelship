@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2] - 2026-07-13
+
+### Added
+- harden state store for async, TTL, listing, and availability errors
+- add identity_key() caller-identity primitive for log correlation
+
+### Fixed
+- redirect vLLM usage-stats config dir to MSHIP_CACHE_DIR
+- redirect Triton JIT cache to MSHIP_CACHE_DIR
+- normalize list() prefix so a trailing slash doesn't break segment matching
+- clean up leaked tmp file when FileStateStore.set() fails mid-write
+- enforce segment boundaries in StateStore prefix listing, avoid tmp filename collisions
+- reject exact "." and ".." trusted-header identity values
+- guard resolve_identity() against request-like objects with no state attribute
+- use theme-specific SVG variants for README logo
+
+### Changed
+- cache identity resolution to avoid redundant env parsing and header lookups
+- add project logo to README
+
 ## [0.6.1] - 2026-07-10
 
 ### Added
