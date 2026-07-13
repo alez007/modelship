@@ -79,15 +79,17 @@ class FileStateStore(StateStore):
         path = self._path(key)
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         doc = {_MARKER: {"exp": expires_at}, "value": value}
+        # Atomic replace: a crash mid-write never leaves a torn file the next read
+        # would choke on. Unique suffix avoids concurrent writers to the same key
+        # colliding on one tmp file.
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic replace: a crash mid-write never leaves a torn file the next
-            # read would choke on. Unique suffix avoids concurrent writers to the
-            # same key colliding on one tmp file.
-            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
             tmp.write_text(json.dumps(doc, indent=2))
             tmp.replace(path)
         except OSError as exc:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
             raise StateStoreUnavailableError(f"writing state at {path}") from exc
 
     def delete(self, key: str) -> None:

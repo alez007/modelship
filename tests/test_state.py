@@ -128,6 +128,15 @@ class TestFileStateStore:
         with pytest.raises(StateStoreUnavailableError):
             store.get("k")
 
+    def test_write_failure_cleans_up_tmp_file(self, tmp_path):
+        # A directory where the value file should be makes the final tmp.replace()
+        # raise OSError; the tmp file it created must not be left behind.
+        store = FileStateStore(tmp_path)
+        (tmp_path / "k.json").mkdir()
+        with pytest.raises(StateStoreUnavailableError):
+            store.set("k", {"x": 1})
+        assert list(tmp_path.glob("*.tmp")) == []
+
 
 class TestRedisStateStore:
     def test_ttl_sets_native_expiry(self):
