@@ -45,6 +45,8 @@ def build_cache_env_vars() -> dict[str, str]:
         "HF_HOME": os.environ.get("HF_HOME", f"{base_cache}/huggingface"),
         "VLLM_CACHE_ROOT": os.environ.get("VLLM_CACHE_ROOT", f"{base_cache}/vllm"),
         "FLASHINFER_CACHE_DIR": os.environ.get("FLASHINFER_CACHE_DIR", f"{base_cache}/flashinfer"),
+        # Triton JITs kernels at import for some archs
+        "TRITON_CACHE_DIR": os.environ.get("TRITON_CACHE_DIR", f"{base_cache}/triton"),
     }
 
 

@@ -14,6 +14,7 @@ def test_build_cache_env_vars_defaults():
         assert env_vars["HF_HOME"] == "/.cache/huggingface"
         assert env_vars["VLLM_CACHE_ROOT"] == "/.cache/vllm"
         assert env_vars["FLASHINFER_CACHE_DIR"] == "/.cache/flashinfer"
+        assert env_vars["TRITON_CACHE_DIR"] == "/.cache/triton"
 
 
 def test_build_cache_env_vars_custom_dir():
@@ -23,6 +24,7 @@ def test_build_cache_env_vars_custom_dir():
         assert env_vars["HF_HOME"] == f"{custom_dir}/huggingface"
         assert env_vars["VLLM_CACHE_ROOT"] == f"{custom_dir}/vllm"
         assert env_vars["FLASHINFER_CACHE_DIR"] == f"{custom_dir}/flashinfer"
+        assert env_vars["TRITON_CACHE_DIR"] == f"{custom_dir}/triton"
 
 
 def test_utils_cache_dir_default():
