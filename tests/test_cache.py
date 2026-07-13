@@ -38,9 +38,10 @@ def test_utils_plugins_dir():
 
 
 class _FakeResponse:
-    def __init__(self, chunks, status_error=None):
+    def __init__(self, chunks, status_error=None, headers=None):
         self._chunks = chunks
         self._status_error = status_error
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -95,6 +96,24 @@ def test_interrupted_download_leaves_no_corrupt_file(tmp_path):
     # Neither the final path nor any temp file is left behind — next run re-downloads.
     assert not dest.exists()
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_download_rejects_truncated_stream(tmp_path):
+    # Stream ends cleanly (no exception) but short of the advertised length.
+    dest = tmp_path / "model.onnx"
+    resp = _FakeResponse([b"abc"], headers={"Content-Length": "10"})
+    with mock.patch("modelship.utils.requests.get", return_value=resp), pytest.raises(OSError):
+        download("http://x/model.onnx", str(dest))
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_download_accepts_complete_stream(tmp_path):
+    dest = tmp_path / "model.onnx"
+    resp = _FakeResponse([b"abc", b"def"], headers={"Content-Length": "6"})
+    with mock.patch("modelship.utils.requests.get", return_value=resp):
+        download("http://x/model.onnx", str(dest))
+    assert dest.read_bytes() == b"abcdef"
 
 
 def test_download_does_not_save_error_body(tmp_path):

@@ -49,7 +49,9 @@ def download(url: str, file_path: str, overwrite: bool = False):
     """Download ``url`` to ``file_path``, skipping if it already exists.
 
     Streams to a per-call unique temp file and atomically renames it into place
-    only on success
+    only after the transfer completes and matches the advertised size, so a
+    killed process or an early-EOF stream never leaves a truncated file at
+    ``file_path``.
     """
     if not overwrite and os.path.isfile(file_path):
         return
@@ -58,10 +60,14 @@ def download(url: str, file_path: str, overwrite: bool = False):
     try:
         with requests.get(url, stream=True) as response:
             response.raise_for_status()
+            expected = int(response.headers.get("Content-Length") or 0)
+            written = 0
             with open(tmp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024):
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
-                        f.write(chunk)
+                        written += f.write(chunk)
+        if expected and written != expected:
+            raise OSError(f"incomplete download from {url}: got {written} of {expected} bytes")
         os.replace(tmp_path, file_path)
     finally:
         if os.path.exists(tmp_path):

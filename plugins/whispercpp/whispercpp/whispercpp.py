@@ -38,12 +38,31 @@ from modelship.infer.infer_config import ModelshipModelConfig
 from modelship.logging import get_logger
 from modelship.openai.protocol import ErrorResponse, RawSegment, RawTranscription, RawTranslation
 from modelship.plugins.base_plugin import BasePlugin
-from modelship.utils import plugins_dir
+from modelship.utils import download, plugins_dir
 from modelship.utils.audio import decode_audio
 
 logger = get_logger("plugin.whispercpp")
 
 _WHISPER_SAMPLE_RATE = 16000
+
+# whisper.cpp ggml weights, mirrored by pywhispercpp's own downloader.
+_GGML_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+
+
+def _resolve_model_file(model: str, models_dir: str) -> str:
+    """Return a local ggml file for ``model``, fetching it atomically if named.
+
+    A direct path is used as-is. Otherwise the model is downloaded via
+    ``modelship.utils.download`` — verified and atomic — rather than through
+    pywhispercpp, whose downloader writes straight to the final path and reuses
+    whatever is there, so a killed download leaves a truncated file that every
+    later load silently reuses.
+    """
+    if os.path.isfile(model):
+        return model
+    file_path = f"{models_dir}/ggml-{model}.bin"
+    download(f"{_GGML_BASE_URL}/ggml-{model}.bin", file_path)
+    return file_path
 
 
 class ModelPlugin(BasePlugin):
@@ -54,12 +73,23 @@ class ModelPlugin(BasePlugin):
         models_dir = plugin_config.get("models_dir", f"{plugins_dir()}/whispercpp")
         os.makedirs(models_dir, exist_ok=True)
 
-        kwargs: dict = {"models_dir": models_dir}
+        kwargs: dict = {}
         if (n_threads := plugin_config.get("n_threads")) is not None:
             kwargs["n_threads"] = n_threads
 
         logger.info("loading whisper.cpp model: %s (dir=%s)", model_config.model, models_dir)
-        self.model = Model(model_config.model, **kwargs)
+        is_user_path = os.path.isfile(model_config.model)
+        model_path = _resolve_model_file(model_config.model, models_dir)
+        self.model = Model(model_path, **kwargs)
+
+        # pywhispercpp leaves _ctx None instead of raising when the ggml file
+        # fails to load, so the replica would otherwise come up "ready" but
+        # crash on every request. Drop a bad file we fetched so the next start
+        # refetches; never touch a path the user pointed us at.
+        if not self.model._ctx:
+            if not is_user_path:
+                os.remove(model_path)
+            raise RuntimeError(f"whisper.cpp failed to load model from {model_path}")
 
     async def start(self):
         pass
