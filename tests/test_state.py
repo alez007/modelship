@@ -57,11 +57,15 @@ class TestBackends:
         store.set("responses/u1/a", {"n": 1})
         store.set("responses/u1/b", {"n": 2})
         store.set("responses/u2/c", {"n": 3})
+        store.set("responses/u10/c", {"n": 5})
         store.set("other/x", {"n": 4})
+        # "responses/u1" must match only its own segment, not the sibling "u10" whose
+        # name happens to share "u1" as a string prefix.
         assert sorted(store.list("responses/u1")) == ["responses/u1/a", "responses/u1/b"]
         assert sorted(store.list("responses")) == [
             "responses/u1/a",
             "responses/u1/b",
+            "responses/u10/c",
             "responses/u2/c",
         ]
 

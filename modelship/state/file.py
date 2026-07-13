@@ -15,6 +15,7 @@ import contextlib
 import json
 import re
 import time
+import uuid
 from pathlib import Path
 
 from modelship.logging import get_logger
@@ -81,8 +82,9 @@ class FileStateStore(StateStore):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             # Atomic replace: a crash mid-write never leaves a torn file the next
-            # read would choke on.
-            tmp = path.with_name(path.name + ".tmp")
+            # read would choke on. Unique suffix avoids concurrent writers to the
+            # same key colliding on one tmp file.
+            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
             tmp.write_text(json.dumps(doc, indent=2))
             tmp.replace(path)
         except OSError as exc:
@@ -108,6 +110,6 @@ class FileStateStore(StateStore):
             # Reconstruct the (slugged) key from the path; lossy for keys with
             # unsafe chars, so list() round-trips only already-safe segments.
             key = "/".join(path.relative_to(self.base_dir).with_suffix("").parts)
-            if key.startswith(prefix):
+            if not prefix or key == prefix or key.startswith(f"{prefix}/"):
                 keys.append(key)
         return keys

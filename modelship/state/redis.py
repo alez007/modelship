@@ -37,6 +37,12 @@ def _slug(key: str) -> str:
     return _PREFIX + "/".join(p for p in key.split("/") if p)
 
 
+def _in_namespace(key: str, prefix: str) -> bool:
+    # SCAN's MATCH glob has no path-segment concept, so "prefix*" also matches a
+    # sibling like "responses/u10" under prefix "responses/u1"; re-check the boundary.
+    return not prefix or key == prefix or key.startswith(f"{prefix}/")
+
+
 def _decode(raw: str | bytes | None) -> JsonValue | None:
     if raw is None:
         return None
@@ -97,7 +103,7 @@ class RedisStateStore(StateStore):
         match = _slug(prefix) + "*"
         with _mapped(f"redis scan {prefix!r}"):
             keys = list(self._sync().scan_iter(match=match))
-        return [k[len(_PREFIX) :] for k in keys]
+        return [k[len(_PREFIX) :] for k in keys if _in_namespace(k[len(_PREFIX) :], prefix)]
 
     async def get_async(self, key: str) -> JsonValue | None:
         with _mapped(f"redis get {key!r}"):
@@ -118,4 +124,4 @@ class RedisStateStore(StateStore):
         with _mapped(f"redis scan {prefix!r}"):
             async for k in self._async().scan_iter(match=match):
                 keys.append(k)
-        return [k[len(_PREFIX) :] for k in keys]
+        return [k[len(_PREFIX) :] for k in keys if _in_namespace(k[len(_PREFIX) :], prefix)]

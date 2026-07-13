@@ -42,7 +42,7 @@ class MemoryStateStore(StateStore):
         return [
             k
             for k, (_, expires_at) in list(self._data.items())
-            if k.startswith(prefix) and (expires_at is None or now < expires_at)
+            if (not prefix or k == prefix or k.startswith(f"{prefix}/")) and (expires_at is None or now < expires_at)
         ]
 
     # In-process: no thread needed, so skip the base's to_thread hop.
