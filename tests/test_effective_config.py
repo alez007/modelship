@@ -135,8 +135,9 @@ class TestRawRoundTrip:
         raw = {"name": "x", "model": "org/x", "usecase": "generate", "loader": "vllm", "num_gpus": 2}
         store = FileStateStore(tmp_path)
         write_effective(store, "g", [raw])
+        # The value is stored inside the TTL envelope; unwrap to inspect it.
         on_disk = json.loads((tmp_path / "effective" / "g.json").read_text())
-        assert on_disk["models"][0]["num_gpus"] == 2
+        assert on_disk["value"]["models"][0]["num_gpus"] == 2
 
 
 def _dep(name: str, gw: str = "g", **overrides) -> str:
