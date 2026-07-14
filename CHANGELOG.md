@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.3] - 2026-07-14
+
+### Fixed
+- catch OSError, not just FileNotFoundError, in weight-footprint listdir
+- drop dead itemsize fallback in mamba state-size calc
+- account for mamba/SSM recurrent-state cache in vllm preflight
+
 ## [0.6.2] - 2026-07-13
 
 ### Added
