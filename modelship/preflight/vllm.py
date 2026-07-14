@@ -765,10 +765,7 @@ def _resolve_mamba_state(config: ModelshipModelConfig, model_path: str) -> Mamba
         state_cls: Any = cls
         shapes = state_cls.get_mamba_state_shape_from_config(vllm_config)
         dtypes = state_cls.get_mamba_state_dtype_from_config(vllm_config)
-        per_slot = sum(
-            math.prod(shape) * (dt.itemsize if hasattr(dt, "itemsize") else 4)
-            for shape, dt in zip(shapes, dtypes, strict=True)
-        )
+        per_slot = sum(math.prod(shape) * dt.itemsize for shape, dt in zip(shapes, dtypes, strict=True))
 
         # Authoritative layer split (per PP stage). "Not attention" == "has
         # recurrent state"; over-counting exotic MLP-only layers errs safe.
