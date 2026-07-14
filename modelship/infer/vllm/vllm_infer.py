@@ -232,6 +232,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             kv_cache_dtype=self.vllm_engine_kwargs.kv_cache_dtype or "auto",  # type: ignore[arg-type]
             enforce_eager=self.vllm_engine_kwargs.enforce_eager or False,
             max_num_batched_tokens=self.vllm_engine_kwargs.max_num_batched_tokens,
+            max_num_seqs=self.vllm_engine_kwargs.max_num_seqs,
             **mm_kwargs,
         )
 

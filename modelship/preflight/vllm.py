@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
+import math
 import os
-from typing import Any
+from typing import Any, NamedTuple, cast
 
 from modelship.infer.infer_config import ModelshipModelConfig, default_gpu_memory_utilization
 from modelship.logging import get_logger
@@ -13,20 +16,11 @@ logger = get_logger("preflight.vllm")
 # vLLM default; KV cache is allocated in pages of `block_size` tokens.
 _DEFAULT_BLOCK_SIZE = 16
 
-# Conservative fixed overhead (NCCL buffers, Triton caches, encoder cache for
-# MM models, fused_moe routing buffers for MoE, profiler scratch that's neither
-# weights nor CUDA graphs). Calibrated against measured runs: ~0.9 GiB on dense
-# Gemma-4 31B, ~2.3 GiB on the Gemma-4 26B-A4B MoE, ~1.0 GiB on a dense 7B AWQ
-# sharing a GPU.
-#
-# Dense text models carry far less of this than MoE/MM models, so they get the
-# lighter figure; MoE and multimodal models — which add expert-routing and
-# vision-encoder buffers — get the heavier one. Charging *every* model the heavy
-# figure wrongly zeroes the KV budget for a small dense model on a fractional-GPU
-# share (e.g. a 7B at num_gpus=0.5), making preflight bail instead of sizing
-# max_model_len down to fit.
-_OVERHEAD_FIXED_BYTES_DENSE = int(1.0 * 1024**3)
-_OVERHEAD_FIXED_BYTES_HEAVY = int(2.5 * 1024**3)
+# Concurrency floor for hybrid/SSM models. vLLM parks a fixed recurrent-state
+# buffer per concurrent sequence slot (sized by max_num_seqs, not max_model_len),
+# so we start low to keep that state memory minimal and grow only from surplus.
+# Matches vLLM's own hybrid conservatism.
+_MIN_MAX_NUM_SEQS = 8
 
 # Fractional overhead added on top of weight bytes. Captures the runtime
 # inflation between safetensors `total_size` and the bytes a backend actually
@@ -128,6 +122,13 @@ class VllmPreflight:
         # bytes shrink by 1/pp on top of any TP-driven shrinking of KV heads.
         kv_per_token_per_gpu = _divide_kv_by_tp(kv_per_token, text_cfg, tp_size) / pp_size
 
+        # Hybrid/SSM models park a fixed recurrent-state buffer per sequence slot
+        # (sized by max_num_seqs) and only their full-attention layers hold a
+        # token-growing KV cache. None for ordinary transformers.
+        mamba = _resolve_mamba_state(config, model_path)
+        if mamba is not None:
+            kv_per_token_per_gpu = _correct_kv_for_hybrid(kv_per_token_per_gpu, mamba)
+
         weight_bytes = _estimate_weight_footprint(model_path)
         weight_bytes_per_gpu = weight_bytes / (tp_size * pp_size) if weight_bytes else 0.0
 
@@ -154,16 +155,10 @@ class VllmPreflight:
         # An unset field (whole-GPU deploy, no user override) falls back to
         # vLLM's own default.
         gpu_util = config.vllm_engine_kwargs.gpu_memory_utilization or default_gpu_memory_utilization(config)
-        # Dense text models carry far less non-KV overhead than MoE/MM models;
-        # charging the heavy figure to a small dense model on a fractional GPU
-        # wrongly zeroes the budget.
-        fixed_overhead = (
-            _OVERHEAD_FIXED_BYTES_HEAVY if (is_mm or _is_moe(text_cfg, model_cfg)) else _OVERHEAD_FIXED_BYTES_DENSE
-        )
         budget = (
             gpu_available * gpu_util
             - weight_bytes_per_gpu
-            - (_OVERHEAD_WEIGHT_FRACTION * weight_bytes_per_gpu + fixed_overhead)
+            - _OVERHEAD_WEIGHT_FRACTION * weight_bytes_per_gpu
             - cudagraph_bytes_per_gpu
         )
         if budget <= 0:
@@ -179,22 +174,39 @@ class VllmPreflight:
             )
             return {}
 
-        max_tokens = int(budget // kv_per_token_per_gpu)
-        suggested = (max_tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE
-        if max_position_embeddings:
-            suggested = min(suggested, max_position_embeddings)
-        if suggested < _DEFAULT_BLOCK_SIZE:
-            logger.warning(
-                "preflight: '%s' budget yields max_model_len=%d (< block_size); skipping recommendation",
+        rec: dict[str, Any]
+        if mamba is not None:
+            # `budget` is the KV+state pool; the shared ladder splits it between
+            # the mamba state (max_num_seqs) and attention KV (max_model_len).
+            target_len = config.vllm_engine_kwargs.max_model_len or max_position_embeddings
+            rec = _apply_hybrid_fit(
                 config.name,
-                suggested,
+                budget,
+                mamba.per_seq_state_bytes,
+                kv_per_token_per_gpu,
+                target_len,
+                config.vllm_engine_kwargs.max_num_seqs,
+                mamba.default_max_num_seqs,
             )
-            return {}
+            if not rec:
+                return {}
+        else:
+            max_tokens = int(budget // kv_per_token_per_gpu)
+            suggested = (max_tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE
+            if max_position_embeddings:
+                suggested = min(suggested, max_position_embeddings)
+            if suggested < _DEFAULT_BLOCK_SIZE:
+                logger.warning(
+                    "preflight: '%s' budget yields max_model_len=%d (< block_size); skipping recommendation",
+                    config.name,
+                    suggested,
+                )
+                return {}
+            rec = {"max_model_len": suggested}
 
         logger.info(
             "preflight vllm '%s': gpu_free=%.2f GiB util=%.2f tp=%d pp=%d "
-            "weights/GPU≈%.2f GiB cudagraph/GPU≈%.2f GiB kv/token=%d B "
-            "→ suggested max_model_len=%d",
+            "weights/GPU≈%.2f GiB cudagraph/GPU≈%.2f GiB kv/token=%d B%s → %s",
             config.name,
             gpu_available / 1024**3,
             gpu_util,
@@ -203,10 +215,9 @@ class VllmPreflight:
             weight_bytes_per_gpu / 1024**3,
             cudagraph_bytes_per_gpu / 1024**3,
             int(kv_per_token_per_gpu),
-            suggested,
+            f" hybrid(state {mamba.per_seq_state_bytes / 1024**2:.1f} MiB/seq)" if mamba else "",
+            rec,
         )
-
-        rec: dict[str, Any] = {"max_model_len": suggested}
 
         # Multimodal models: bump `max_num_batched_tokens` so vLLM can fit a
         # single image/audio item in one batch. The exact per-item token
@@ -266,24 +277,35 @@ class VllmPreflight:
         if denom_ram <= 0:
             logger.info("preflight '%s': skipping — system RAM not discoverable", config.name)
             return {}
-        gmu = config.vllm_engine_kwargs.gpu_memory_utilization
 
+        # Hybrid/SSM state accounting is device-agnostic (see _resolve_mamba_state).
+        # The CPU worker draws the mamba state out of the same gmu*RAM KV pool,
+        # so the fit ladder handles it identically to GPU — only the pool source
+        # differs. Correct kv/token to full-attention layers only.
+        mamba = _resolve_mamba_state(config, model_path)
+        if mamba is not None:
+            kv_per_token = _correct_kv_for_hybrid(kv_per_token, mamba)
+
+        gmu = config.vllm_engine_kwargs.gpu_memory_utilization
         if gmu is not None:
             return self._recommend_cpu_pinned_gmu(
-                config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram, gmu
+                config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram, gmu, mamba
             )
-        return self._recommend_cpu_auto_gmu(config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram)
+        return self._recommend_cpu_auto_gmu(
+            config, hw, kv_per_token, weight_bytes, weight_overhead, ctx_cap, denom_ram, mamba
+        )
 
     def _recommend_cpu_pinned_gmu(
         self,
         config: ModelshipModelConfig,
         hw: HardwareProfile,
-        kv_per_token: int,
+        kv_per_token: float,
         weight_bytes: int,
         weight_overhead: float,
         ctx_cap: int,
         denom_ram: int,
         gmu: float,
+        mamba: MambaStateInfo | None,
     ) -> dict[str, Any]:
         """The user explicitly set gpu_memory_utilization: vLLM's CPU worker
         reserves exactly `gmu * denom_ram` for the KV cache regardless of what
@@ -291,6 +313,8 @@ class VllmPreflight:
         own utilization target. We can't change gmu here, only warn if the
         combined footprint won't fit."""
         kv_budget = gmu * denom_ram
+        # Mamba state is allocated *within* the gmu*RAM pool, so it's already
+        # covered by kv_budget here — don't add it again.
         total_footprint = kv_budget + weight_bytes + weight_overhead + _CPU_OVERHEAD_FIXED_BYTES
         if total_footprint > hw.sizing_ram_bytes:
             logger.warning(
@@ -303,6 +327,18 @@ class VllmPreflight:
                 kv_budget / 1024**3,
                 (weight_bytes + weight_overhead) / 1024**3,
                 hw.sizing_ram_bytes / 1024**3,
+            )
+
+        if mamba is not None:
+            target_len = config.vllm_engine_kwargs.max_model_len or ctx_cap
+            return _apply_hybrid_fit(
+                config.name,
+                kv_budget,
+                mamba.per_seq_state_bytes,
+                kv_per_token,
+                target_len,
+                config.vllm_engine_kwargs.max_num_seqs,
+                mamba.default_max_num_seqs,
             )
 
         max_tokens = int(kv_budget // kv_per_token)
@@ -333,11 +369,12 @@ class VllmPreflight:
         self,
         config: ModelshipModelConfig,
         hw: HardwareProfile,
-        kv_per_token: int,
+        kv_per_token: float,
         weight_bytes: int,
         weight_overhead: float,
         ctx_cap: int,
         denom_ram: int,
+        mamba: MambaStateInfo | None,
     ) -> dict[str, Any]:
         """gpu_memory_utilization is still at its CPU-deploy auto default: we're
         free to size both max_model_len and the utilization fraction. Target
@@ -355,6 +392,11 @@ class VllmPreflight:
                 (weight_bytes + weight_overhead) / 1024**3,
             )
             return {}
+
+        if mamba is not None:
+            return self._recommend_cpu_auto_gmu_hybrid(
+                config, kv_budget, kv_per_token, ctx_cap, denom_ram, weight_bytes, weight_overhead, mamba
+            )
 
         max_tokens = int(kv_budget // kv_per_token)
         suggested = min((max_tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE, ctx_cap)
@@ -381,6 +423,60 @@ class VllmPreflight:
             recommended_gmu,
         )
         return {"max_model_len": suggested, "gpu_memory_utilization": recommended_gmu}
+
+    def _recommend_cpu_auto_gmu_hybrid(
+        self,
+        config: ModelshipModelConfig,
+        kv_budget: float,
+        kv_per_token: float,
+        ctx_cap: int,
+        denom_ram: int,
+        weight_bytes: int,
+        weight_overhead: float,
+        mamba: MambaStateInfo,
+    ) -> dict[str, Any]:
+        """Hybrid model on the auto-gmu path: the shared ladder splits kv_budget
+        between mamba state and attention KV, then we back-compute a gmu large
+        enough to hold the *actual* reservation. The mamba state is mandatory and
+        fixed, and vLLM's CPU worker sizes the KV budget as `gmu*RAM - RSS`
+        (RSS ≈ weights) — so the fraction must cover weights + state + a healthy
+        KV budget, else the state won't fit and startup hard-raises."""
+        target_len = config.vllm_engine_kwargs.max_model_len or ctx_cap
+        rec = _apply_hybrid_fit(
+            config.name,
+            kv_budget,
+            mamba.per_seq_state_bytes,
+            kv_per_token,
+            target_len,
+            config.vllm_engine_kwargs.max_num_seqs,
+            mamba.default_max_num_seqs,
+        )
+        if not rec:
+            return {}
+
+        chosen_len = rec["max_model_len"]
+        chosen_seqs = rec.get("max_num_seqs", config.vllm_engine_kwargs.max_num_seqs or _MIN_MAX_NUM_SEQS)
+        state_bytes = mamba.per_seq_state_bytes * chosen_seqs
+        # Clamp attention KV to ~a few full-length sequences (kv_budget already
+        # had weights set aside, so its remainder after state is the KV room).
+        attn_kv = min(kv_budget - state_bytes, _CPU_KV_SEQUENCES * kv_per_token * chosen_len)
+        # Add weights back: vLLM subtracts RSS from gmu*RAM, so the fraction must
+        # cover them for the mandatory state to fit.
+        reservation = weight_bytes + weight_overhead + _CPU_OVERHEAD_FIXED_BYTES + state_bytes + max(attn_kv, 0)
+        recommended_gmu = min(max(round(reservation / denom_ram, 3), 0.01), 0.9)
+        rec["gpu_memory_utilization"] = recommended_gmu
+
+        logger.info(
+            "preflight vllm cpu '%s': hybrid state %.1f MiB/seq x %d seqs = %.2f GiB + weights + attn KV -> "
+            "gpu_memory_utilization=%.3f (max_model_len=%d)",
+            config.name,
+            mamba.per_seq_state_bytes / 1024**2,
+            chosen_seqs,
+            state_bytes / 1024**3,
+            recommended_gmu,
+            chosen_len,
+        )
+        return rec
 
 
 def _raw_host_ram_bytes(hw: HardwareProfile) -> int:
@@ -515,20 +611,6 @@ def _divide_kv_by_tp(kv_per_token: int, model_cfg: dict, tp_size: int) -> float:
     return float(kv_per_token)
 
 
-def _is_moe(text_cfg: dict, model_cfg: dict) -> bool:
-    """Mixture-of-Experts models park expert-routing buffers on the GPU that
-    inflate the fixed non-KV overhead. Detect via the expert-count keys HF
-    configs use (checked on both the text sub-config and the top level)."""
-    for cfg in (text_cfg, model_cfg):
-        if not isinstance(cfg, dict):
-            continue
-        for key in ("num_experts", "num_local_experts", "n_routed_experts", "num_experts_per_tok"):
-            value = cfg.get(key)
-            if isinstance(value, int) and value > 0:
-                return True
-    return False
-
-
 def _is_multimodal(model_cfg: dict) -> bool:
     """Heuristic: multimodal models carry a sub-config for the non-text modality
     (`vision_config`, `audio_config`) or advertise a conditional-generation
@@ -562,24 +644,27 @@ def _estimate_mm_tokens_per_item(model_cfg: dict) -> int | None:
 
 
 def _estimate_weight_footprint(model_path: str) -> int:
-    """Estimate the on-disk weight footprint. Prefers safetensors (index
-    `total_size` if present, else summed file sizes) and falls back to PyTorch
-    `.bin`/`.pt` for models that haven't been converted. Returns the first
-    format found — models that ship both layouts would otherwise double-count."""
-    safetensors_index = os.path.join(model_path, "model.safetensors.index.json")
-    if os.path.isfile(safetensors_index):
-        total = _read_index_total_size(safetensors_index)
-        if total:
-            return total
+    """Estimate the on-disk weight footprint. Prefers safetensors, falling back
+    to PyTorch `.bin`/`.pt` for models that haven't been converted (returns the
+    first format found — models that ship both layouts would otherwise
+    double-count).
 
+    For safetensors, takes the max of the index's declared `total_size` and the
+    summed size of every `*.safetensors` file actually present in the
+    directory: some VLM checkpoints ship a vision tower/projector as a separate
+    safetensors file that isn't referenced by `model.safetensors.index.json`
+    (which only indexes the text-model shards), so trusting the index alone
+    can silently drop real weight bytes."""
     try:
         names = os.listdir(model_path)
     except FileNotFoundError:
         return 0
 
-    safetensors_total = sum(os.path.getsize(os.path.join(model_path, n)) for n in names if n.endswith(".safetensors"))
-    if safetensors_total:
-        return safetensors_total
+    safetensors_index = os.path.join(model_path, "model.safetensors.index.json")
+    index_total = _read_index_total_size(safetensors_index) if os.path.isfile(safetensors_index) else 0
+    directory_total = sum(os.path.getsize(os.path.join(model_path, n)) for n in names if n.endswith(".safetensors"))
+    if index_total or directory_total:
+        return max(index_total, directory_total)
 
     pytorch_index = os.path.join(model_path, "pytorch_model.bin.index.json")
     if os.path.isfile(pytorch_index):
@@ -599,3 +684,216 @@ def _read_index_total_size(index_path: str) -> int:
         return 0
     total = idx.get("metadata", {}).get("total_size")
     return int(total) if total else 0
+
+
+class MambaStateInfo(NamedTuple):
+    """Recurrent-state accounting for a hybrid/SSM model, from vLLM's own
+    config-only APIs. `per_seq_state_bytes` is the mamba state one concurrent
+    sequence slot occupies across all state layers (per worker; PP already
+    folded in via the per-stage layer count)."""
+
+    per_seq_state_bytes: int
+    n_state_layers: int
+    n_full_attention_layers: int
+    n_total_layers: int
+    default_max_num_seqs: int
+
+
+@contextlib.contextmanager
+def _quiet_vllm_logging():
+    """vLLM's create_engine_config emits several INFO/WARNING lines about the
+    throwaway config (dummy load format, enforce_eager). Silence them so
+    preflight output stays clean; restore afterwards."""
+    names = ("vllm", "vllm.config", "vllm.engine", "vllm.transformers_utils")
+    prev = {n: logging.getLogger(n).level for n in names}
+    for n in names:
+        logging.getLogger(n).setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        for n, lvl in prev.items():
+            logging.getLogger(n).setLevel(lvl)
+
+
+def _resolve_mamba_state(config: ModelshipModelConfig, model_path: str) -> MambaStateInfo | None:
+    """Return recurrent-state accounting for hybrid/SSM models, else None.
+
+    Builds a throwaway vLLM engine config offline (no weights, ~1s) and uses
+    vLLM's authoritative primitives: `is_hybrid`/`is_attention_free` to detect
+    recurrent state, the model class's `get_mamba_state_shape/dtype_from_config`
+    for exact per-slot bytes, and `get_num_layers_by_block_type` for the layer
+    split. Returns None for ordinary transformers and on any failure — the mamba
+    term is simply skipped (graceful degrade, matching other preflight bails)."""
+    tp = max(config.vllm_engine_kwargs.tensor_parallel_size, 1)
+    pp = max(config.vllm_engine_kwargs.pipeline_parallel_size, 1)
+    prev_offline = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
+    try:
+        from vllm.engine.arg_utils import EngineArgs
+        from vllm.model_executor.models import ModelRegistry
+        from vllm.model_executor.models.interfaces import is_attention_free, is_hybrid
+
+        # The model is already local; force offline so config building never
+        # reaches the network.
+        for k in prev_offline:
+            os.environ[k] = "1"
+
+        with _quiet_vllm_logging():
+            engine_args = EngineArgs(
+                model=model_path,
+                load_format="dummy",
+                enforce_eager=True,
+                tensor_parallel_size=tp,
+                pipeline_parallel_size=pp,
+                dtype=cast("Any", config.vllm_engine_kwargs.dtype or "auto"),
+                trust_remote_code=config.vllm_engine_kwargs.trust_remote_code,
+            )
+            vllm_config = engine_args.create_engine_config()
+
+        model_config = vllm_config.model_config
+        parallel_config = vllm_config.parallel_config
+        archs = model_config.hf_config.architectures
+        if not archs:
+            return None
+        cls, _arch = ModelRegistry.resolve_model_cls(archs, model_config)
+
+        if not (is_hybrid(cls) or is_attention_free(cls)):
+            return None
+
+        # Per-slot bytes for one state layer, summed over conv + temporal caches.
+        # `cls` is a resolved vLLM model class exposing these dynamic classmethods
+        # (nn.Module's typing hides them from pyright).
+        state_cls: Any = cls
+        shapes = state_cls.get_mamba_state_shape_from_config(vllm_config)
+        dtypes = state_cls.get_mamba_state_dtype_from_config(vllm_config)
+        per_slot = sum(
+            math.prod(shape) * (dt.itemsize if hasattr(dt, "itemsize") else 4)
+            for shape, dt in zip(shapes, dtypes, strict=True)
+        )
+
+        # Authoritative layer split (per PP stage). "Not attention" == "has
+        # recurrent state"; over-counting exotic MLP-only layers errs safe.
+        n_full_attention = model_config.get_num_layers_by_block_type(parallel_config, "attention")
+        n_total = model_config.get_num_layers(parallel_config)
+        n_state = n_total - n_full_attention
+        if n_state <= 0:
+            return None
+
+        return MambaStateInfo(
+            per_seq_state_bytes=int(per_slot * n_state),
+            n_state_layers=n_state,
+            n_full_attention_layers=n_full_attention,
+            n_total_layers=n_total,
+            default_max_num_seqs=int(vllm_config.scheduler_config.max_num_seqs),
+        )
+    except Exception:
+        logger.debug("preflight '%s': mamba-state resolution failed; skipping term", config.name, exc_info=True)
+        return None
+    finally:
+        for k, v in prev_offline.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _correct_kv_for_hybrid(kv_per_token: float, mamba: MambaStateInfo) -> float:
+    """`_kv_bytes_per_token` counts all layers; on a hybrid only the
+    full-attention layers hold a token-growing KV cache, so scale it down."""
+    if mamba.n_total_layers <= 0:
+        return kv_per_token
+    return kv_per_token * mamba.n_full_attention_layers / mamba.n_total_layers
+
+
+def _apply_hybrid_fit(
+    config_name: str,
+    kv_pool: float,
+    per_seq_state: int,
+    kv_per_token: float,
+    target_len: int | None,
+    user_max_num_seqs: int | None,
+    default_max_num_seqs: int,
+) -> dict[str, Any]:
+    """Device-agnostic fit ladder for hybrid models. `kv_pool` is the bytes
+    available for the KV cache AND mamba state together (the caller has already
+    set aside weights/overhead/cudagraph and applied its utilization fraction).
+    Protects max_model_len, uses max_num_seqs as the shock absorber. Returns a
+    recommendation dict, or {} when even a minimal context won't fit."""
+
+    def fit_len(budget: float) -> int:
+        tokens = int(budget // kv_per_token) if kv_per_token > 0 else 0
+        aligned = (tokens // _DEFAULT_BLOCK_SIZE) * _DEFAULT_BLOCK_SIZE
+        if target_len:
+            aligned = min(aligned, target_len)
+        return aligned
+
+    # User pinned max_num_seqs: honor it, size context around the resulting
+    # mandatory state reservation.
+    if user_max_num_seqs is not None:
+        budget = kv_pool - per_seq_state * user_max_num_seqs
+        suggested = fit_len(budget) if budget > 0 else 0
+        if suggested < _DEFAULT_BLOCK_SIZE:
+            logger.warning(
+                "preflight '%s': hybrid state at max_num_seqs=%d (%.2f GiB) leaves no room for a "
+                "minimum context in the %.2f GiB KV pool; deploy will be attempted anyway.",
+                config_name,
+                user_max_num_seqs,
+                per_seq_state * user_max_num_seqs / 1024**3,
+                kv_pool / 1024**3,
+            )
+            return {}
+        logger.info(
+            "preflight '%s': hybrid, user max_num_seqs=%d (state %.2f GiB) → max_model_len=%d",
+            config_name,
+            user_max_num_seqs,
+            per_seq_state * user_max_num_seqs / 1024**3,
+            suggested,
+        )
+        return {"max_model_len": suggested}
+
+    # Auto: floor concurrency so state memory is minimal, then protect context.
+    budget_at_floor = kv_pool - per_seq_state * _MIN_MAX_NUM_SEQS
+    if budget_at_floor <= 0:
+        logger.warning(
+            "preflight '%s': hybrid state at the floor of %d seqs (%.2f GiB) exceeds the %.2f GiB "
+            "KV pool; deploy will be attempted anyway.",
+            config_name,
+            _MIN_MAX_NUM_SEQS,
+            per_seq_state * _MIN_MAX_NUM_SEQS / 1024**3,
+            kv_pool / 1024**3,
+        )
+        return {}
+
+    if target_len and budget_at_floor >= target_len * kv_per_token:
+        chosen_len = target_len  # full capability preserved
+    else:
+        chosen_len = fit_len(budget_at_floor)
+        if chosen_len < _DEFAULT_BLOCK_SIZE:
+            logger.warning(
+                "preflight '%s': hybrid budget yields max_model_len=%d (< block_size); "
+                "deploy will be attempted anyway.",
+                config_name,
+                chosen_len,
+            )
+            return {}
+        logger.info(
+            "preflight '%s': hybrid, trimming context to max_model_len=%d to fit the %.2f GiB KV pool "
+            "at floor concurrency (reduces the max-context contract).",
+            config_name,
+            chosen_len,
+            kv_pool / 1024**3,
+        )
+
+    # Spend leftover budget on concurrency, capped at vLLM's own default.
+    leftover = budget_at_floor - chosen_len * kv_per_token
+    extra = int(leftover // per_seq_state) if per_seq_state > 0 else 0
+    seqs = min(default_max_num_seqs, _MIN_MAX_NUM_SEQS + max(extra, 0))
+    logger.info(
+        "preflight '%s': hybrid → max_num_seqs=%d (floor %d + %d from %.2f GiB surplus; per-seq state %.1f MiB)",
+        config_name,
+        seqs,
+        _MIN_MAX_NUM_SEQS,
+        seqs - _MIN_MAX_NUM_SEQS,
+        leftover / 1024**3,
+        per_seq_state / 1024**2,
+    )
+    return {"max_model_len": chosen_len, "max_num_seqs": seqs}

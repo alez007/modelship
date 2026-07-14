@@ -22,7 +22,7 @@ from modelship.preflight import (
     merge_with_user_overrides,
     run_preflight,
 )
-from modelship.preflight.vllm import VllmPreflight, _is_moe
+from modelship.preflight.vllm import VllmPreflight
 
 
 def _make_config(
@@ -129,6 +129,38 @@ class TestRunPreflightDispatch:
         assert result == {"max_model_len": 4096}
 
 
+class TestEstimateWeightFootprint:
+    def test_no_real_files_trusts_index_total(self, tmp_path):
+        # _write_model_snapshot's fixtures (used throughout this file) only ever
+        # write the index JSON, never real .safetensors files — this must keep
+        # returning the declared total_size unchanged.
+        from modelship.preflight.vllm import _estimate_weight_footprint
+
+        snapshot = _write_model_snapshot(tmp_path, config_json={}, weight_bytes=5 * 1024**3)
+        assert _estimate_weight_footprint(str(snapshot)) == 5 * 1024**3
+
+    def test_unindexed_safetensors_file_is_not_dropped(self, tmp_path):
+        # A vision tower/projector shipped as a separate safetensors file that
+        # the index doesn't reference (common for VLM checkpoints) must still
+        # be counted, not silently missed because the index total looked complete.
+        # The indexed shard's real on-disk size matches what the index declares
+        # for it; only the unindexed file is "extra" — so if the fix is working,
+        # the directory sum (indexed + unindexed) exceeds the index's total and
+        # wins the max().
+        from modelship.preflight.vllm import _estimate_weight_footprint
+
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        indexed_shard_bytes = 8 * 1024
+        (snapshot / "model.safetensors.index.json").write_text(
+            json.dumps({"metadata": {"total_size": indexed_shard_bytes}, "weight_map": {}})
+        )
+        (snapshot / "model-00001-of-00001.safetensors").write_bytes(b"\0" * indexed_shard_bytes)
+        unindexed_bytes = 2 * 1024
+        (snapshot / "vision_tower.safetensors").write_bytes(b"\0" * unindexed_bytes)
+        assert _estimate_weight_footprint(str(snapshot)) == indexed_shard_bytes + unindexed_bytes
+
+
 class TestVllmPreflight:
     def test_no_gpus_returns_empty(self):
         cfg = _make_config(resolved_path="/nonexistent")
@@ -227,15 +259,15 @@ class TestVllmPreflight:
 
     def test_fractional_num_gpus_sizes_max_model_len_to_share(self, tmp_path):
         # The studio failure: a dense 7B at num_gpus=0.5. Normalization sets
-        # gpu_memory_utilization=0.5, and the lighter dense overhead keeps the KV
-        # budget positive, so preflight sizes max_model_len DOWN to fit instead of
-        # bailing (which left the model at its 32768 default → vLLM KV OOM).
+        # gpu_memory_utilization=0.5, and the halved budget is still too small for
+        # the full 32768 context, so preflight sizes max_model_len DOWN to fit
+        # instead of bailing (which left the model at its default → vLLM KV OOM).
         snapshot = _write_model_snapshot(
             tmp_path,
             config_json={
                 "num_hidden_layers": 28,
                 "num_attention_heads": 28,
-                "num_key_value_heads": 4,
+                "num_key_value_heads": 8,
                 "hidden_size": 3584,
                 "head_dim": 128,
                 "torch_dtype": "bfloat16",
@@ -271,36 +303,6 @@ class TestVllmPreflight:
         shared = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=0.5), hw)
         whole = VllmPreflight().recommend(_make_config(resolved_path=str(snapshot), num_gpus=1), hw)
         assert shared["max_model_len"] < whole["max_model_len"]
-
-    def test_is_moe_detection_and_non_dict_safety(self):
-        assert _is_moe({"num_experts": 8}, {}) is True
-        assert _is_moe({}, {"n_routed_experts": 64}) is True
-        assert _is_moe({"num_hidden_layers": 28}, {"num_hidden_layers": 28}) is False
-        # malformed config.json: a sub-config that isn't a dict must not raise
-        assert _is_moe(None, {}) is False  # type: ignore[arg-type]
-        assert _is_moe("not-a-dict", None) is False  # type: ignore[arg-type]
-        assert _is_moe({"num_experts": "bogus"}, {}) is False  # non-int value ignored
-
-    def test_moe_pays_heavier_overhead_than_dense(self, tmp_path):
-        # An otherwise-identical MoE model carries the heavier fixed overhead, so
-        # it gets a smaller KV budget → smaller max_model_len than the dense one.
-        base = {
-            "num_hidden_layers": 28,
-            "num_attention_heads": 28,
-            "num_key_value_heads": 4,
-            "hidden_size": 3584,
-            "head_dim": 128,
-            "torch_dtype": "bfloat16",
-            "max_position_embeddings": 131072,
-        }
-        (tmp_path / "dense").mkdir()
-        (tmp_path / "moe").mkdir()
-        dense = _write_model_snapshot(tmp_path / "dense", config_json=base, weight_bytes=5 * 1024**3)
-        moe = _write_model_snapshot(tmp_path / "moe", config_json={**base, "num_experts": 8}, weight_bytes=5 * 1024**3)
-        hw = HardwareProfile(gpus=[GPUInfo(0, 24 * 1024**3, "test")])
-        rec_dense = VllmPreflight().recommend(_make_config(resolved_path=str(dense), num_gpus=0.5), hw)
-        rec_moe = VllmPreflight().recommend(_make_config(resolved_path=str(moe), num_gpus=0.5), hw)
-        assert rec_moe["max_model_len"] < rec_dense["max_model_len"]
 
     def test_fp8_kv_halves_per_token_bytes(self, tmp_path):
         snapshot = _write_model_snapshot(
@@ -696,3 +698,124 @@ class TestCudagraphEstimation:
         rec_graphs = VllmPreflight().recommend(cfg_graphs, hw)
         rec_eager = VllmPreflight().recommend(cfg_eager, hw)
         assert rec_eager["max_model_len"] > rec_graphs["max_model_len"]
+
+
+# Hybrid config mirroring Qwen3.5-4B: 32 layers, 8 full-attention + 24 linear.
+_HYBRID_CFG: dict = {
+    "num_hidden_layers": 32,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "hidden_size": 4096,
+    "head_dim": 128,
+    "torch_dtype": "bfloat16",
+    "max_position_embeddings": 262144,
+}
+
+
+def _mamba_info(**overrides):
+    from modelship.preflight.vllm import MambaStateInfo
+
+    base = dict(
+        per_seq_state_bytes=49 * 1024**2,
+        n_state_layers=24,
+        n_full_attention_layers=8,
+        n_total_layers=32,
+        default_max_num_seqs=128,
+    )
+    base.update(overrides)
+    return MambaStateInfo(**base)
+
+
+class TestApplyHybridFit:
+    """Pure arithmetic of the device-agnostic fit ladder — no vLLM, no config
+    building. `kv_pool` is the bytes available for KV cache + mamba state."""
+
+    PER_SEQ = 50 * 1024**2  # 50 MiB per concurrent slot
+    KV_PER_TOKEN = 32768  # 32 KiB/token (full-attention layers only)
+    TARGET = 100_000
+
+    def _fit(self, kv_pool, user_seqs=None):
+        from modelship.preflight.vllm import _apply_hybrid_fit
+
+        return _apply_hybrid_fit("test", kv_pool, self.PER_SEQ, self.KV_PER_TOKEN, self.TARGET, user_seqs, 128)
+
+    def test_tight_pool_floors_seqs_and_trims_context(self):
+        rec = self._fit(1 * 1024**3)  # 1 GiB: full 100k context can't fit
+        assert rec["max_num_seqs"] == 8  # floor concurrency
+        assert 0 < rec["max_model_len"] < self.TARGET  # context trimmed
+        assert rec["max_model_len"] % 16 == 0
+
+    def test_roomy_pool_keeps_context_and_climbs_seqs(self):
+        rec = self._fit(10 * 1024**3)  # 10 GiB: full context fits with surplus
+        assert rec["max_model_len"] == self.TARGET  # capability preserved
+        assert rec["max_num_seqs"] == 128  # surplus spent, capped at vLLM default
+
+    def test_user_pinned_seqs_sizes_context_and_omits_seq_recommendation(self):
+        rec = self._fit(10 * 1024**3, user_seqs=64)
+        assert rec["max_model_len"] == self.TARGET
+        assert "max_num_seqs" not in rec  # honor the user's contract, don't recommend
+
+    def test_pool_too_small_for_floor_state_returns_empty(self):
+        # 0.3 GiB < mamba state at the floor of 8 seqs (8 * 50 MiB = 0.39 GiB).
+        assert self._fit(int(0.3 * 1024**3)) == {}
+
+
+class TestCorrectKvForHybrid:
+    def test_scales_by_full_attention_fraction(self):
+        from modelship.preflight.vllm import _correct_kv_for_hybrid
+
+        # Only 8 of 32 layers hold a token-growing KV cache.
+        assert _correct_kv_for_hybrid(32000, _mamba_info()) == 32000 * 8 / 32
+
+
+class TestHybridIntegration:
+    """End-to-end through recommend(), with `_resolve_mamba_state` patched to a
+    synthetic MambaStateInfo so no real vLLM config gets built."""
+
+    def test_gpu_hybrid_floors_seqs_and_trims_vs_dense_baseline(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=_HYBRID_CFG, weight_bytes=8 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), vllm_kwargs={"gpu_memory_utilization": 0.9})
+        hw = HardwareProfile(gpus=[GPUInfo(0, int(15.45 * 1024**3), "test")])
+        with patch("modelship.preflight.vllm._resolve_mamba_state", return_value=_mamba_info()):
+            hybrid = VllmPreflight().recommend(cfg, hw)
+        # Same model/GPU but treated as a plain transformer (no state term).
+        with patch("modelship.preflight.vllm._resolve_mamba_state", return_value=None):
+            dense = VllmPreflight().recommend(cfg, hw)
+        assert hybrid["max_num_seqs"] == 8
+        assert 0 < hybrid["max_model_len"] < _HYBRID_CFG["max_position_embeddings"]
+        assert "max_num_seqs" not in dense  # non-hybrid never emits it
+
+    def test_gpu_roomy_keeps_full_context_and_climbs(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=_HYBRID_CFG, weight_bytes=8 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), vllm_kwargs={"gpu_memory_utilization": 0.9})
+        hw = HardwareProfile(gpus=[GPUInfo(0, 40 * 1024**3, "test")])
+        with patch("modelship.preflight.vllm._resolve_mamba_state", return_value=_mamba_info()):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert rec["max_model_len"] == _HYBRID_CFG["max_position_embeddings"]
+        assert rec["max_num_seqs"] > 8
+
+    def test_cpu_auto_gmu_hybrid_folds_state_into_gmu(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=_HYBRID_CFG, weight_bytes=8 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0)
+        hw = HardwareProfile(ram_bytes=16 * 1024**3, available_ram_bytes=16 * 1024**3)
+        with (
+            patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=16 * 1024**3),
+            patch("modelship.preflight.vllm._resolve_mamba_state", return_value=_mamba_info()),
+        ):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert rec["max_num_seqs"] == 8  # tight RAM → floor
+        assert 0 < rec["max_model_len"] < _HYBRID_CFG["max_position_embeddings"]
+        assert "gpu_memory_utilization" in rec  # auto path still sizes the fraction
+
+    def test_cpu_pinned_gmu_hybrid_recommends_seqs_without_overriding_gmu(self, tmp_path):
+        snapshot = _write_model_snapshot(tmp_path, config_json=_HYBRID_CFG, weight_bytes=8 * 1024**3)
+        cfg = _make_config(resolved_path=str(snapshot), num_gpus=0, vllm_kwargs={"gpu_memory_utilization": 0.5})
+        hw = HardwareProfile(ram_bytes=64 * 1024**3, available_ram_bytes=64 * 1024**3)
+        with (
+            patch("modelship.preflight.vllm._raw_host_ram_bytes", return_value=64 * 1024**3),
+            patch("modelship.preflight.vllm._resolve_mamba_state", return_value=_mamba_info()),
+        ):
+            rec = VllmPreflight().recommend(cfg, hw)
+        assert rec["max_model_len"] > 0
+        assert "max_num_seqs" in rec  # a small pinned gmu can't be blown by default concurrency
+        assert "gpu_memory_utilization" not in rec  # never override the user's pin
