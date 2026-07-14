@@ -160,6 +160,16 @@ class TestEstimateWeightFootprint:
         (snapshot / "vision_tower.safetensors").write_bytes(b"\0" * unindexed_bytes)
         assert _estimate_weight_footprint(str(snapshot)) == indexed_shard_bytes + unindexed_bytes
 
+    def test_path_is_a_file_not_a_directory_returns_zero(self, tmp_path):
+        # os.listdir() raises NotADirectoryError (an OSError subclass, not
+        # FileNotFoundError) when model_path resolves to a file — must degrade
+        # gracefully like the missing-path case, not crash preflight.
+        from modelship.preflight.vllm import _estimate_weight_footprint
+
+        not_a_dir = tmp_path / "not_a_directory"
+        not_a_dir.write_text("oops")
+        assert _estimate_weight_footprint(str(not_a_dir)) == 0
+
 
 class TestVllmPreflight:
     def test_no_gpus_returns_empty(self):

@@ -657,7 +657,7 @@ def _estimate_weight_footprint(model_path: str) -> int:
     can silently drop real weight bytes."""
     try:
         names = os.listdir(model_path)
-    except FileNotFoundError:
+    except OSError:
         return 0
 
     safetensors_index = os.path.join(model_path, "model.safetensors.index.json")
