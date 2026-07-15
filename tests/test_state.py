@@ -118,6 +118,62 @@ class TestMemoryStoreActor:
         assert store.list("k") == []
 
 
+class TestMemoryStoreActorSweep:
+    """Expired keys that are never read again are reclaimed by the write-path sweep;
+    lazy expiry alone would pin them for the actor's lifetime."""
+
+    def test_sweep_reclaims_key_never_read_again(self, monkeypatch):
+        clock = {"t": 1000.0}
+        monkeypatch.setattr("time.time", lambda: clock["t"])
+        store = _MemoryStore()
+        store.set("stale", {"x": 1}, ttl_seconds=10)
+
+        # Past both the TTL and the sweep interval; the next write sweeps. Reach into
+        # _data rather than get()/list(), which would mask the leak via lazy expiry.
+        clock["t"] = 1000.0 + 301.0
+        store.set("fresh", {"x": 2}, ttl_seconds=10)
+        assert "stale" not in store._data
+        assert "fresh" in store._data
+
+    def test_sweep_is_throttled(self, monkeypatch):
+        clock = {"t": 1000.0}
+        monkeypatch.setattr("time.time", lambda: clock["t"])
+        store = _MemoryStore()
+        store.set("stale", {"x": 1}, ttl_seconds=10)
+
+        # Expired, but within the sweep interval — the write must not pay for a scan.
+        clock["t"] = 1011.0
+        store.set("other", {"x": 2})
+        assert "stale" in store._data
+
+    def test_sweep_keeps_unexpired_and_no_ttl_keys(self, monkeypatch):
+        clock = {"t": 1000.0}
+        monkeypatch.setattr("time.time", lambda: clock["t"])
+        store = _MemoryStore()
+        store.set("forever", {"x": 1})  # no ttl
+        store.set("long", {"x": 2}, ttl_seconds=10_000)
+
+        clock["t"] = 1000.0 + 301.0
+        store.set("trigger", {"x": 3})
+        assert store.get("forever") == {"x": 1}
+        assert store.get("long") == {"x": 2}
+
+    def test_sweep_disabled_by_non_positive_interval(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_SWEEP_INTERVAL_S", "0")
+        clock = {"t": 1000.0}
+        monkeypatch.setattr("time.time", lambda: clock["t"])
+        store = _MemoryStore()
+        store.set("stale", {"x": 1}, ttl_seconds=10)
+
+        clock["t"] = 1000.0 + 10_000.0
+        store.set("other", {"x": 2})
+        assert "stale" in store._data
+
+    def test_bad_interval_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_SWEEP_INTERVAL_S", "not-a-number")
+        assert memory_module._sweep_interval_s() == 300.0
+
+
 class TestMemoryStateStoreClient:
     """The MemoryStateStore client: Ray-availability gating, delegation to the
     actor handle, and RayActorError -> StateStoreUnavailableError mapping."""
