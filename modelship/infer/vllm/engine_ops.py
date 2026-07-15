@@ -412,17 +412,23 @@ def _reconcile_trapped_content(
 
     A fresh parser is required: the streamed instance carries mid-stream state and
     would not reproduce the full-text result. Returns the recovered content, or None
-    when the parse agrees there is none (e.g. reasoning that closed with no answer).
+    when the parse agrees there is none (e.g. reasoning that closed with no answer)
+    or when the re-parse itself fails — this runs after reasoning has already been
+    streamed out, so a parser error here must not crash the generator mid-stream.
     """
-    parser = make_parsers(render, tokenizer, vllm_req, vllm_req.chat_template_kwargs, n=1)[0]
-    if parser is None:
+    try:
+        parser = make_parsers(render, tokenizer, vllm_req, vllm_req.chat_template_kwargs, n=1)[0]
+        if parser is None:
+            return None
+        _reasoning, content, _tool_calls = parser.parse(
+            full_text,
+            vllm_req,
+            enable_auto_tools=enable_auto_tools,
+            model_output_token_ids=token_ids,
+        )
+    except Exception:
+        logger.exception("Reconcile re-parse failed; leaving trapped content in reasoning.")
         return None
-    _reasoning, content, _tool_calls = parser.parse(
-        full_text,
-        vllm_req,
-        enable_auto_tools=enable_auto_tools,
-        model_output_token_ids=token_ids,
-    )
     return content or None
 
 

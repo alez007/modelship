@@ -87,13 +87,18 @@ def discover_template_vars(template_src: str) -> set[str]:
     """Undeclared (caller-supplied) variables a Jinja template reads.
 
     These are the names ``chat_template_kwargs`` can influence — the set we probe
-    for boolean toggle defaults.
+    for boolean toggle defaults. Runs at deployment init, so a template Jinja can't
+    even parse must not abort startup — it just means no toggle defaults get pinned.
     """
     import jinja2
     from jinja2 import meta as jinja2_meta
 
     env = jinja2.Environment()
-    return jinja2_meta.find_undeclared_variables(env.parse(template_src))
+    try:
+        return jinja2_meta.find_undeclared_variables(env.parse(template_src))
+    except jinja2.TemplateError:
+        logger.warning("Chat template failed to parse for toggle-var discovery; skipping default pinning.")
+        return set()
 
 
 def detect_boolean_defaults(candidates: set[str], render: Callable[..., str]) -> dict[str, bool]:
