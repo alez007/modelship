@@ -1,8 +1,9 @@
 """Generic durable state store.
 
-A pluggable key→value store shared across the codebase: the deploy driver uses it
-for the per-gateway *effective config* (durable desired state for self-heal), and
-actors can use it for their own state (e.g. ``/v1/responses``). Keys are
+A pluggable key→value store shared across the codebase. It stays generic: each
+caller owns a domain layer over it that holds the key layout and shape — the deploy
+driver's per-gateway *effective config* (``deploy.effective_config``) and the
+gateway's ``/v1/responses`` conversations (``openai.responses_state``). Keys are
 ``/``-separated namespace paths; values are JSON/YAML-serializable (``dict`` or
 ``list``).
 

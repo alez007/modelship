@@ -813,7 +813,7 @@ class TestResponsesProjection:
         assert result.usage.input_tokens == 10
 
     @pytest.mark.asyncio
-    async def test_previous_response_id_rejected_before_any_http_call(self):
+    async def test_background_rejected_before_any_http_call(self):
         called = False
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -822,9 +822,7 @@ class TestResponsesProjection:
             return httpx.Response(200, json={"choices": [], "usage": {}})
 
         infer = _infer_with_client(handler)
-        result = await infer.create_response(
-            _responses_request(previous_response_id="resp_1"), RawRequestProxy(None, {})
-        )
+        result = await infer.create_response(_responses_request(background=True), RawRequestProxy(None, {}))
 
         assert isinstance(result, ErrorResponse)
         assert result._http_status == 400

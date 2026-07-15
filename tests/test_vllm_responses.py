@@ -63,9 +63,9 @@ async def test_no_render_pipeline_falls_back_to_not_supported():
 
 
 @pytest.mark.asyncio
-async def test_previous_response_id_rejected_before_engine_ops_touched():
+async def test_background_rejected_before_engine_ops_touched():
     infer = _make_infer()
-    request = ResponsesRequest(model="m", input="hi", previous_response_id="resp_1")
+    request = ResponsesRequest(model="m", input="hi", background=True)
 
     with patch("modelship.infer.vllm.vllm_infer.engine_ops") as mock_ops:
         result = await infer.create_response(request, raw_request=_FakeRawRequest())

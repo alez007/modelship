@@ -67,7 +67,7 @@ python mship_deploy.py --config config/tts.yaml --gateway-name "tts-api"
 
 ## Trusted Identity Header
 
-modelship never authenticates callers itself — that's `MSHIP_API_KEYS`' job, and it stops at "is this caller allowed at all." modelship also has no concept of login, permissions, or per-model access control, and never will; those belong entirely to whatever sits in front of it (nginx, Kong, LiteLLM, a custom credentials layer). `MSHIP_TRUSTED_IDENTITY_HEADER` lets that fronting layer forward a caller identity it already resolved (e.g. a consumer/tenant id), which modelship uses purely for log correlation today and for scoping server-side state in the future — never for authorization.
+modelship never authenticates callers itself — that's `MSHIP_API_KEYS`' job, and it stops at "is this caller allowed at all." modelship also has no concept of login, permissions, or per-model access control, and never will; those belong entirely to whatever sits in front of it (nginx, Kong, LiteLLM, a custom credentials layer). `MSHIP_TRUSTED_IDENTITY_HEADER` lets that fronting layer forward a caller identity it already resolved (e.g. a consumer/tenant id), which modelship uses for log correlation and for scoping server-side state (see [Stateful responses](#stateful-responses)) — never for authorization.
 
 modelship trusts the header's value **unconditionally** — there is no signature check. That trust is only valid if both of the following hold:
 
@@ -488,7 +488,7 @@ deployment.
 |---|---|---|
 | `HF_TOKEN` | HuggingFace access token | — |
 | `MSHIP_CACHE_DIR` | Model cache directory (HuggingFace + plugins) | `/.cache` |
-| `MSHIP_STATE_STORE` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) | `memory://` |
+| `MSHIP_STATE_STORE` | State-store connection URI for the effective config, deploy coordinator + `/v1/responses` conversations (see [State store](#state-store-mship_state_store)) | `memory://` |
 | `MSHIP_GATEWAY_NAME` | Name for the API gateway app | `modelship api` |
 | `MSHIP_GATEWAY_REPLICAS` | Number of API gateway replicas (routing/ingress HA; replicas sync routing via the deploy coordinator) | `1` |
 | `MSHIP_MAX_REQUEST_BODY_BYTES` | Maximum allowed request body size in bytes | `52428800` (50 MB) |
@@ -505,10 +505,11 @@ deployment.
 
 ### State store (`MSHIP_STATE_STORE`)
 
-Two pieces of durable state share one pluggable store: this gateway's **effective
-config** (its desired model set, replayed by `--reconcile` with no `--config` to
-self-heal after a cluster loss) and the **deploy coordinator's** routing registry
-(which gateway owns which model + the expected set). The store is chosen by a single
+Three pieces of state share one pluggable store: this gateway's **effective config**
+(its desired model set, replayed by `--reconcile` with no `--config` to self-heal
+after a cluster loss), the **deploy coordinator's** routing registry (which gateway
+owns which model + the expected set), and **`/v1/responses` conversations** (see
+[Stateful responses](#stateful-responses)). The store is chosen by a single
 connection URI — the scheme picks the backend, the rest carries its connection:
 
 | URI | Backend | Durability |
@@ -531,3 +532,46 @@ redeploy.
 > across replicas). Migrate `--state-store file://…` and `MSHIP_STATE_DIR` to
 > `redis://`, or drop to the `memory://` default if you don't need to survive cluster
 > loss.
+
+### Stateful responses
+
+`/v1/responses` keeps conversations server-side, so a follow-up turn sends only the
+new input instead of replaying the whole history:
+
+```bash
+# Turn 1 — the response id comes back in `id`.
+curl localhost:8000/v1/responses -H 'Content-Type: application/json' \
+  -d '{"model": "qwen", "input": "my name is Alex"}'
+
+# Turn 2 — continue from it.
+curl localhost:8000/v1/responses -H 'Content-Type: application/json' \
+  -d '{"model": "qwen", "input": "what is my name?", "previous_response_id": "resp_…"}'
+```
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/responses` | `store` (default **true**) persists the response; `previous_response_id` continues from one |
+| `GET /v1/responses/{id}` | Fetch a stored response |
+| `DELETE /v1/responses/{id}` | Drop a stored response |
+| `GET /v1/responses/{id}/input_items` | The input a stored response was produced from |
+
+Send `"store": false` to opt a response out of being stored — it then has no id to
+continue from. An unknown, expired or already-deleted `previous_response_id` is a
+`404`; if the state store is unreachable the request is a `503` and never silently
+falls back to a stateless answer.
+
+Conversations are scoped to the caller's identity, so one caller can never read or
+continue another's. **With no auth configured every caller shares the single
+`unscoped` identity** — and therefore one conversation pool. Set `MSHIP_API_KEYS` or
+`MSHIP_TRUSTED_IDENTITY_HEADER` (see [Trusted identity header](#trusted-identity-header))
+before serving more than one user.
+
+| Variable | Description | Default |
+|---|---|---|
+| `MSHIP_RESPONSES_TTL_S` | How long a stored conversation lives. Each turn rewrites a fresh TTL, so an active conversation stays alive while superseded snapshots age out. `0` disables expiry. | `2592000` (30 days) |
+| `MSHIP_STATE_SWEEP_INTERVAL_S` | How often the `memory://` store reclaims expired keys. `0` disables sweeping. | `300` |
+
+Sizing: a snapshot holds the whole conversation as of that turn, so an *n*-turn
+conversation costs O(n²) storage in total — the price of continuing in a single read.
+On the default `memory://` that all sits in one Ray actor's RAM for up to the TTL, so
+for sustained multi-user traffic lower `MSHIP_RESPONSES_TTL_S` or move to `redis://`.

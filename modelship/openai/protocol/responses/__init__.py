@@ -35,9 +35,14 @@ from modelship.openai.protocol.responses.schemas import (
     ResponsesRequest,
     ResponseUsage,
 )
-from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
+from modelship.openai.protocol.responses.streaming import (
+    TERMINAL_EVENT_TYPES,
+    ResponsesStreamTranslator,
+    store_failure_event,
+)
 
 __all__ = [
+    "TERMINAL_EVENT_TYPES",
     "ResponseFunctionToolCall",
     "ResponseInputItem",
     "ResponseInputTokensDetails",
@@ -54,4 +59,5 @@ __all__ = [
     "ResponsesStreamTranslator",
     "UnsupportedResponsesFeatureError",
     "responses_request_to_chat",
+    "store_failure_event",
 ]

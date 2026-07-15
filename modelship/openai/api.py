@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import re
 import time
 from http import HTTPStatus
 from typing import Annotated, Any, cast
@@ -32,6 +34,7 @@ from modelship.metrics import (
     STREAM_CHUNKS_TOTAL,
     stamp_gateway,
 )
+from modelship.openai import responses_state
 from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, resolve_identity
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -53,6 +56,8 @@ from modelship.openai.protocol import (
     TranslationResponse,
     create_error_response,
 )
+from modelship.openai.protocol.responses.streaming import TERMINAL_EVENT_TYPES, store_failure_event
+from modelship.state import StateStoreUnavailableError, get_state_store
 from modelship.utils import random_uuid
 
 logger = get_logger("api")
@@ -60,6 +65,39 @@ logger = get_logger("api")
 _DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
 # Backoff before retrying the gateway watch loop after a transient coordinator error.
 _WATCH_RETRY_S = 5.0
+
+# Shape of the response ids we mint (`resp_<uuid>`). Ids arriving from a client are
+# checked against it before becoming a state-store key segment, so a malformed id is
+# a clean 404 rather than a lookup for something we could never have written.
+_RESPONSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _as_input_items(input_: str | list[Any]) -> list[Any]:
+    """Normalize a Responses ``input`` to item form, so stored history and this turn's
+    input concatenate."""
+    if isinstance(input_, str):
+        return [{"type": "message", "role": "user", "content": input_}]
+    return list(input_)
+
+
+def _terminal_event_payload(chunk: Any) -> dict[str, Any] | None:
+    """The decoded event of *chunk* if it is a terminal Responses SSE event carrying a
+    complete response, else ``None``.
+
+    Recovers the response the gateway just forwarded so it can be stored. Re-parsing
+    our own output is the cost of keeping state in the gateway; it is safe because
+    `streaming._sse` is the only writer of this format. The cheap `event:` line check
+    runs first so ordinary deltas never reach `json.loads`.
+    """
+    if not isinstance(chunk, str) or not any(chunk.startswith(f"event: {t}\n") for t in TERMINAL_EVENT_TYPES):
+        return None
+    _, _, data = chunk.partition("\ndata: ")
+    try:
+        payload = json.loads(data.strip())
+    except json.JSONDecodeError:
+        logger.exception("Could not decode terminal Responses event; not storing this response.")
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -171,6 +209,11 @@ class ModelshipAPI:
         self.expected_models: list[str] = []
         self._started_at = time.time()
         self._gateway_name = gateway_name
+        # /v1/responses conversation state. Construction is inert (no Ray call, no
+        # connection), so it costs nothing for a gateway that never serves a stateful
+        # request. The gateway owns this rather than the loaders: GET/DELETE carry no
+        # model, so they could not be routed to one.
+        self._state_store = get_state_store()
         stamp_gateway(gateway_name)
         # Routing state is reconciled from the coordinator, the cluster-wide source
         # of truth — not pushed by the driver (a push hits only one replica). Each
@@ -559,12 +602,25 @@ class ModelshipAPI:
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_response")
         headers = dict(raw_request.headers)
+
+        # Resolve conversation history here, before the Ray hop: the loader only ever
+        # sees a flat `input`, and a store outage fails the request before any GPU
+        # work starts. Costs nothing when previous_response_id is unset.
+        if request.previous_response_id is not None:
+            try:
+                request.input = await self._resolve_history(request, identity)
+            except HTTPException:
+                watcher.stop()
+                raise
+
         logger.info(
-            "responses model=%s input_items=%s max_output_tokens=%s stream=%s",
+            "responses model=%s input_items=%s max_output_tokens=%s stream=%s store=%s previous_response_id=%s",
             model,
             1 if isinstance(request.input, str) else len(request.input),
             request.max_output_tokens,
             bool(request.stream),
+            request.store is not False,
+            request.previous_response_id,
         )
         # Under stream=True the remote() result is an async-iterable
         # DeploymentResponseGenerator; Ray's stub widens it to a union because it
@@ -573,7 +629,157 @@ class ModelshipAPI:
             "DeploymentResponseGenerator[Any]",
             handle.respond.options(stream=True).remote(request, headers, watcher.registry, req_id, identity),
         )
+        if request.store is not False:
+            response_gen = self._persist_response(
+                response_gen, identity=identity, input_items=_as_input_items(request.input)
+            )
         return await self._handle_response(response_gen, watcher, model, "create_response")
+
+    async def _resolve_history(self, request: ResponsesRequest, identity: str) -> list[Any]:
+        """Prepend the conversation stored under ``previous_response_id`` to this
+        turn's input. 404 if unknown, 503 if the store is unreachable — an outage must
+        never masquerade as a legitimately unknown id."""
+        prev_id = request.previous_response_id or ""
+        if not _RESPONSE_ID_RE.match(prev_id):
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND.value,
+                detail=f"Previous response with id '{prev_id}' not found.",
+            )
+        try:
+            snapshot = await responses_state.read_async(self._state_store, identity, prev_id)
+        except StateStoreUnavailableError:
+            logger.exception("State store unavailable resolving previous_response_id=%s", prev_id)
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+                detail="Conversation state store is unavailable; retry shortly.",
+            ) from None
+        if snapshot is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND.value,
+                detail=f"Previous response with id '{prev_id}' not found.",
+            )
+        return [*responses_state.history_items(snapshot), *_as_input_items(request.input)]
+
+    async def _persist_response(self, gen, *, identity: str, input_items: list[Any]):
+        """Tee `respond`'s output, storing the snapshot as it passes.
+
+        Wraps the generator ahead of `_handle_response` so that stays generic. The
+        response id is read back off the output rather than minted here — the loader
+        already owns it, on both paths.
+
+        Both modes are covered by one wrapper because `_handle_response` dispatches on
+        the first item's type either way: a `ResponseObject` is the whole non-streaming
+        body, while a stream arrives as SSE strings whose terminal event carries the
+        same object. Persisting *before* yielding the terminal item is what lets a
+        store failure still change what the client is told.
+        """
+        async for item in gen:
+            if isinstance(item, ResponseObject):
+                try:
+                    await responses_state.write_async(
+                        self._state_store,
+                        identity,
+                        item.id,
+                        response=item.model_dump(mode="json"),
+                        input_items=input_items,
+                    )
+                except StateStoreUnavailableError:
+                    logger.exception("State store unavailable persisting response %s", item.id)
+                    yield create_error_response(
+                        "Conversation state store is unavailable; the response was generated but not stored.",
+                        err_type="api_error",
+                        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                yield item
+                continue
+
+            payload = _terminal_event_payload(item)
+            if payload is None:
+                yield item
+                continue
+
+            response = payload.get("response") or {}
+            try:
+                await responses_state.write_async(
+                    self._state_store,
+                    identity,
+                    response.get("id", ""),
+                    response=response,
+                    input_items=input_items,
+                )
+            except StateStoreUnavailableError:
+                logger.exception("State store unavailable persisting streamed response %s", response.get("id"))
+                yield store_failure_event(
+                    payload, "Conversation state store is unavailable; the response was generated but not stored."
+                )
+                return
+            yield item
+
+    async def _load_snapshot(self, response_id: str, raw_request: Request) -> dict:
+        """The stored snapshot for *response_id*, scoped to the caller's identity.
+
+        Isolation needs no comparison: another caller's identity builds a different
+        key, so it simply misses and 404s.
+        """
+        identity = self._set_identity(raw_request)
+        if not _RESPONSE_ID_RE.match(response_id):
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
+            )
+        try:
+            snapshot = await responses_state.read_async(self._state_store, identity, response_id)
+        except StateStoreUnavailableError:
+            logger.exception("State store unavailable reading response %s", response_id)
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+                detail="Conversation state store is unavailable; retry shortly.",
+            ) from None
+        if snapshot is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
+            )
+        return snapshot
+
+    @app.get("/v1/responses/{response_id}")
+    async def get_response(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        snapshot = await self._load_snapshot(response_id, raw_request)
+        # Stored verbatim, so this is a passthrough — no re-derivation to drift.
+        return JSONResponse(content=snapshot["response"])
+
+    @app.delete("/v1/responses/{response_id}")
+    async def delete_response(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        # Read first: delete is idempotent by contract, so it alone can't tell an
+        # unknown id from a real removal.
+        await self._load_snapshot(response_id, raw_request)
+        identity = self._set_identity(raw_request)
+        try:
+            await responses_state.delete_async(self._state_store, identity, response_id)
+        except StateStoreUnavailableError:
+            logger.exception("State store unavailable deleting response %s", response_id)
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+                detail="Conversation state store is unavailable; retry shortly.",
+            ) from None
+        return JSONResponse(content={"id": response_id, "object": "response", "deleted": True})
+
+    @app.get("/v1/responses/{response_id}/input_items")
+    async def get_response_input_items(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        snapshot = await self._load_snapshot(response_id, raw_request)
+        # Chronological; OpenAI defaults to order=desc, which we don't support yet.
+        items = snapshot.get("input_items") or []
+        return JSONResponse(
+            content={
+                "object": "list",
+                "data": items,
+                "first_id": items[0].get("id") if items and isinstance(items[0], dict) else None,
+                "last_id": items[-1].get("id") if items and isinstance(items[-1], dict) else None,
+                "has_more": False,
+            }
+        )
 
     @app.post("/v1/embeddings")
     async def create_embeddings(self, request: EmbeddingRequest, raw_request: Request):

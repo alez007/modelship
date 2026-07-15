@@ -51,11 +51,19 @@ The `llama_server` loader provides high-efficiency inference for quantized GGUF 
 - **Non-streaming** — `chat_utils.build_responses_items_from_parsed` maps the parsed tuple into `output[]` items (`reasoning` → reasoning item, content → message item, tool calls → `function_call` items), then `protocol/responses/adapter.build_response_object` builds the envelope and remaps usage.
 - **Streaming** (`stream: true`) — `ResponsesStreamTranslator` is fed loader-native typed chunks directly (vLLM's `engine_ops.stream_chat_completion`, llama-server's own delta fields) and emits the Responses event protocol (`response.created` → `output_item.added` → `output_text.delta` / `reasoning_summary_text.delta` / `function_call_arguments.delta` → `output_item.done` → `response.completed`), tracking `output_index` / `sequence_number`. Output items are opened lazily on their first delta and closed at stream end, so the translation is independent of how a model interleaves reasoning, text, and tool calls.
 
-**Supported:** text, reasoning (as a first-class `reasoning` output item), and client-driven tool calling (`function_call` / `function_call_output` round-trip), streaming and non-streaming — on the `vllm` and `llama_server` loaders.
+**Supported:** text, reasoning (as a first-class `reasoning` output item), client-driven tool calling (`function_call` / `function_call_output` round-trip), and server-side conversation state (`store` / `previous_response_id`, `GET`/`DELETE /v1/responses/{id}`, `/input_items`), streaming and non-streaming — on the `vllm` and `llama_server` loaders.
 
 **404s on other loaders** (`diffusers`, `custom`) — there is no generic fallback; a loader must implement `create_response` itself.
 
-**Rejected with a clear 400** (rather than silently dropped): `previous_response_id`, `background`, and hosted built-in tools (e.g. `web_search`). These require server-side conversation state, which `/v1/responses` does not yet keep — `store` is accepted but never persisted (the response echoes `store: false`). Encrypted reasoning (`reasoning.encrypted_content`) is also not implemented.
+**Rejected with a clear 400** (rather than silently dropped): `background` and hosted built-in tools (e.g. `web_search`). Encrypted reasoning (`reasoning.encrypted_content`) is not implemented — server-side state supersedes it as the way to carry reasoning across turns.
+
+### Conversation state
+
+State lives **in the gateway**, not the loaders. `GET`/`DELETE` carry no model, so they could not be routed to a deployment at all; putting the write there too keeps one seam and leaves both loaders untouched. `create_response` resolves `previous_response_id` into `input` *before* the Ray hop — so a store outage is a clean 503 before any GPU work — and tees `respond`'s output into the store on the way back, ahead of `_handle_response` so that stays generic. The loader therefore only ever sees a flat `input`, and echoes `store` / `previous_response_id` back on the envelope without acting on them.
+
+`modelship/openai/responses_state.py` stores one **self-contained snapshot per response id**, keyed `responses/<identity>/<response_id>` via the generic `modelship.state` store: continuing is a single read rather than a walk down a pointer chain, and each turn's fresh id makes branching fall out for free. Identity scoping means another caller builds a different key and simply misses — isolation with no comparison logic. Reading the id back off the response (rather than minting one in the gateway) keeps the loader's ownership of it intact; injecting an id ahead of generation is what Phase E (background mode) will need.
+
+The streaming write is the one asymmetry: the terminal `response.completed` event is re-parsed out of our own SSE to recover the response object. It is safe because `streaming._sse` is that format's only writer, and persisting *before* forwarding the event is what allows a store failure to downgrade the terminal event to `response.failed` — the response is uncontinuable, so reporting success would hand back an id that 404s next turn.
 
 Any `vllm` or `llama_server` model works — no special `models.yaml` entry is needed:
 
@@ -96,7 +104,8 @@ See [Plugin Development](plugins.md) for details.
 |------|---------|
 | `mship_deploy.py` | Entry point — initializes Ray, deploys models additively (or reconciles with `--reconcile`) |
 | `modelship/openai/api.py` | FastAPI gateway with OpenAI endpoints |
-| `modelship/openai/protocol/responses/` | `/v1/responses` schemas + stateless chat adapter (`adapter.py`) and streaming translator (`streaming.py`) |
+| `modelship/openai/protocol/responses/` | `/v1/responses` schemas + chat adapter (`adapter.py`) and streaming translator (`streaming.py`) |
+| `modelship/state/` | Generic pluggable KV store (`memory://` via a detached Ray actor, `redis://`). Domain layers live with their callers: `openai/responses_state.py`, `deploy/effective_config.py` |
 | `modelship/infer/model_deployment.py` | Ray Serve deployment actor |
 | `modelship/infer/infer_config.py` | Pydantic config models and protocols |
 | `modelship/infer/vllm/vllm_infer.py` | vLLM engine wrapper |

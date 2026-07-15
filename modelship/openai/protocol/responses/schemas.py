@@ -147,7 +147,6 @@ class ResponseObject(OpenAIBaseModel):
     reasoning: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     previous_response_id: str | None = None
-    # Phase A never persists, so this is always False regardless of the request.
     store: bool = False
     error: Any | None = None
     incomplete_details: Any | None = None
