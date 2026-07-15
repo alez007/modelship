@@ -144,7 +144,14 @@ def detect_template_toggle_defaults(template_src: str, tokenizer: Any) -> dict[s
     request time (``TypeError: multiple values``).
     """
     candidates = discover_template_vars(template_src)
-    reserved = set(inspect.signature(tokenizer.apply_chat_template).parameters)
+    try:
+        reserved = set(inspect.signature(tokenizer.apply_chat_template).parameters)
+    except (TypeError, ValueError):
+        # Some tokenizer wrappers expose an uninspectable `apply_chat_template` (e.g.
+        # a C-extension or mocked callable). Falling back to no exclusions is safe:
+        # any reserved name that slips through as a candidate just fails its own
+        # render probe below, which `detect_boolean_defaults` already tolerates.
+        reserved = set()
     candidates -= reserved
     if not candidates:
         return {}
