@@ -6,8 +6,10 @@ model deployments each gateway owns. `mship_deploy.py` writes to it as models ar
 own routing table from `get_routing` — the driver never pushes to individual
 replicas.
 
-The registry is persisted through `get_state_store()` (file/redis for multi-node
-HA) so a resurrected actor reloads live ownership instead of starting empty. The
+The registry is persisted through `get_state_store()` — cluster-scoped even on the
+default `memory://` (backed by its own detached actor, see `modelship.state.memory`)
+so a resurrected coordinator reloads live ownership instead of starting empty;
+`file://`/`redis://` add survival across a full cluster loss on top of that. The
 per-gateway generation counter and its wakeup `asyncio.Event` are ephemeral: on
 restart the generation resets to 0, which `wait_for_change` already treats as
 "changed" so replicas re-pull and reconcile from the reloaded registry.
@@ -51,14 +53,17 @@ class ReplicaCoordinator:
         # reconcile from the reloaded registry.
         self._store = get_state_store()
         if isinstance(getattr(self._store, "inner", self._store), MemoryStateStore):
-            # A memory store dies with the actor: a restarted coordinator reloads an
-            # empty registry, and the next deploy (gen advances) re-enables removals
-            # against it — dropping still-healthy models from gateway routing. Fine
-            # single-node; for multi-node/HA set MSHIP_STATE_STORE to file:// or redis://.
+            # The memory store is cluster-scoped (a detached actor), so it survives
+            # THIS coordinator's own restart — but it dies with the cluster: a
+            # coordinator resurrected on a fresh cluster reloads an empty registry,
+            # and the next deploy (gen advances) re-enables removals against it —
+            # dropping still-healthy models from gateway routing. Fine single-node;
+            # for survival across cluster loss set MSHIP_STATE_STORE to file:// or
+            # redis://.
             logger.warning(
-                "Replica coordinator is backed by a non-durable memory state store; its routing "
-                "registry will be lost on coordinator restart. Set MSHIP_STATE_STORE to file:// "
-                "or redis:// for multi-node/HA."
+                "Replica coordinator is backed by a cluster-scoped (non-durable) memory state "
+                "store; its routing registry survives coordinator restart but is lost if the "
+                "cluster dies. Set MSHIP_STATE_STORE to file:// or redis:// to survive cluster loss."
             )
         saved = self._store.get(_STATE_KEY)
         saved = saved if isinstance(saved, dict) else {}
@@ -87,14 +92,15 @@ class ReplicaCoordinator:
             old.set()
         self._change[gateway_name] = asyncio.Event()
 
-    def _persist(self) -> None:
-        """Write the durable routing state through the StateStore. A no-op for the
-        memory store; for redis/file this is what survives coordinator death."""
-        self._store.set(_STATE_KEY, {"registry": self._registry, "expected": self._expected})
+    async def _persist(self) -> None:
+        """Write the durable routing state through the StateStore. Async because a
+        memory-backed store is an RPC to another actor — a sync ray.get here would
+        block this actor's own event loop (and thus wait_for_change) on every write."""
+        await self._store.set_async(_STATE_KEY, {"registry": self._registry, "expected": self._expected})
 
     async def register_deployment(self, gateway_name: str, deployment_name: str, model_name: str) -> None:
         self._registry.setdefault(gateway_name, {})[deployment_name] = model_name
-        self._persist()
+        await self._persist()
         self._bump(gateway_name)
 
     async def unregister_deployment(self, gateway_name: str, deployment_name: str) -> None:
@@ -103,13 +109,13 @@ class ReplicaCoordinator:
             gw.pop(deployment_name, None)
             if not gw:
                 del self._registry[gateway_name]
-        self._persist()
+        await self._persist()
         self._bump(gateway_name)
 
     async def set_expected(self, gateway_name: str, names: list[str]) -> None:
         """Record the desired model set for readiness; bumps so replicas adopt it."""
         self._expected[gateway_name] = list(names)
-        self._persist()
+        await self._persist()
         self._bump(gateway_name)
 
     async def get_routing(self, gateway_name: str) -> dict:

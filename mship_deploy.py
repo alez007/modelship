@@ -63,7 +63,7 @@ from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coor
 from modelship.infer.replica_coordinator import get_or_create_replica_coordinator  # noqa: E402
 from modelship.logging import configure_logging, get_lib_log_config, get_logger  # noqa: E402
 from modelship.metrics import DEPLOY_DURATION_SECONDS, DEPLOY_MODELS_CHANGED_TOTAL  # noqa: E402
-from modelship.state import get_state_store  # noqa: E402
+from modelship.state import MemoryStateStore, get_state_store  # noqa: E402
 from modelship.utils.cli import apply_args_to_env, parse_args  # noqa: E402
 
 logger = get_logger("startup")
@@ -108,6 +108,15 @@ def main(argv: list[str] | None = None) -> None:
     # (it reads the persisted effective set and reconciles onto an empty cluster).
     mode = resolve_mode(reconcile=args.reconcile)
     store = get_state_store()
+    if isinstance(getattr(store, "inner", store), MemoryStateStore):
+        # Cluster-scoped (a detached actor), so effective config now survives
+        # across deploy invocations and coordinator restarts — but it dies with
+        # the cluster, unlike file:// (on a PVC) or redis://.
+        logger.warning(
+            "Effective config is backed by a cluster-scoped (non-durable) memory state store; it "
+            "survives deploys and coordinator restarts but NOT cluster loss. Set MSHIP_STATE_STORE "
+            "to file:// or redis:// for self-heal after cluster loss."
+        )
     effective_raw = read_effective(store, gateway_name)
 
     # --reconcile with no --config is the self-heal path: there's no user input, so
