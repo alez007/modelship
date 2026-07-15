@@ -250,6 +250,10 @@ class TestStateStoreFromUri:
         with pytest.raises(ValueError, match="takes no host/path"):
             state_store_from_uri("memory://foo")
 
+    def test_memory_scheme_rejects_path(self):
+        with pytest.raises(ValueError, match="takes no host/path"):
+            state_store_from_uri("memory:///foo")
+
     def test_file_scheme_uses_uri_path(self):
         store = state_store_from_uri("file:///tmp/mship-state-test").inner
         assert isinstance(store, FileStateStore)

@@ -132,9 +132,14 @@ def _default_file_dir() -> Path:
 
 def _build_memory(parsed: ParseResult) -> StateStore:
     # No connection body: memory:// always names the one cluster-wide actor. Any
-    # netloc (e.g. memory://foo) is rejected rather than silently ignored.
-    if parsed.netloc:
-        raise ValueError(f"memory:// URI takes no host/path: {parsed.geturl()!r} parses host {parsed.netloc!r}.")
+    # host or path (memory://foo, memory:///foo) is rejected rather than silently
+    # ignored. Gate on parsed.scheme too: the bare "memory" form (no "://") is
+    # parsed as an empty scheme with the word itself sitting in .path, and that
+    # form must still be accepted.
+    if parsed.scheme and (parsed.netloc or parsed.path):
+        raise ValueError(
+            f"memory:// URI takes no host/path: {parsed.geturl()!r} parses host {parsed.netloc!r} path {parsed.path!r}."
+        )
     return MemoryStateStore()
 
 
