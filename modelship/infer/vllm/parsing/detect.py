@@ -9,10 +9,19 @@ validate against vLLM's registry directly rather than a modelship-side one.
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
+from typing import Any
+
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig
 from modelship.logging import get_logger
 
 logger = get_logger("infer.vllm.parsing.detect")
+
+# A fixed, minimal conversation to render templates against when probing their
+# boolean toggle defaults. Content is irrelevant — only which branches the
+# template takes for a given kwarg matters.
+_PROBE_MESSAGES = [{"role": "user", "content": "hi"}]
 
 
 def classify_tool_template(template: str) -> str | None:
@@ -72,6 +81,73 @@ def _is_tool_opt_out(cfg: ModelshipModelConfig) -> bool:
 def _is_reasoning_opt_out(cfg: ModelshipModelConfig) -> bool:
     """Explicit "no auto reasoning detection" signal: ``enable_reasoning: false``."""
     return cfg.loader == ModelLoader.vllm and cfg.vllm_engine_kwargs.enable_reasoning is False
+
+
+def discover_template_vars(template_src: str) -> set[str]:
+    """Undeclared (caller-supplied) variables a Jinja template reads.
+
+    These are the names ``chat_template_kwargs`` can influence — the set we probe
+    for boolean toggle defaults.
+    """
+    import jinja2
+    from jinja2 import meta as jinja2_meta
+
+    env = jinja2.Environment()
+    return jinja2_meta.find_undeclared_variables(env.parse(template_src))
+
+
+def detect_boolean_defaults(candidates: set[str], render: Callable[..., str]) -> dict[str, bool]:
+    """Detect each candidate var's boolean default by rendering with it forced on/off.
+
+    A var is a boolean toggle iff ``render(var=True)`` and ``render(var=False)``
+    differ. Its default is whichever of the two the base render (no kwarg for that
+    var) matches *exactly*. If the base matches neither or both, the var isn't a
+    plain boolean (e.g. a token string interpolated verbatim) and is skipped. A
+    render that raises for a given var skips that var; a base render that raises
+    aborts entirely (``{}``) so the caller leaves the config untouched.
+    """
+    try:
+        base = render()
+    except Exception:
+        return {}
+
+    defaults: dict[str, bool] = {}
+    for var in candidates:
+        try:
+            on = render(**{var: True})
+            off = render(**{var: False})
+        except Exception:
+            continue
+        if on == off:
+            continue  # inert for this probe — not a toggle we can pin
+        if base == on and base != off:
+            defaults[var] = True
+        elif base == off and base != on:
+            defaults[var] = False
+        # base matching neither/both -> ambiguous (non-bool); skip.
+    return defaults
+
+
+def detect_template_toggle_defaults(template_src: str, tokenizer: Any) -> dict[str, bool]:
+    """Each chat-template boolean toggle's own default, for pinning into config.
+
+    Renders a fixed probe conversation through ``tokenizer.apply_chat_template``
+    with each discovered variable forced True/False (see ``detect_boolean_defaults``).
+    Variables that are real ``apply_chat_template`` parameters (``add_generation_prompt``,
+    ``tools``, ``messages``, ...) are excluded — pinning them into
+    ``chat_template_kwargs`` would collide with vLLM's own explicit argument at
+    request time (``TypeError: multiple values``).
+    """
+    candidates = discover_template_vars(template_src)
+    reserved = set(inspect.signature(tokenizer.apply_chat_template).parameters)
+    candidates -= reserved
+    if not candidates:
+        return {}
+
+    def render(**kwargs: bool) -> str:
+        return tokenizer.apply_chat_template(_PROBE_MESSAGES, tokenize=False, add_generation_prompt=True, **kwargs)
+
+    return detect_boolean_defaults(candidates, render)
 
 
 def resolve_tool_parser(cfg: ModelshipModelConfig, template: str | None) -> str | None:

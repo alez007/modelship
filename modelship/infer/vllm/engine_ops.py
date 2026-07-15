@@ -23,6 +23,7 @@ from vllm.entrypoints.serve.render.serving import OpenAIServingRender as VllmOpe
 from vllm.entrypoints.serve.utils.api_utils import get_max_tokens as vllm_get_max_tokens
 from vllm.inputs import EngineInput as VllmEngineInput
 from vllm.logprobs import Logprob as VllmLogprob
+from vllm.outputs import CompletionOutput as VllmCompletionOutput
 from vllm.outputs import RequestOutput as VllmRequestOutput
 from vllm.parser import Parser as VllmParser
 from vllm.renderers.inputs.preprocess import extract_prompt_components as vllm_extract_prompt_components
@@ -31,6 +32,7 @@ from vllm.sampling_params import SamplingParams as VllmSamplingParams
 from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
 from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
+from modelship.logging import get_logger
 from modelship.openai.chat_utils import ParsedChatOutput
 from modelship.openai.protocol import (
     ChatCompletionLogProb,
@@ -39,6 +41,7 @@ from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse,
+    CompletionTokenUsageInfo,
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
@@ -47,6 +50,8 @@ from modelship.openai.protocol import (
     UsageInfo,
     random_uuid,
 )
+
+logger = get_logger("infer.vllm.engine_ops")
 
 
 def build_vllm_request(
@@ -323,6 +328,18 @@ def _finish_reason_for_choice(
     return "tool_calls"
 
 
+def total_reasoning_tokens(outputs: Sequence[VllmCompletionOutput], parser: VllmParser | None) -> int | None:
+    """Sum reasoning-classified tokens across every choice's completed `token_ids`,
+    mirroring vLLM's own `entrypoints.openai.responses.serving` usage accounting.
+
+    Returns `None` when no reasoning parser is active for this request, so callers can
+    leave `completion_tokens_details` unset rather than reporting a misleading zero.
+    """
+    if parser is None or parser.reasoning_parser is None:
+        return None
+    return sum(parser.reasoning_parser.count_reasoning_tokens(list(o.token_ids)) for o in outputs)
+
+
 def build_choices(
     final_res: VllmRequestOutput,
     vllm_req: VllmChatCompletionRequest,
@@ -368,6 +385,47 @@ def build_choices(
     return choices, finish_reasons, logprobs_list
 
 
+def _reconcile_trapped_content(
+    render: VllmOpenAIServingRender,
+    tokenizer: VllmTokenizerLike,
+    vllm_req: VllmChatCompletionRequest,
+    full_text: str,
+    token_ids: list[int],
+    *,
+    enable_auto_tools: bool,
+) -> str | None:
+    """Recover an answer the streaming parser left stranded in `reasoning`.
+
+    vLLM's streaming parser engine starts in `REASONING` whenever the prompt primes
+    thinking, and its `finish()` only marks `REASONING_END` — it never reclassifies
+    chunks it already emitted. So a model that ends a turn without its reasoning-close
+    marker leaves the whole reply in `reasoning` with empty `content`, while the
+    full-text `parse()` the non-streaming path uses (`build_choices`) reads the same
+    tokens as `content`. This re-runs that authoritative parse to settle the
+    disagreement in favour of the non-streaming answer.
+
+    `full_text` must be the engine's own detokenized text (the streamed deltas joined),
+    not a re-decode of `token_ids`: the engine drops the stop token from its text while
+    `token_ids` retains it, and this `parse()` — unlike the offline `parse_thinking_output`
+    helper — does not strip trailing sentinels, so a re-decode leaks e.g. `<turn|>` into
+    the recovered answer.
+
+    A fresh parser is required: the streamed instance carries mid-stream state and
+    would not reproduce the full-text result. Returns the recovered content, or None
+    when the parse agrees there is none (e.g. reasoning that closed with no answer).
+    """
+    parser = make_parsers(render, tokenizer, vllm_req, vllm_req.chat_template_kwargs, n=1)[0]
+    if parser is None:
+        return None
+    _reasoning, content, _tool_calls = parser.parse(
+        full_text,
+        vllm_req,
+        enable_auto_tools=enable_auto_tools,
+        model_output_token_ids=token_ids,
+    )
+    return content or None
+
+
 async def stream_chat_completion(
     engine: VllmAsyncLLM,
     render: VllmOpenAIServingRender,
@@ -401,8 +459,17 @@ async def stream_chat_completion(
     include_continuous_usage = include_usage and bool(stream_options and stream_options.continuous_usage_stats)
 
     previous_num_tokens = [0] * num_choices
+    accumulated_token_ids: list[list[int]] = [[] for _ in range(num_choices)]
     finish_reason_sent = [False] * num_choices
     tools_streamed = [False] * num_choices
+    # Per-choice record of what actually reached the client, so the finish branch can
+    # spot a reasoning-only stream and reconcile it (see `_reconcile_trapped_content`).
+    content_streamed = [False] * num_choices
+    reasoning_streamed = [False] * num_choices
+    # The engine's own detokenized text, kept only until this choice streams content —
+    # at that point it can never be reconciled, so the buffer is dropped rather than
+    # carried for the rest of the request.
+    accumulated_text: list[list[str]] = [[] for _ in range(num_choices)]
     first_iteration = True
     num_prompt_tokens = 0
 
@@ -456,6 +523,12 @@ async def stream_chat_completion(
                 vllm_delta = VllmDeltaMessage(content=delta_text)
 
             previous_num_tokens[i] += len(output.token_ids)
+            accumulated_token_ids[i].extend(output.token_ids)
+            # Mirror the raw engine text alongside the ids: the parser returns None
+            # while it defers text it hasn't decided on yet, and those deltas must
+            # still reach the reconcile's full-text parse.
+            if not content_streamed[i]:
+                accumulated_text[i].append(delta_text)
 
             if vllm_delta is None:
                 # VllmParser swallowed a control token (e.g. a `<think>` marker) with
@@ -471,6 +544,11 @@ async def stream_chat_completion(
                 reasoning=vllm_delta.reasoning,
                 tool_calls=project_delta_tool_calls(vllm_delta.tool_calls),
             )
+            if delta_message.content:
+                content_streamed[i] = True
+                accumulated_text[i].clear()
+            if delta_message.reasoning:
+                reasoning_streamed[i] = True
 
             logprobs = None
             if want_logprobs and output.logprobs is not None:
@@ -479,6 +557,26 @@ async def stream_chat_completion(
             if output.finish_reason is None:
                 choice = ChatCompletionResponseStreamChoice(index=i, delta=delta_message, logprobs=logprobs)
             else:
+                # Reasoning-only stream: the answer may be trapped in `reasoning`. The
+                # flags are a cheap pre-filter; the re-parse is what decides, so a
+                # genuinely answer-less turn stays untouched.
+                if parser is not None and reasoning_streamed[i] and not content_streamed[i] and not tools_streamed[i]:
+                    recovered = _reconcile_trapped_content(
+                        render,
+                        tokenizer,
+                        vllm_req,
+                        "".join(accumulated_text[i]),
+                        accumulated_token_ids[i],
+                        enable_auto_tools=enable_auto_tools,
+                    )
+                    if recovered:
+                        logger.debug(
+                            "request %s choice %d: recovered %d chars trapped in reasoning",
+                            request_id,
+                            i,
+                            len(recovered),
+                        )
+                        delta_message.content = recovered
                 finish_reason_sent[i] = True
                 choice = ChatCompletionResponseStreamChoice(
                     index=i,
@@ -499,6 +597,12 @@ async def stream_chat_completion(
 
     if include_usage:
         completion_tokens = sum(previous_num_tokens)
+        reasoning_tokens = None
+        if parsers[0] is not None and parsers[0].reasoning_parser is not None:
+            reasoning_tokens = 0
+            for i, choice_parser in enumerate(parsers):
+                if choice_parser is not None and choice_parser.reasoning_parser is not None:
+                    reasoning_tokens += choice_parser.reasoning_parser.count_reasoning_tokens(accumulated_token_ids[i])
         yield ChatCompletionStreamResponse(
             id=request_id,
             model=model_name,
@@ -507,6 +611,9 @@ async def stream_chat_completion(
                 prompt_tokens=num_prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=num_prompt_tokens + completion_tokens,
+                completion_tokens_details=CompletionTokenUsageInfo(reasoning_tokens=reasoning_tokens)
+                if reasoning_tokens is not None
+                else None,
             ),
         )
 
