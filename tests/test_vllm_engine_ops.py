@@ -14,13 +14,17 @@ Two tiers:
 """
 
 import inspect
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, ClassVar
 from unittest.mock import Mock
 
 import pytest
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest as VllmChatCompletionRequest,
 )
+from vllm.entrypoints.openai.engine.protocol import DeltaFunctionCall as VllmDeltaFunctionCall
+from vllm.entrypoints.openai.engine.protocol import DeltaMessage as VllmDeltaMessage
+from vllm.entrypoints.openai.engine.protocol import DeltaToolCall as VllmDeltaToolCall
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender as VllmOpenAIServingRender
 from vllm.parser import Parser as VllmParser
 from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
@@ -92,6 +96,38 @@ class TestDeriveReasoningEnded:
         assert engine_ops.derive_reasoning_ended(vllm_req, parser=None, prompt_token_ids=[]) is None
 
 
+class TestTotalReasoningTokens:
+    """Regression: `usage.completion_tokens_details.reasoning_tokens` was never
+    populated anywhere -- always silently 0/omitted -- even though vLLM's own
+    reasoning parsers expose `count_reasoning_tokens` for exactly this. That
+    hid the common "the whole token budget went to reasoning, not the answer"
+    failure mode from API consumers."""
+
+    def test_no_parser_returns_none(self):
+        outputs = [Mock(token_ids=[1, 2, 3])]
+        assert engine_ops.total_reasoning_tokens(outputs, parser=None) is None
+
+    def test_parser_without_reasoning_returns_none(self):
+        parser = Mock(spec=VllmParser)
+        parser.reasoning_parser = None
+        outputs = [Mock(token_ids=[1, 2, 3])]
+        assert engine_ops.total_reasoning_tokens(outputs, parser=parser) is None
+
+    def test_sums_across_choices(self):
+        parser = Mock(spec=VllmParser)
+        parser.reasoning_parser = Mock()
+        parser.reasoning_parser.count_reasoning_tokens.side_effect = [5, 2]
+        outputs = [Mock(token_ids=[1, 2, 3, 4, 5]), Mock(token_ids=[6, 7])]
+
+        result = engine_ops.total_reasoning_tokens(outputs, parser=parser)
+
+        assert result == 7
+        assert parser.reasoning_parser.count_reasoning_tokens.call_args_list == [
+            ((list(outputs[0].token_ids),),),
+            ((list(outputs[1].token_ids),),),
+        ]
+
+
 class TestMakeParsers:
     def test_no_parser_class_returns_n_nones(self):
         render = Mock(spec=VllmOpenAIServingRender)
@@ -116,6 +152,147 @@ class TestMakeParsers:
             args, kwargs = call
             assert args == (tokenizer, vllm_req.tools)
             assert kwargs == {"chat_template_kwargs": {"k": "v"}}
+
+
+class _TrapParser:
+    """Mirrors vLLM's parse/parse_delta split for a model that never closes its
+    reasoning: `parse_delta` streams everything as reasoning and never emits content,
+    while the authoritative full-text `parse` reads the same tokens as an answer."""
+
+    full_parse_result: ClassVar[tuple[str | None, str | None, Any]] = (None, "the answer", None)
+    delta_tool_calls: ClassVar[list[VllmDeltaToolCall]] = []
+    delta_as_content = False
+    parsed_text: ClassVar[str | None] = None
+
+    def __init__(self, tokenizer, tools=None, chat_template_kwargs=None):
+        self.reasoning_parser = None
+
+    def parse_delta(self, *, delta_text, delta_token_ids, request, prompt_token_ids, finished):
+        if self.delta_as_content:
+            return VllmDeltaMessage(content=delta_text)
+        return VllmDeltaMessage(reasoning=delta_text, tool_calls=self.delta_tool_calls)
+
+    def parse(self, model_output, request, enable_auto_tools=False, model_output_token_ids=()):
+        # Record what the reconcile handed us: it must be the engine's own streamed text,
+        # not a re-decode of the token ids (which would carry the stop token).
+        type(self).parsed_text = model_output
+        return self.full_parse_result
+
+
+def _res(text: str, token_ids: list[int], finish_reason: str | None):
+    output = SimpleNamespace(
+        index=0, text=text, token_ids=token_ids, finish_reason=finish_reason, logprobs=None, stop_reason=None
+    )
+    return SimpleNamespace(prompt_token_ids=[1, 2], outputs=[output])
+
+
+async def _drive_stream(monkeypatch, parser_cls, *, results=None) -> list[Any]:
+    """Run `stream_chat_completion` over a scripted engine stream, returning the chunks."""
+    monkeypatch.setattr(engine_ops, "extract_prompt_token_ids", lambda render, engine_input: [1, 2])
+
+    async def fake_generate(*args, **kwargs):
+        for r in results or [_res("Hello there", [10], None), _res("", [], "stop")]:
+            yield r
+
+    engine = Mock()
+    engine.generate = fake_generate
+    render = Mock(spec=VllmOpenAIServingRender)
+    render.parser = parser_cls
+
+    chunks = []
+    async for chunk in engine_ops.stream_chat_completion(
+        engine,
+        render,
+        _vllm_req(tools=None),
+        engine_input=Mock(),
+        sampling_params=Mock(),
+        request_id="req-1",
+        model_name="m",
+        tokenizer=Mock(decode=Mock(return_value="a token re-decode, not the engine's text")),
+        enable_auto_tools=False,
+        want_logprobs=False,
+        num_output_top_logprobs=None,
+    ):
+        chunks.append(chunk)
+    return chunks
+
+
+class TestStreamReconcilesTrappedContent:
+    """Regression: vLLM's streaming parser engine starts in REASONING when thinking is
+    primed and never reclassifies chunks it already emitted, so a model that ends a turn
+    without its close marker leaves the whole reply in `reasoning` with empty `content` —
+    while the non-streaming `parse()` reads the same tokens as `content`. The finish
+    branch must settle that disagreement in favour of the non-streaming answer."""
+
+    @pytest.mark.asyncio
+    async def test_reasoning_only_stream_recovers_content_on_finish(self, monkeypatch):
+        chunks = await _drive_stream(monkeypatch, _TrapParser)
+
+        final = chunks[-1]
+        assert final.choices[0].finish_reason == "stop"
+        assert final.choices[0].delta.content == "the answer"
+
+    @pytest.mark.asyncio
+    async def test_deferred_deltas_still_reach_the_parse(self, monkeypatch):
+        # Regression: vLLM parsers return None while deferring text they haven't
+        # classified yet, and that branch `continue`s. Accumulating only on emitted
+        # deltas dropped exactly those chunks, mangling the recovered answer
+        # ("2 + 2 equals **4**." came back as "2 +2 equals4."). Also pins that the parse
+        # gets the engine's own streamed text -- a re-decode of the token ids would
+        # carry the stop token the engine drops.
+        class DeferringParser(_TrapParser):
+            def parse_delta(self, *, delta_text, delta_token_ids, request, prompt_token_ids, finished):
+                if delta_text == " + ":  # deferred: consumed but not emitted
+                    return None
+                return VllmDeltaMessage(reasoning=delta_text)
+
+        _TrapParser.parsed_text = None
+        results = [
+            _res("2", [1], None),
+            _res(" + ", [2], None),
+            _res("2 equals 4.", [3], None),
+            _res("", [], "stop"),
+        ]
+        await _drive_stream(monkeypatch, DeferringParser, results=results)
+
+        assert DeferringParser.parsed_text == "2 + 2 equals 4."
+
+    @pytest.mark.asyncio
+    async def test_streamed_content_is_not_reconciled(self, monkeypatch):
+        class ContentParser(_TrapParser):
+            delta_as_content = True
+            full_parse_result = (None, "SHOULD NOT APPEAR", None)
+
+        chunks = await _drive_stream(monkeypatch, ContentParser)
+
+        streamed = "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
+        assert "SHOULD NOT APPEAR" not in streamed
+        assert "Hello there" in streamed
+
+    @pytest.mark.asyncio
+    async def test_reasoning_with_no_answer_stays_empty(self, monkeypatch):
+        # Reasoning that genuinely closed with no answer: the re-parse agrees there is
+        # no content, so nothing is attached (the flags alone would have fired here).
+        class NoAnswerParser(_TrapParser):
+            full_parse_result = ("some reasoning", None, None)
+
+        chunks = await _drive_stream(monkeypatch, NoAnswerParser)
+
+        assert chunks[-1].choices[0].delta.content is None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_stream_is_not_reconciled(self, monkeypatch):
+        class ToolParser(_TrapParser):
+            delta_tool_calls: ClassVar[list[VllmDeltaToolCall]] = [
+                VllmDeltaToolCall(
+                    index=0, id="c1", type="function", function=VllmDeltaFunctionCall(name="f", arguments="{}")
+                )
+            ]
+            full_parse_result: ClassVar[tuple[str | None, str | None, Any]] = (None, "SHOULD NOT APPEAR", None)
+
+        chunks = await _drive_stream(monkeypatch, ToolParser)
+
+        assert chunks[-1].choices[0].delta.content is None
 
 
 class TestSignaturesGuardVllmBump:

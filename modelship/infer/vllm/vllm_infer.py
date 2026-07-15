@@ -1,5 +1,5 @@
 import io
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, ClassVar, cast
@@ -67,10 +67,15 @@ from modelship.infer.infer_config import (
 )
 from modelship.infer.vllm import engine_ops
 from modelship.infer.vllm.capabilities import VllmCapabilities
-from modelship.infer.vllm.parsing.detect import resolve_reasoning_parser, resolve_tool_parser
+from modelship.infer.vllm.parsing.detect import (
+    detect_template_toggle_defaults,
+    resolve_reasoning_parser,
+    resolve_tool_parser,
+)
 from modelship.logging import TRACE, get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
 from modelship.openai.chat_utils import (
+    ParsedChatOutput,
     UnsupportedContentError,
     build_from_parsed,
     build_response_from_parsed,
@@ -82,6 +87,7 @@ from modelship.openai.chat_utils import (
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    CompletionTokenUsageInfo,
     EmbeddingCompletionRequest,
     EmbeddingRequest,
     ErrorResponse,
@@ -143,6 +149,80 @@ def _vllm_stream_error(exc: Exception) -> str | None:
         base = exc.args[0] if exc.args else str(exc)
         return str(base)
     return None
+
+
+def _trace_request(
+    request_id: str, vllm_request: VllmChatCompletionRequest, sampling_params: VllmSamplingParams
+) -> None:
+    """TRACE-log the effective request: the generation budget and the
+    `chat_template_kwargs` actually in play (e.g. `enable_thinking`), so a
+    truncated-mid-reasoning failure can be tied back to what was sent."""
+    if not logger.isEnabledFor(TRACE):
+        return
+    logger.log(
+        TRACE,
+        "%s request: max_tokens=%s chat_template_kwargs=%s messages=%s tools=%s",
+        request_id,
+        sampling_params.max_tokens,
+        vllm_request.chat_template_kwargs,
+        vllm_request.messages,
+        vllm_request.tools,
+    )
+
+
+def _trace_parsed_response(
+    request_id: str,
+    choices: Sequence[ParsedChatOutput],
+    finish_reasons: Sequence[str | None],
+    usage: UsageInfo,
+) -> None:
+    """TRACE-log the parsed non-stream result: finish reason, usage, and both
+    reasoning and content per choice — so an answer trapped in `reasoning` (empty
+    `content`) versus budget exhaustion (`finish=length`) is obvious at a glance."""
+    if not logger.isEnabledFor(TRACE):
+        return
+    for i, parsed in enumerate(choices):
+        fr = finish_reasons[i] if i < len(finish_reasons) else None
+        logger.log(
+            TRACE,
+            "%s response choice[%d]: finish=%s reasoning_len=%d content_len=%d tool_calls=%d reasoning=%r content=%r",
+            request_id,
+            i,
+            fr,
+            len(parsed.reasoning or ""),
+            len(parsed.content or ""),
+            len(parsed.tool_calls),
+            parsed.reasoning,
+            parsed.content,
+        )
+    logger.log(TRACE, "%s usage: %s", request_id, usage)
+
+
+async def _trace_chunks(chunks: AsyncGenerator[Any, None], request_id: str) -> AsyncGenerator[Any, None]:
+    """Pass streaming chunks through unchanged while buffering reasoning + content
+    deltas, TRACE-logging a summary when the stream ends. Only wrapped around a
+    stream when TRACE is enabled, so it costs nothing otherwise."""
+    reasoning: list[str] = []
+    content: list[str] = []
+    try:
+        async for chunk in chunks:
+            for choice in chunk.choices:
+                if choice.delta.reasoning:
+                    reasoning.append(choice.delta.reasoning)
+                if choice.delta.content:
+                    content.append(choice.delta.content)
+            yield chunk
+    finally:
+        r, c = "".join(reasoning), "".join(content)
+        logger.log(
+            TRACE,
+            "%s response (stream): reasoning_len=%d content_len=%d reasoning=%r content=%r",
+            request_id,
+            len(r),
+            len(c),
+            r,
+            c,
+        )
 
 
 @dataclass
@@ -340,6 +420,28 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         # get_chat_template isn't in vLLM's TokenizerLike protocol (it's a plain
         # HF PreTrainedTokenizer method the real tokenizer always has).
         template = cast(Any, self.engine.get_tokenizer()).get_chat_template()
+
+        # A reasoning parser reads chat_template_kwargs["enable_thinking"] (and
+        # similar toggles) and defaults them True when absent, but a template may
+        # default the same toggle False — leaving the parser primed to reason on a
+        # model that was never told to. Pin each toggle to the template's own
+        # detected default so both sides agree; user/config values still win.
+        if template is not None:
+            defaults = detect_template_toggle_defaults(template, cast(Any, self.engine.get_tokenizer()))
+            applied = {k: v for k, v in defaults.items() if k not in self.model_config.chat_template_kwargs}
+            for key, value in applied.items():
+                self.model_config.chat_template_kwargs[key] = value
+            if applied:
+                logger.info("Pinned chat-template toggle defaults for '%s': %s", self.model_config.name, applied)
+            overridden = {k: v for k, v in defaults.items() if k not in applied}
+            if overridden:
+                logger.info(
+                    "Chat-template toggle defaults for '%s' overridden by config: %s (detected defaults: %s)",
+                    self.model_config.name,
+                    {k: self.model_config.chat_template_kwargs[k] for k in overridden},
+                    overridden,
+                )
+
         tool_parser_name = resolve_tool_parser(self.model_config, template)
         enable_tools = tool_parser_name is not None
         reasoning_parser_name = resolve_reasoning_parser(self.model_config, template) or ""
@@ -464,6 +566,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         Rendering already succeeded in `_prepare_chat` — this only drives generation."""
         request_id = f"chatcmpl-{base_request_id(raw_request)}"
         vllm_request = prepared.vllm_request
+        _trace_request(request_id, vllm_request, prepared.sampling_params)
 
         stream = engine_ops.stream_chat_completion(
             self.engine,
@@ -478,14 +581,11 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             want_logprobs=bool(request.logprobs),
             num_output_top_logprobs=request.top_logprobs,
         )
-        trace = logger.isEnabledFor(TRACE)
-        buffered: list[str] = []
+        chunks = self.run_cancellable_stream(stream, raw_request)
+        if logger.isEnabledFor(TRACE):
+            chunks = _trace_chunks(chunks, request_id)
         try:
-            async for chunk in self.run_cancellable_stream(stream, raw_request):
-                if trace:
-                    for choice in chunk.choices:
-                        if choice.delta.content:
-                            buffered.append(choice.delta.content)
+            async for chunk in chunks:
                 yield encode_chat_sse_chunk(chunk)
         except ClientDisconnectedError:
             logger.info("chat request %s aborted: client disconnected", request_id)
@@ -501,9 +601,6 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             )
             yield "data: [DONE]\n\n"
             return
-        finally:
-            if trace:
-                logger.log(TRACE, "chat response %s (stream): %r", request_id, "".join(buffered))
         yield "data: [DONE]\n\n"
 
     async def _create_chat_completion_no_stream(
@@ -521,6 +618,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         reasoning_ended = engine_ops.derive_reasoning_ended(vllm_request, parser, prompt_token_ids)
 
         request_id = f"chatcmpl-{base_request_id(raw_request)}"
+        _trace_request(request_id, vllm_request, sampling_params)
         try:
             final_res = await self.run_cancellable(
                 engine_ops.consume_final_output(
@@ -553,16 +651,22 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             return _to_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
+        reasoning_tokens = engine_ops.total_reasoning_tokens(final_res.outputs, parser)
 
+        usage = UsageInfo(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            completion_tokens_details=CompletionTokenUsageInfo(reasoning_tokens=reasoning_tokens)
+            if reasoning_tokens is not None
+            else None,
+        )
+        _trace_parsed_response(request_id, choices, finish_reasons, usage)
         return build_from_parsed(
             request_id=request_id,
             model_name=self.model_config.name,
             choices=choices,
-            usage=UsageInfo(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
+            usage=usage,
             finish_reasons=finish_reasons,
             logprobs=logprobs_list,
         )
@@ -608,6 +712,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         reasoning_ended = engine_ops.derive_reasoning_ended(vllm_request, parser, prompt_token_ids)
 
         request_id = f"resp-{base_request_id(raw_request)}"
+        _trace_request(request_id, vllm_request, sampling_params)
         try:
             final_res = await self.run_cancellable(
                 engine_ops.consume_final_output(
@@ -640,15 +745,21 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             return _to_error_response("vllm returned no prompt_token_ids for a completed request", status_code=502)
         prompt_tokens = len(final_res.prompt_token_ids)
         completion_tokens = sum(len(output.token_ids) for output in final_res.outputs)
+        reasoning_tokens = engine_ops.total_reasoning_tokens(final_res.outputs, parser)
 
+        usage = UsageInfo(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            completion_tokens_details=CompletionTokenUsageInfo(reasoning_tokens=reasoning_tokens)
+            if reasoning_tokens is not None
+            else None,
+        )
+        _trace_parsed_response(request_id, choices, finish_reasons, usage)
         return build_response_from_parsed(
             choices[0],
             request,
-            usage=UsageInfo(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
+            usage=usage,
             finish_reason=finish_reasons[0],
             model=self.model_config.name,
         )
@@ -664,6 +775,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         round trip. Rendering already succeeded in `_prepare_responses`."""
         request_id = f"resp-{base_request_id(raw_request)}"
         vllm_request = prepared.vllm_request
+        _trace_request(request_id, vllm_request, prepared.sampling_params)
 
         stream = engine_ops.stream_chat_completion(
             self.engine,
@@ -679,6 +791,8 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
             num_output_top_logprobs=None,
         )
         chunks = self.run_cancellable_stream(stream, raw_request)
+        if logger.isEnabledFor(TRACE):
+            chunks = _trace_chunks(chunks, request_id)
         async for event in self._stream_responses(
             request, chunks, request_id=request_id, client_error=_vllm_stream_error
         ):
