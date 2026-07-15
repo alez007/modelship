@@ -194,12 +194,6 @@ class _Deployer:
 
     def __init__(self, tmp_dir: Path) -> None:
         self._tmp = tmp_dir
-        # A per-session file:// state store, shared with the operator (see
-        # mship_cluster). The default is now memory://, which is per-process — but
-        # each reconcile runs in its OWN subprocess and must read the effective set
-        # the prior deploy wrote to tear down models that dropped out, so the
-        # integration tests opt into a shared cross-process file store under tmp.
-        self._state_store = f"file://{tmp_dir / 'state'}"
         self._current: frozenset[str] = frozenset()
 
     def deploy(self, *model_names: str) -> None:
@@ -221,8 +215,6 @@ class _Deployer:
                     "mship_deploy.py",
                     "--config",
                     str(config_path),
-                    "--state-store",
-                    self._state_store,
                     "--reconcile",
                     "--replace-strategy",
                     "stop_start",
@@ -252,12 +244,6 @@ def mship_cluster(tmp_path_factory):
     tmp_dir = tmp_path_factory.mktemp("mship_integration")
     empty_config = tmp_dir / "empty-models.yaml"
     log_path = tmp_dir / "mship_deploy.log"
-    # Per-session file:// state store, shared with every _Deployer reconcile via
-    # --state-store. memory:// (the default) is per-process, so reconcile in a
-    # separate subprocess couldn't read this operator's effective set; a shared
-    # file store under tmp keeps that cross-process sharing without touching the
-    # /.cache/state default.
-    state_store = f"file://{tmp_dir / 'state'}"
 
     subprocess.run(["ray", "stop", "--force"], check=False)
     subprocess.run(["ray", "start", "--head", "--dashboard-host=0.0.0.0", "--disable-usage-stats"], check=True)
@@ -277,8 +263,6 @@ def mship_cluster(tmp_path_factory):
             "mship_deploy.py",
             "--config",
             str(empty_config),
-            "--state-store",
-            state_store,
             "--gateway-replicas",
             "2",
             "--prune-ray-sessions",

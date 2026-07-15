@@ -9,15 +9,21 @@ import pytest
 
 from modelship.infer import replica_coordinator
 from modelship.infer.replica_coordinator import ReplicaCoordinator
-from modelship.state import MemoryStateStore
+from modelship.state import MemoryStoreActor
 
-# The plain class behind @ray.remote — its async methods are ordinary coroutines.
+# The plain classes behind @ray.remote — their async methods are ordinary
+# coroutines, so both can be exercised in-process without a Ray cluster.
 _Coord = ReplicaCoordinator.__ray_metadata__.modified_class
+_MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 
 @pytest.fixture
 def coord():
-    return _Coord()
+    # get_state_store() now returns a Ray-actor-backed client that requires a live
+    # cluster; patch it to the plain in-process dict so these tests stay
+    # cluster-free, matching every other test in this file.
+    with patch.object(replica_coordinator, "get_state_store", return_value=_MemoryStore()):
+        yield _Coord()
 
 
 class TestRoutingRegistry:
@@ -100,7 +106,7 @@ class TestDurableState:
 
     @pytest.mark.asyncio
     async def test_reloads_registry_and_expected_from_shared_store(self):
-        store = MemoryStateStore()  # stand-in for a redis:// store across restarts
+        store = _MemoryStore()  # stand-in for a redis:// store across restarts
         with patch.object(replica_coordinator, "get_state_store", return_value=store):
             first = _Coord()
             await first.register_deployment("gw", "qwen-aaaa", "qwen")
@@ -117,7 +123,7 @@ class TestDurableState:
 
     @pytest.mark.asyncio
     async def test_unregister_persists_removal(self):
-        store = MemoryStateStore()
+        store = _MemoryStore()
         with patch.object(replica_coordinator, "get_state_store", return_value=store):
             first = _Coord()
             await first.register_deployment("gw", "qwen-aaaa", "qwen")

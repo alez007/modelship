@@ -3,7 +3,7 @@
 A store is selected by a connection URI whose **scheme** picks the backend and
 whose body carries that backend's connection:
 
-    memory://                     in-process dict (default)
+    memory://                     dict shared cluster-wide via a Ray actor (default)
     file:///.cache/state          one JSON file per key under a directory
     redis://[:pw@]host:6379/0      one JSON value per key in Redis (rediss:// = TLS)
 
@@ -22,12 +22,13 @@ from urllib.parse import ParseResult, urlparse
 from modelship.metrics import STATE_STORE_OPERATION_DURATION_SECONDS, STATE_STORE_OPERATIONS_TOTAL
 from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
 from modelship.state.file import FileStateStore
-from modelship.state.memory import MemoryStateStore
+from modelship.state.memory import MemoryStateStore, MemoryStoreActor
 
 __all__ = [
     "FileStateStore",
     "JsonValue",
     "MemoryStateStore",
+    "MemoryStoreActor",
     "StateStore",
     "StateStoreUnavailableError",
     "get_state_store",
@@ -129,7 +130,11 @@ def _default_file_dir() -> Path:
     return Path(base)
 
 
-def _build_memory(_: ParseResult) -> StateStore:
+def _build_memory(parsed: ParseResult) -> StateStore:
+    # No connection body: memory:// always names the one cluster-wide actor. Any
+    # netloc (e.g. memory://foo) is rejected rather than silently ignored.
+    if parsed.netloc:
+        raise ValueError(f"memory:// URI takes no host/path: {parsed.geturl()!r} parses host {parsed.netloc!r}.")
     return MemoryStateStore()
 
 

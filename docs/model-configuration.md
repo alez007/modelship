@@ -514,7 +514,7 @@ connection URI — the scheme picks the backend, the rest carries its connection
 
 | URI | Backend | Durability |
 |---|---|---|
-| `memory://` (default) | in-process dict | none — lost on restart (fine self-hosted: a restart replaces the config anyway) |
+| `memory://` (default) | dict shared cluster-wide by a detached Ray actor | survives a deploy re-run / coordinator restart, but not cluster death (fine self-hosted: a cluster loss replaces the config anyway) |
 | `file:///.cache/state` | one JSON file per key under the path (empty path → `MSHIP_STATE_DIR`) | survives cluster death on a mounted volume / PVC |
 | `redis://[:pw@]host:6379/0` (`rediss://` = TLS) | one JSON value per key in Redis | survives head/coordinator death; the password is parsed from the URL by `redis.from_url` |
 

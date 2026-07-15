@@ -3,17 +3,25 @@ sync and async paths, TTL, prefix listing, and availability-vs-absent semantics.
 """
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
+from ray import exceptions as ray_exceptions
 
 from modelship.state import (
     FileStateStore,
     MemoryStateStore,
+    MemoryStoreActor,
     StateStoreUnavailableError,
     get_state_store,
     state_store_from_uri,
 )
+from modelship.state import memory as memory_module
 from modelship.state.redis import RedisStateStore
+
+# The plain class behind @ray.remote — its dict logic is tested in-process,
+# without a Ray cluster, the same pattern test_replica_coordinator.py uses.
+_MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 
 def _fake_redis_store():
@@ -31,7 +39,7 @@ def _fake_redis_store():
 @pytest.fixture(params=["memory", "file", "redis"])
 def store(request, tmp_path):
     if request.param == "memory":
-        return MemoryStateStore()
+        return _MemoryStore()
     if request.param == "file":
         return FileStateStore(tmp_path)
     return _fake_redis_store()
@@ -88,9 +96,12 @@ class TestBackends:
         assert await store.get_async("k") is None
 
 
-class TestMemoryStateStore:
+class TestMemoryStoreActor:
+    """The dict logic that lives inside MemoryStoreActor, exercised via the plain
+    class (no Ray cluster needed)."""
+
     def test_isolates_stored_value_from_caller_mutation(self):
-        store = MemoryStateStore()
+        store = _MemoryStore()
         payload = {"x": 1}
         store.set("k", payload)
         payload["x"] = 999  # mutate the original after storing
@@ -103,12 +114,65 @@ class TestMemoryStateStore:
     def test_ttl_expires(self, monkeypatch):
         clock = {"t": 1000.0}
         monkeypatch.setattr("time.time", lambda: clock["t"])
-        store = MemoryStateStore()
+        store = _MemoryStore()
         store.set("k", {"x": 1}, ttl_seconds=10)
         assert store.get("k") == {"x": 1}
         clock["t"] = 1011.0
         assert store.get("k") is None
         assert store.list("k") == []
+
+
+class TestMemoryStateStoreClient:
+    """The MemoryStateStore client: Ray-availability gating, delegation to the
+    actor handle, and RayActorError -> StateStoreUnavailableError mapping."""
+
+    def test_construction_is_inert(self, monkeypatch):
+        # No ray.is_initialized / get_or_create call until first use.
+        monkeypatch.setattr(memory_module.ray, "is_initialized", MagicMock(side_effect=AssertionError))
+        MemoryStateStore()
+
+    def test_raises_when_ray_not_initialized(self, monkeypatch):
+        monkeypatch.setattr(memory_module.ray, "is_initialized", lambda: False)
+        store = MemoryStateStore()
+        with pytest.raises(StateStoreUnavailableError):
+            store.get("k")
+
+    def test_delegates_get_to_actor_handle(self, monkeypatch):
+        monkeypatch.setattr(memory_module.ray, "is_initialized", lambda: True)
+        fake_handle = MagicMock()
+        fake_handle.get.remote.return_value = "sentinel-ref"
+        monkeypatch.setattr(memory_module, "get_or_create_memory_store_actor", lambda: fake_handle)
+        monkeypatch.setattr(memory_module.ray, "get", lambda ref: {"x": 1} if ref == "sentinel-ref" else None)
+
+        store = MemoryStateStore()
+        assert store.get("k") == {"x": 1}
+        fake_handle.get.remote.assert_called_once_with("k")
+
+    def test_actor_error_raises_unavailable_and_drops_cached_handle(self, monkeypatch):
+        monkeypatch.setattr(memory_module.ray, "is_initialized", lambda: True)
+        fake_handle = MagicMock()
+        fake_handle.get.remote.return_value = "ref"
+        monkeypatch.setattr(memory_module, "get_or_create_memory_store_actor", lambda: fake_handle)
+        monkeypatch.setattr(
+            memory_module.ray,
+            "get",
+            MagicMock(side_effect=ray_exceptions.RayActorError()),
+        )
+
+        store = MemoryStateStore()
+        with pytest.raises(StateStoreUnavailableError):
+            store.get("k")
+        assert store._handle is None  # dropped so the next call re-resolves
+
+    def test_get_or_create_sets_max_restarts(self, monkeypatch):
+        # A restarted actor comes back empty (see MemoryStoreActor's docstring) but
+        # must come back at all — assert the option that makes that happen.
+        monkeypatch.setattr(memory_module.ray, "get_actor", MagicMock(side_effect=ValueError("absent")))
+        options = MagicMock()
+        options.return_value.remote.return_value = MagicMock()
+        monkeypatch.setattr(memory_module.MemoryStoreActor, "options", options)
+        memory_module.get_or_create_memory_store_actor()
+        assert options.call_args.kwargs["max_restarts"] == -1
 
 
 class TestFileStateStore:
@@ -181,6 +245,10 @@ class TestStateStoreFromUri:
 
     def test_bare_value_treated_as_scheme(self):
         assert isinstance(state_store_from_uri("memory").inner, MemoryStateStore)
+
+    def test_memory_scheme_rejects_host(self):
+        with pytest.raises(ValueError, match="takes no host/path"):
+            state_store_from_uri("memory://foo")
 
     def test_file_scheme_uses_uri_path(self):
         store = state_store_from_uri("file:///tmp/mship-state-test").inner
