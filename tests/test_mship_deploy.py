@@ -42,13 +42,6 @@ class TestParseArgs:
         args = parse_args(["--config", "/some/path/models.yaml"])
         assert args.config == "/some/path/models.yaml"
 
-    def test_state_dir(self):
-        args = parse_args(["--state-dir", "/srv/mship/state"])
-        assert args.state_dir == "/srv/mship/state"
-
-    def test_state_dir_defaults_to_none(self):
-        assert parse_args([]).state_dir is None
-
     def test_gateway_replicas(self):
         assert parse_args(["--gateway-replicas", "3"]).gateway_replicas == 3
 
@@ -77,20 +70,20 @@ class TestParseArgs:
 
 
 class TestApplyArgsToEnv:
-    def test_state_dir_sets_env(self, monkeypatch):
-        monkeypatch.delenv("MSHIP_STATE_DIR", raising=False)
-        apply_args_to_env(parse_args(["--state-dir", "/srv/mship/state"]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/srv/mship/state"
+    def test_state_store_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_STORE", raising=False)
+        apply_args_to_env(parse_args(["--state-store", "redis://cache:6379/0"]))
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://cache:6379/0"
 
-    def test_state_dir_flag_overrides_preset_env(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_DIR", "/from/env")
-        apply_args_to_env(parse_args(["--state-dir", "/from/flag"]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/from/flag"
+    def test_state_store_flag_overrides_preset_env(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_STORE", "redis://from-env:6379/0")
+        apply_args_to_env(parse_args(["--state-store", "redis://from-flag:6379/0"]))
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://from-flag:6379/0"
 
-    def test_no_state_dir_leaves_env_untouched(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_DIR", "/preexisting")
+    def test_no_state_store_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_STORE", "redis://preexisting:6379/0")
         apply_args_to_env(parse_args([]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/preexisting"
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://preexisting:6379/0"
 
     def test_gateway_replicas_sets_env(self, monkeypatch):
         monkeypatch.delenv("MSHIP_GATEWAY_REPLICAS", raising=False)

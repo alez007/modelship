@@ -5,7 +5,7 @@ The default backend. Every process and gateway replica in the cluster shares one
 visible to another (e.g. a re-run of the driver, or a gateway replica) — unlike a
 plain process-local dict. It survives the actor being restarted (``max_restarts``)
 but NOT the cluster dying, which is what distinguishes it from the durable
-``file://``/``redis://`` backends. Selected by the ``memory://`` URI scheme.
+``redis://`` backend. Selected by the ``memory://`` URI scheme.
 """
 
 from __future__ import annotations

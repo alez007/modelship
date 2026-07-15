@@ -6,13 +6,12 @@ metadata:
     {{- include "modelship.labels" . | nindent 4 }}
 spec:
   rayVersion: {{ .Values.rayVersion | quote }}
-  {{- if .Values.redis.enabled }}
   # GCS fault tolerance: back the head's GCS with Redis so a restarted head pod
   # recovers cluster state (workers + model actors survive) instead of taking the
   # cluster down. externalStorageNamespace is pinned so a recreated cluster (same
   # name) recovers; KubeRay injects the RAY_REDIS_* env for us.
   gcsFaultToleranceOptions:
-    redisAddress: {{ .Values.redis.address | quote }}
+    redisAddress: {{ required "redis.address is required (see the chart README)." .Values.redis.address | quote }}
     externalStorageNamespace: {{ .Values.redis.externalStorageNamespace | default (include "modelship.fullname" .) | quote }}
     {{- if or .Values.redis.password .Values.redis.existingSecret }}
     redisPassword:
@@ -21,7 +20,6 @@ spec:
           name: {{ include "modelship.redisSecretName" . }}
           key: {{ .Values.redis.passwordKey }}
     {{- end }}
-  {{- end }}
   # ---- Head: CPU-only coordination (GCS, dashboard, Serve proxy). ----
   headGroupSpec:
     rayStartParams:

@@ -489,7 +489,6 @@ deployment.
 | `HF_TOKEN` | HuggingFace access token | — |
 | `MSHIP_CACHE_DIR` | Model cache directory (HuggingFace + plugins) | `/.cache` |
 | `MSHIP_STATE_STORE` | State-store connection URI for the effective config + deploy coordinator (see [State store](#state-store-mship_state_store)) | `memory://` |
-| `MSHIP_STATE_DIR` | Default directory for a `file://` state store with no path | `<cache-dir>/state` |
 | `MSHIP_GATEWAY_NAME` | Name for the API gateway app | `modelship api` |
 | `MSHIP_GATEWAY_REPLICAS` | Number of API gateway replicas (routing/ingress HA; replicas sync routing via the deploy coordinator) | `1` |
 | `MSHIP_MAX_REQUEST_BODY_BYTES` | Maximum allowed request body size in bytes | `52428800` (50 MB) |
@@ -514,12 +513,21 @@ connection URI — the scheme picks the backend, the rest carries its connection
 
 | URI | Backend | Durability |
 |---|---|---|
-| `memory://` (default) | dict shared cluster-wide by a detached Ray actor | survives a deploy re-run / coordinator restart, but not cluster death (fine self-hosted: a cluster loss replaces the config anyway) |
-| `file:///.cache/state` | one JSON file per key under the path (empty path → `MSHIP_STATE_DIR`) | survives cluster death on a mounted volume / PVC |
-| `redis://[:pw@]host:6379/0` (`rediss://` = TLS) | one JSON value per key in Redis | survives head/coordinator death; the password is parsed from the URL by `redis.from_url` |
+| `memory://` (default) | dict shared cluster-wide by a detached Ray actor | survives a deploy re-run, coordinator restart and gateway-replica restart, but **not cluster death** |
+| `redis://[:pw@]host:6379/0` (`rediss://` = TLS) | one JSON value per key in Redis | survives head/coordinator death **and cluster loss**; the password is parsed from the URL by `redis.from_url` |
 
-In Kubernetes the Helm chart sets this for you: `file://` on the cache PVC by
-default, or `redis://…` when `redis.enabled=true` (the same Redis then also backs
-Ray GCS fault tolerance — see the chart's **Head-node HA** section). A `redis://`
-store is what lets the gateway self-heal its routing after a head restart instead of
-needing a redeploy.
+`memory://` is cluster-scoped, not process-local: every gateway replica and model
+actor shares one detached Ray actor, so it is correct at any replica count. It is
+sized for small-traffic single-node deployments — every operation is a Ray RPC
+through that one actor, and large values spill to the object store.
+
+In Kubernetes the Helm chart always sets `redis://…`; the same Redis also backs Ray
+GCS fault tolerance (see the chart's **Head-node HA** section). A `redis://` store is
+what lets the gateway self-heal its routing after a head restart instead of needing a
+redeploy.
+
+> A `file://` backend existed before v0.7.0 and was removed: it is a poor fit for
+> per-turn conversation snapshots (one JSON file each, no native TTL, last-writer-wins
+> across replicas). Migrate `--state-store file://…` and `MSHIP_STATE_DIR` to
+> `redis://`, or drop to the `memory://` default if you don't need to survive cluster
+> loss.

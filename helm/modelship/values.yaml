@@ -42,8 +42,11 @@ metrics:
   enabled: true
   port: 8079
 
+# Redis backs both the modelship state store (effective config, routing registry,
+# /v1/responses conversations) and Ray GCS fault tolerance. Required — the chart wires
+# an address but does not deploy Redis; bring your own (a small single instance with a
+# PVC is plenty).
 redis:
-  enabled: false
   # host:port of the Redis (e.g. "my-redis-master:6379").
   address: ""
   db: 0

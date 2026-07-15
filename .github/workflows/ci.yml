@@ -87,15 +87,24 @@ jobs:
             | sudo tar xz -C /usr/local/bin kubeconform
           # CRDs (RayCluster/RayJob/PodMonitor) aren't in the standard schema set, so
           # skip those and validate everything else strictly across value permutations.
+          # redis.address is required by the chart, so every permutation sets it.
           for args in \
             "" \
             "--set image.variant=cpu" \
-            "--set redis.enabled=true --set redis.address=cache:6379 --set redis.password=pw" \
+            "--set redis.password=pw" \
             "--set podMonitor.enabled=true"; do
             echo "== helm template $args =="
-            helm template modelship helm/modelship $args \
+            helm template modelship helm/modelship --set redis.address=cache:6379 $args \
               | kubeconform -strict -ignore-missing-schemas -summary
           done
+
+      - name: Reject a chart with no Redis address
+        run: |
+          # redis.address has no durable fallback to degrade to, so an unset one must
+          # fail rendering rather than silently produce a cluster with no state store.
+          if helm template modelship helm/modelship >/dev/null 2>&1; then
+            echo "expected 'helm template' to fail without redis.address"; exit 1
+          fi
 
       - name: Create kind cluster
         uses: helm/kind-action@v1
@@ -109,13 +118,12 @@ jobs:
           # gcsFaultToleranceOptions) against the real CRD schemas. Head-only (no
           # workers/cache) so nothing needs GPUs or PVCs.
           helm install kuberay-operator kuberay/kuberay-operator --wait --timeout 5m
-          for redis in "false" "true"; do
-            echo "== dry-run redis.enabled=$redis =="
+          for pw in "" "--set redis.password=pw"; do
+            echo "== dry-run redis.password=${pw:-none} =="
             helm install modelship helm/modelship \
               --set kuberay-operator.enabled=false \
               --set cache.enabled=false \
-              --set redis.enabled=$redis \
               --set redis.address=cache:6379 \
-              --set redis.password=pw \
+              $pw \
               --dry-run=server
           done

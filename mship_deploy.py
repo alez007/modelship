@@ -111,11 +111,11 @@ def main(argv: list[str] | None = None) -> None:
     if isinstance(getattr(store, "inner", store), MemoryStateStore):
         # Cluster-scoped (a detached actor), so effective config now survives
         # across deploy invocations and coordinator restarts — but it dies with
-        # the cluster, unlike file:// (on a PVC) or redis://.
+        # the cluster, unlike redis://.
         logger.warning(
             "Effective config is backed by a cluster-scoped (non-durable) memory state store; it "
             "survives deploys and coordinator restarts but NOT cluster loss. Set MSHIP_STATE_STORE "
-            "to file:// or redis:// for self-heal after cluster loss."
+            "to redis:// for self-heal after cluster loss."
         )
     effective_raw = read_effective(store, gateway_name)
 

@@ -1,15 +1,13 @@
-"""Tests for the state-store URI factory and the memory/file/redis backends —
-sync and async paths, TTL, prefix listing, and availability-vs-absent semantics.
+"""Tests for the state-store URI factory and the memory/redis backends — sync and
+async paths, TTL, prefix listing, and availability-vs-absent semantics.
 """
 
-import json
 from unittest.mock import MagicMock
 
 import pytest
 from ray import exceptions as ray_exceptions
 
 from modelship.state import (
-    FileStateStore,
     MemoryStateStore,
     MemoryStoreActor,
     StateStoreUnavailableError,
@@ -36,12 +34,10 @@ def _fake_redis_store():
     return s
 
 
-@pytest.fixture(params=["memory", "file", "redis"])
-def store(request, tmp_path):
+@pytest.fixture(params=["memory", "redis"])
+def store(request):
     if request.param == "memory":
         return _MemoryStore()
-    if request.param == "file":
-        return FileStateStore(tmp_path)
     return _fake_redis_store()
 
 
@@ -175,40 +171,6 @@ class TestMemoryStateStoreClient:
         assert options.call_args.kwargs["max_restarts"] == -1
 
 
-class TestFileStateStore:
-    def test_ttl_expires(self, tmp_path, monkeypatch):
-        clock = {"t": 1000.0}
-        monkeypatch.setattr("time.time", lambda: clock["t"])
-        store = FileStateStore(tmp_path)
-        store.set("k", {"x": 1}, ttl_seconds=10)
-        assert store.get("k") == {"x": 1}
-        clock["t"] = 1011.0
-        assert store.get("k") is None
-
-    def test_reads_legacy_raw_value(self, tmp_path):
-        # A pre-envelope file (raw value, no marker) still reads back as the value.
-        store = FileStateStore(tmp_path)
-        (tmp_path / "k.json").write_text(json.dumps({"models": ["a"]}))
-        assert store.get("k") == {"models": ["a"]}
-
-    def test_unreadable_existing_file_raises_unavailable(self, tmp_path):
-        # A directory where the value file should be makes read_text raise OSError
-        # (not FileNotFoundError) — an availability failure, not a missing key.
-        store = FileStateStore(tmp_path)
-        (tmp_path / "k.json").mkdir()
-        with pytest.raises(StateStoreUnavailableError):
-            store.get("k")
-
-    def test_write_failure_cleans_up_tmp_file(self, tmp_path):
-        # A directory where the value file should be makes the final tmp.replace()
-        # raise OSError; the tmp file it created must not be left behind.
-        store = FileStateStore(tmp_path)
-        (tmp_path / "k.json").mkdir()
-        with pytest.raises(StateStoreUnavailableError):
-            store.set("k", {"x": 1})
-        assert list(tmp_path.glob("*.tmp")) == []
-
-
 class TestRedisStateStore:
     def test_ttl_sets_native_expiry(self):
         store = _fake_redis_store()
@@ -254,22 +216,11 @@ class TestStateStoreFromUri:
         with pytest.raises(ValueError, match="takes no host/path"):
             state_store_from_uri("memory:///foo")
 
-    def test_file_scheme_uses_uri_path(self):
-        store = state_store_from_uri("file:///tmp/mship-state-test").inner
-        assert isinstance(store, FileStateStore)
-        assert str(store.base_dir) == "/tmp/mship-state-test"
-
-    def test_file_scheme_empty_path_falls_back_to_default(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_DIR", "/var/lib/mship/state")
-        store = state_store_from_uri("file://").inner
-        assert isinstance(store, FileStateStore)
-        assert str(store.base_dir) == "/var/lib/mship/state"
-
-    def test_file_scheme_two_slash_path_rejected(self):
-        # file://some/dir is malformed: urlparse reads "some" as the host and
-        # would silently drop it. Must raise, not fall back to the default dir.
-        with pytest.raises(ValueError, match="must have an empty host"):
-            state_store_from_uri("file://some/dir")
+    def test_file_scheme_no_longer_supported(self):
+        # The file backend was removed; a stale file:// URI must fail loudly rather
+        # than silently fall back to the ephemeral default.
+        with pytest.raises(ValueError, match="unknown state-store scheme"):
+            state_store_from_uri("file:///tmp/mship-state-test")
 
     def test_redis_scheme_builds_redis_store(self):
         # Construction is inert (clients are lazy) — no server contacted.
@@ -284,7 +235,5 @@ class TestStateStoreFromUri:
         assert isinstance(get_state_store().inner, MemoryStateStore)
 
     def test_get_state_store_reads_env(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_STORE", "file:///tmp/mship-env-state")
-        store = get_state_store().inner
-        assert isinstance(store, FileStateStore)
-        assert str(store.base_dir) == "/tmp/mship-env-state"
+        monkeypatch.setenv("MSHIP_STATE_STORE", "redis://cache:6379/0")
+        assert isinstance(get_state_store().inner, RedisStateStore)
