@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.4] - 2026-07-15
+
+### Fixed
+- tolerate uninspectable apply_chat_template in toggle detection
+- harden reasoning-trap reconcile against parse failures and malformed templates
+- stop vLLM reasoning models trapping their answer in the reasoning field
+
 ## [0.6.3] - 2026-07-14
 
 ### Fixed
