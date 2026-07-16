@@ -196,11 +196,15 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
             yield item
             continue
 
-        response = payload.get("response") or {}
+        response = payload.get("response")
+        response_id = response.get("id") if isinstance(response, dict) else None
+        if not isinstance(response, dict) or not response_id:
+            logger.warning("Terminal Responses event has no usable response id; not storing.")
+            yield item
+            continue
+
         try:
-            await responses_state.write_async(
-                store, identity, response.get("id", ""), response=response, input_items=input_items
-            )
+            await responses_state.write_async(store, identity, response_id, response=response, input_items=input_items)
         except StateStoreUnavailableError:
             logger.exception("State store unavailable persisting streamed response %s", response.get("id"))
             yield store_failure_event(

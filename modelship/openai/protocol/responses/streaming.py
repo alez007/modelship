@@ -72,7 +72,7 @@ def store_failure_event(terminal_payload: dict[str, Any], message: str) -> str:
     replaces that event rather than following it.
     """
     response = {
-        **terminal_payload.get("response", {}),
+        **(terminal_payload.get("response") or {}),
         "status": "failed",
         "error": {"message": message},
     }

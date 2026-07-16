@@ -112,7 +112,7 @@ def history_items(snapshot: dict) -> list[dict]:
     """Rebuild the conversation from a snapshot: everything that went into that turn,
     plus what it produced. This is what a continuation prepends to its own input."""
     items = snapshot.get("input_items")
-    output = snapshot.get("response", {}).get("output")
+    output = (snapshot.get("response") or {}).get("output")
     return [
         *(items if isinstance(items, list) else []),
         *(output if isinstance(output, list) else []),
