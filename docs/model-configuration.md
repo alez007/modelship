@@ -25,6 +25,8 @@ Models are configured in a YAML file (default: `config/models.yaml`). Each entry
 | `--api-keys` | `MSHIP_API_KEYS` | — | Comma-separated API keys |
 | `--trusted-identity-header` | `MSHIP_TRUSTED_IDENTITY_HEADER` | — | Header name (e.g. `X-Consumer-Id`) a fronting credentials layer sets with a caller identity it already resolved and authorized. See [Trusted identity header](#trusted-identity-header) below |
 | `--max-request-body-bytes` | `MSHIP_MAX_REQUEST_BODY_BYTES` | `52428800` | Max request body size in bytes |
+| `--responses-ttl-s` | `MSHIP_RESPONSES_TTL_S` | `2592000` | TTL in seconds for stored `/v1/responses` conversation state; `<=0` disables expiry |
+| `--state-sweep-interval-s` | `MSHIP_STATE_SWEEP_INTERVAL_S` | `300` | Interval in seconds between expired-key sweeps in the in-memory state store |
 
 ### Cache Directory Structure
 

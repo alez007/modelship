@@ -52,6 +52,18 @@ class TestParseArgs:
         args = parse_args(["--gateway-name", "my-gateway"])
         assert args.gateway_name == "my-gateway"
 
+    def test_responses_ttl_s(self):
+        assert parse_args(["--responses-ttl-s", "60"]).responses_ttl_s == 60.0
+
+    def test_responses_ttl_s_defaults_to_none(self):
+        assert parse_args([]).responses_ttl_s is None
+
+    def test_state_sweep_interval_s(self):
+        assert parse_args(["--state-sweep-interval-s", "30"]).state_sweep_interval_s == 30.0
+
+    def test_state_sweep_interval_s_defaults_to_none(self):
+        assert parse_args([]).state_sweep_interval_s is None
+
     def test_all_flags_combined(self):
         args = parse_args(
             [
@@ -121,6 +133,16 @@ class TestApplyArgsToEnv:
             os.environ.pop("MSHIP_PREFLIGHT", None)
             apply_args_to_env(parse_args([]))
             assert "MSHIP_PREFLIGHT" not in os.environ
+
+    def test_responses_ttl_s_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RESPONSES_TTL_S", raising=False)
+        apply_args_to_env(parse_args(["--responses-ttl-s", "60"]))
+        assert os.environ["MSHIP_RESPONSES_TTL_S"] == "60.0"
+
+    def test_state_sweep_interval_s_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_SWEEP_INTERVAL_S", raising=False)
+        apply_args_to_env(parse_args(["--state-sweep-interval-s", "30"]))
+        assert os.environ["MSHIP_STATE_SWEEP_INTERVAL_S"] == "30.0"
 
 
 class TestRandSuffix:
@@ -208,6 +230,8 @@ class TestBuildDeploymentOptions:
         monkeypatch.setenv("MSHIP_METRICS", "false")
         monkeypatch.setenv("MSHIP_GATEWAY_NAME", "edge")
         monkeypatch.setenv("MSHIP_PREFLIGHT", "false")
+        monkeypatch.setenv("MSHIP_RESPONSES_TTL_S", "60")
+        monkeypatch.setenv("MSHIP_STATE_SWEEP_INTERVAL_S", "30")
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
@@ -219,6 +243,8 @@ class TestBuildDeploymentOptions:
         assert env_vars["MSHIP_METRICS"] == "false"
         assert env_vars["MSHIP_GATEWAY_NAME"] == "edge"
         assert env_vars["MSHIP_PREFLIGHT"] == "false"
+        assert env_vars["MSHIP_RESPONSES_TTL_S"] == "60"
+        assert env_vars["MSHIP_STATE_SWEEP_INTERVAL_S"] == "30"
 
     def test_unset_passthrough_env_vars_not_forwarded(self, monkeypatch):
         # Unset on the driver → not forwarded, so the replica keeps its own default.

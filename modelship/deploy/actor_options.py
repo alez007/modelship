@@ -18,9 +18,11 @@ logger = get_logger("startup")
 
 # Forwarded from the driver to each replica's runtime_env: logging vars, the gateway
 # name (metrics.py stamps every metric with it), MSHIP_METRICS so --no-metrics on
-# the driver also disables metrics in the replicas (else they'd default to on), and
+# the driver also disables metrics in the replicas (else they'd default to on),
 # MSHIP_PREFLIGHT so --no-preflight on the driver also disables it in the replicas
-# (preflight runs inside each loader's actor __init__, not on the driver).
+# (preflight runs inside each loader's actor __init__, not on the driver), and the
+# /v1/responses state-store tuning read inside the gateway replica's own process
+# (responses_state.ttl_seconds / state.memory._sweep_interval_s), not the driver's.
 _PASSTHROUGH_ENV_VARS = (
     "MSHIP_LOG_LEVEL",
     "MSHIP_LOG_FORMAT",
@@ -28,6 +30,8 @@ _PASSTHROUGH_ENV_VARS = (
     "MSHIP_GATEWAY_NAME",
     "MSHIP_METRICS",
     "MSHIP_PREFLIGHT",
+    "MSHIP_RESPONSES_TTL_S",
+    "MSHIP_STATE_SWEEP_INTERVAL_S",
 )
 
 

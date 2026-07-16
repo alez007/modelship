@@ -108,6 +108,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--responses-ttl-s",
+        type=float,
+        help=(
+            "TTL in seconds for stored /v1/responses conversation state; <=0 disables "
+            "expiry (env: MSHIP_RESPONSES_TTL_S, default: 2592000 = 30 days)"
+        ),
+    )
+    parser.add_argument(
+        "--state-sweep-interval-s",
+        type=float,
+        help=(
+            "Interval in seconds between expired-key sweeps in the in-memory state store "
+            "(env: MSHIP_STATE_SWEEP_INTERVAL_S, default: 300)"
+        ),
+    )
+    parser.add_argument(
         "--replace-strategy",
         choices=["blue_green", "stop_start"],
         default="blue_green",
@@ -141,3 +157,7 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_GATEWAY_REPLICAS"] = str(args.gateway_replicas)
     if args.openai_api_port is not None:
         os.environ["MSHIP_OPENAI_API_PORT"] = str(args.openai_api_port)
+    if args.responses_ttl_s is not None:
+        os.environ["MSHIP_RESPONSES_TTL_S"] = str(args.responses_ttl_s)
+    if args.state_sweep_interval_s is not None:
+        os.environ["MSHIP_STATE_SWEEP_INTERVAL_S"] = str(args.state_sweep_interval_s)
