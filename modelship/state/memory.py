@@ -62,6 +62,9 @@ class MemoryStoreActor(StateStore):
         # and, for keys never read again, by the sweep below.
         self._data: dict[str, tuple[JsonValue, float | None]] = {}
         self._last_sweep = time.time()
+        # Read once: this actor's env is fixed for its process lifetime, so
+        # re-reading it on every set() would just repeat the same parse.
+        self._sweep_interval = _sweep_interval_s()
 
     def _maybe_sweep(self, now: float) -> None:
         """Drop expired keys, at most once per sweep interval.
@@ -72,7 +75,7 @@ class MemoryStoreActor(StateStore):
         than from a background task keeps this class usable as a plain object (no
         event loop, no task to cancel), which is how it is unit-tested.
         """
-        interval = _sweep_interval_s()
+        interval = self._sweep_interval
         if interval <= 0 or now - self._last_sweep < interval:
             return
         self._last_sweep = now
