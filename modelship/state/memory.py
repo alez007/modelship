@@ -5,18 +5,22 @@ The default backend. Every process and gateway replica in the cluster shares one
 visible to another (e.g. a re-run of the driver, or a gateway replica) — unlike a
 plain process-local dict. It survives the actor being restarted (``max_restarts``)
 but NOT the cluster dying, which is what distinguishes it from the durable
-``file://``/``redis://`` backends. Selected by the ``memory://`` URI scheme.
+``redis://`` backend. Selected by the ``memory://`` URI scheme.
 """
 
 from __future__ import annotations
 
 import copy
+import os
 import time
 
 import ray
 from ray import exceptions as ray_exceptions
 
+from modelship.logging import get_logger
 from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError, normalize_prefix
+
+logger = get_logger("startup")
 
 # Detached-actor identity: same namespace as the other cluster-wide coordinators
 # (modelship.infer.deploy_coordinator.COORDINATOR_NAMESPACE / replica_coordinator).
@@ -25,19 +29,61 @@ from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableErr
 _ACTOR_NAME = "modelship-memory-store"
 _ACTOR_NAMESPACE = "modelship"
 
+# Minimum seconds between expiry sweeps; <= 0 disables sweeping.
+_SWEEP_INTERVAL_ENV = "MSHIP_STATE_SWEEP_INTERVAL_S"
+_DEFAULT_SWEEP_INTERVAL_S = 300.0
+
+
+def _sweep_interval_s() -> float:
+    raw = os.environ.get(_SWEEP_INTERVAL_ENV)
+    if not raw:
+        return _DEFAULT_SWEEP_INTERVAL_S
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a number; falling back to %ss.", _SWEEP_INTERVAL_ENV, raw, _DEFAULT_SWEEP_INTERVAL_S
+        )
+        return _DEFAULT_SWEEP_INTERVAL_S
+
 
 @ray.remote(num_cpus=0)
 class MemoryStoreActor(StateStore):
     """Holds the dict. One actor for the whole cluster — memory:// targets
     small-traffic single-node deployments, so a single actor is the design point,
-    not a stopgap. A restart returns an empty store: this fails safe for both
-    current callers (the replica coordinator's in-RAM registry is untouched and
-    write-through repopulates it; an empty effective config makes the deploy
-    driver's reconcile remove nothing rather than remove wrongly)."""
+    not a stopgap. A restart returns an empty store: this fails safe for every
+    caller (the replica coordinator's in-RAM registry is untouched and write-through
+    repopulates it; an empty effective config makes the deploy driver's reconcile
+    remove nothing rather than remove wrongly; a lost /v1/responses conversation
+    surfaces as a 404 on the next previous_response_id)."""
 
     def __init__(self) -> None:
-        # key -> (value, expires_at epoch | None). Expiry is enforced lazily on read.
+        # key -> (value, expires_at epoch | None). Expiry is enforced lazily on read
+        # and, for keys never read again, by the sweep below.
         self._data: dict[str, tuple[JsonValue, float | None]] = {}
+        self._last_sweep = time.time()
+        # Read once: this actor's env is fixed for its process lifetime, so
+        # re-reading it on every set() would just repeat the same parse.
+        self._sweep_interval = _sweep_interval_s()
+
+    def _maybe_sweep(self, now: float) -> None:
+        """Drop expired keys, at most once per sweep interval.
+
+        Lazy expiry only reclaims a key someone reads again. A key written once and
+        never re-read — the shape of a superseded /v1/responses snapshot — would
+        otherwise pin its value for the actor's lifetime. Sweeping on write rather
+        than from a background task keeps this class usable as a plain object (no
+        event loop, no task to cancel), which is how it is unit-tested.
+        """
+        interval = self._sweep_interval
+        if interval <= 0 or now - self._last_sweep < interval:
+            return
+        self._last_sweep = now
+        expired = [k for k, (_, expires_at) in self._data.items() if expires_at is not None and now >= expires_at]
+        for key in expired:
+            del self._data[key]
+        if expired:
+            logger.debug("Swept %d expired state key(s).", len(expired))
 
     def get(self, key: str) -> JsonValue | None:
         entry = self._data.get(key)
@@ -51,8 +97,10 @@ class MemoryStoreActor(StateStore):
         return copy.deepcopy(value)
 
     def set(self, key: str, value: JsonValue, *, ttl_seconds: float | None = None) -> None:
-        expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
+        now = time.time()
+        expires_at = now + ttl_seconds if ttl_seconds is not None else None
         self._data[key] = (copy.deepcopy(value), expires_at)
+        self._maybe_sweep(now)
 
     def delete(self, key: str) -> None:
         self._data.pop(key, None)

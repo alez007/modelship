@@ -74,16 +74,6 @@ from modelship.infer.vllm.parsing.detect import (
 )
 from modelship.logging import TRACE, get_logger
 from modelship.metrics import _ENABLED as _METRICS_ENABLED
-from modelship.openai.chat_utils import (
-    ParsedChatOutput,
-    UnsupportedContentError,
-    build_from_parsed,
-    build_response_from_parsed,
-    encode_chat_sse_chunk,
-    encode_error_sse,
-    normalize_chat_messages,
-    responses_validation_error,
-)
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -106,6 +96,15 @@ from modelship.openai.protocol.responses.adapter import (
     UnsupportedResponsesFeatureError,
     responses_request_to_chat,
 )
+from modelship.openai.utils.chat import (
+    ParsedChatOutput,
+    UnsupportedContentError,
+    build_from_parsed,
+    encode_chat_sse_chunk,
+    encode_error_sse,
+    normalize_chat_messages,
+)
+from modelship.openai.utils.responses import build_response_from_parsed, responses_validation_error
 from modelship.preflight import discover_hardware, merge_with_user_overrides, run_preflight
 from modelship.utils import base_request_id
 

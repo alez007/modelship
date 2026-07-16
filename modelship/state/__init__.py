@@ -4,7 +4,6 @@ A store is selected by a connection URI whose **scheme** picks the backend and
 whose body carries that backend's connection:
 
     memory://                     dict shared cluster-wide via a Ray actor (default)
-    file:///.cache/state          one JSON file per key under a directory
     redis://[:pw@]host:6379/0      one JSON value per key in Redis (rediss:// = TLS)
 
 One arg covers a full Redis connection, and a new backend is one entry in
@@ -16,16 +15,13 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 
 from modelship.metrics import STATE_STORE_OPERATION_DURATION_SECONDS, STATE_STORE_OPERATIONS_TOTAL
 from modelship.state.base import JsonValue, StateStore, StateStoreUnavailableError
-from modelship.state.file import FileStateStore
 from modelship.state.memory import MemoryStateStore, MemoryStoreActor
 
 __all__ = [
-    "FileStateStore",
     "JsonValue",
     "MemoryStateStore",
     "MemoryStoreActor",
@@ -35,8 +31,8 @@ __all__ = [
     "state_store_from_uri",
 ]
 
-# Env carrying the store URI. Default is in-memory: durable backends (file/redis)
-# are opted into explicitly (the chart sets one for k8s).
+# Env carrying the store URI. Default is in-memory: the durable backend (redis)
+# is opted into explicitly (the chart sets one for k8s).
 _STATE_STORE_ENV = "MSHIP_STATE_STORE"
 _DEFAULT_URI = "memory://"
 
@@ -119,17 +115,6 @@ class _InstrumentedStateStore(StateStore):
         return await self._arun("list", self._inner.list_async(prefix))
 
 
-def _default_file_dir() -> Path:
-    """The historical file-store location: ``$MSHIP_STATE_DIR`` else
-    ``$MSHIP_CACHE_DIR/state`` (default ``/.cache/state``). Used when a ``file://``
-    URI omits a path."""
-    base = os.environ.get("MSHIP_STATE_DIR")
-    if not base:
-        cache = os.environ.get("MSHIP_CACHE_DIR", "/.cache")
-        base = os.path.join(cache, "state")
-    return Path(base)
-
-
 def _build_memory(parsed: ParseResult) -> StateStore:
     # No connection body: memory:// always names the one cluster-wide actor. Any
     # host or path (memory://foo, memory:///foo) is rejected rather than silently
@@ -143,21 +128,6 @@ def _build_memory(parsed: ParseResult) -> StateStore:
     return MemoryStateStore()
 
 
-def _build_file(parsed: ParseResult) -> StateStore:
-    # The folder is the URI path; an empty path (``file://``) falls back to the
-    # default location, so the historical behaviour is just the no-path form.
-    # A non-empty netloc means a two-slash path like ``file://some/dir``, whose
-    # first segment urlparse reads as a host — reject it loudly so the directory
-    # isn't silently dropped. Absolute paths need three slashes (``file:///dir``).
-    if parsed.netloc:
-        raise ValueError(
-            f"file:// URI must have an empty host: {parsed.geturl()!r} parses host {parsed.netloc!r}. "
-            f"Use file:///path/to/state (three slashes) for an absolute path."
-        )
-    base = Path(parsed.path) if parsed.path else _default_file_dir()
-    return FileStateStore(base)
-
-
 def _build_redis(parsed: ParseResult) -> StateStore:
     # Hand the whole URL back to redis-py (it parses host/port/db/user/password/TLS).
     from modelship.state.redis import RedisStateStore
@@ -168,7 +138,6 @@ def _build_redis(parsed: ParseResult) -> StateStore:
 # scheme -> builder. Add a backend here (lazy-importing its client) — no CLI change.
 _BUILDERS = {
     "memory": _build_memory,
-    "file": _build_file,
     "redis": _build_redis,
     "rediss": _build_redis,  # TLS
 }

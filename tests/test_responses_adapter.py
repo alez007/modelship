@@ -1,4 +1,5 @@
-"""Tests for the Responses -> chat-completions request-side adapter."""
+"""Tests for the Responses -> chat-completions request-side adapter and the shared
+response envelope."""
 
 import pytest
 
@@ -7,6 +8,7 @@ from modelship.openai.protocol.responses import (
     UnsupportedResponsesFeatureError,
     responses_request_to_chat,
 )
+from modelship.openai.protocol.responses.adapter import build_response_object
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -119,10 +121,38 @@ class TestRequestFieldTranslation:
         assert chat.reasoning_effort == "high"
 
 
+class TestResponseEnvelopeEcho:
+    """`store` / `previous_response_id` are echoed from the request. The gateway reads
+    the same `store` field to decide whether to persist, so the response can't claim
+    one thing while the store did another."""
+
+    def _build(self, request):
+        return build_response_object(request, status="completed", output=[], usage=None, incomplete=None)
+
+    def test_store_defaults_to_true_when_unset(self):
+        # OpenAI stores by default; a client that never sends the field still expects
+        # its previous_response_id to work on the next turn.
+        assert self._build(_req()).store is True
+
+    def test_store_true_echoed(self):
+        assert self._build(_req(store=True)).store is True
+
+    def test_explicit_store_false_echoed(self):
+        assert self._build(_req(store=False)).store is False
+
+    def test_previous_response_id_echoed(self):
+        assert self._build(_req(previous_response_id="resp_1")).previous_response_id == "resp_1"
+
+    def test_previous_response_id_absent_is_none(self):
+        assert self._build(_req()).previous_response_id is None
+
+
 class TestRequestRejections:
-    def test_previous_response_id_rejected(self):
-        with pytest.raises(UnsupportedResponsesFeatureError, match="previous_response_id"):
-            responses_request_to_chat(_req(previous_response_id="resp_1"))
+    def test_previous_response_id_accepted(self):
+        # The gateway resolves it into `input` before the Ray hop; the adapter only
+        # echoes it, so reaching here with one set is legitimate.
+        chat = responses_request_to_chat(_req(previous_response_id="resp_1"))
+        assert chat.messages == [{"role": "user", "content": "hello"}]
 
     def test_background_rejected(self):
         with pytest.raises(UnsupportedResponsesFeatureError, match="background"):

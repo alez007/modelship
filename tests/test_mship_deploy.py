@@ -42,13 +42,6 @@ class TestParseArgs:
         args = parse_args(["--config", "/some/path/models.yaml"])
         assert args.config == "/some/path/models.yaml"
 
-    def test_state_dir(self):
-        args = parse_args(["--state-dir", "/srv/mship/state"])
-        assert args.state_dir == "/srv/mship/state"
-
-    def test_state_dir_defaults_to_none(self):
-        assert parse_args([]).state_dir is None
-
     def test_gateway_replicas(self):
         assert parse_args(["--gateway-replicas", "3"]).gateway_replicas == 3
 
@@ -58,6 +51,18 @@ class TestParseArgs:
     def test_gateway_name(self):
         args = parse_args(["--gateway-name", "my-gateway"])
         assert args.gateway_name == "my-gateway"
+
+    def test_responses_ttl_s(self):
+        assert parse_args(["--responses-ttl-s", "60"]).responses_ttl_s == 60.0
+
+    def test_responses_ttl_s_defaults_to_none(self):
+        assert parse_args([]).responses_ttl_s is None
+
+    def test_state_sweep_interval_s(self):
+        assert parse_args(["--state-sweep-interval-s", "30"]).state_sweep_interval_s == 30.0
+
+    def test_state_sweep_interval_s_defaults_to_none(self):
+        assert parse_args([]).state_sweep_interval_s is None
 
     def test_all_flags_combined(self):
         args = parse_args(
@@ -77,20 +82,20 @@ class TestParseArgs:
 
 
 class TestApplyArgsToEnv:
-    def test_state_dir_sets_env(self, monkeypatch):
-        monkeypatch.delenv("MSHIP_STATE_DIR", raising=False)
-        apply_args_to_env(parse_args(["--state-dir", "/srv/mship/state"]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/srv/mship/state"
+    def test_state_store_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_STORE", raising=False)
+        apply_args_to_env(parse_args(["--state-store", "redis://cache:6379/0"]))
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://cache:6379/0"
 
-    def test_state_dir_flag_overrides_preset_env(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_DIR", "/from/env")
-        apply_args_to_env(parse_args(["--state-dir", "/from/flag"]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/from/flag"
+    def test_state_store_flag_overrides_preset_env(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_STORE", "redis://from-env:6379/0")
+        apply_args_to_env(parse_args(["--state-store", "redis://from-flag:6379/0"]))
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://from-flag:6379/0"
 
-    def test_no_state_dir_leaves_env_untouched(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_STATE_DIR", "/preexisting")
+    def test_no_state_store_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_STATE_STORE", "redis://preexisting:6379/0")
         apply_args_to_env(parse_args([]))
-        assert os.environ["MSHIP_STATE_DIR"] == "/preexisting"
+        assert os.environ["MSHIP_STATE_STORE"] == "redis://preexisting:6379/0"
 
     def test_gateway_replicas_sets_env(self, monkeypatch):
         monkeypatch.delenv("MSHIP_GATEWAY_REPLICAS", raising=False)
@@ -128,6 +133,16 @@ class TestApplyArgsToEnv:
             os.environ.pop("MSHIP_PREFLIGHT", None)
             apply_args_to_env(parse_args([]))
             assert "MSHIP_PREFLIGHT" not in os.environ
+
+    def test_responses_ttl_s_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RESPONSES_TTL_S", raising=False)
+        apply_args_to_env(parse_args(["--responses-ttl-s", "60"]))
+        assert os.environ["MSHIP_RESPONSES_TTL_S"] == "60.0"
+
+    def test_state_sweep_interval_s_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_STATE_SWEEP_INTERVAL_S", raising=False)
+        apply_args_to_env(parse_args(["--state-sweep-interval-s", "30"]))
+        assert os.environ["MSHIP_STATE_SWEEP_INTERVAL_S"] == "30.0"
 
 
 class TestRandSuffix:
@@ -215,6 +230,8 @@ class TestBuildDeploymentOptions:
         monkeypatch.setenv("MSHIP_METRICS", "false")
         monkeypatch.setenv("MSHIP_GATEWAY_NAME", "edge")
         monkeypatch.setenv("MSHIP_PREFLIGHT", "false")
+        monkeypatch.setenv("MSHIP_RESPONSES_TTL_S", "60")
+        monkeypatch.setenv("MSHIP_STATE_SWEEP_INTERVAL_S", "30")
         config = ModelshipModelConfig(
             name="test-model",
             model="some-model",
@@ -226,6 +243,8 @@ class TestBuildDeploymentOptions:
         assert env_vars["MSHIP_METRICS"] == "false"
         assert env_vars["MSHIP_GATEWAY_NAME"] == "edge"
         assert env_vars["MSHIP_PREFLIGHT"] == "false"
+        assert env_vars["MSHIP_RESPONSES_TTL_S"] == "60"
+        assert env_vars["MSHIP_STATE_SWEEP_INTERVAL_S"] == "30"
 
     def test_unset_passthrough_env_vars_not_forwarded(self, monkeypatch):
         # Unset on the driver → not forwarded, so the replica keeps its own default.

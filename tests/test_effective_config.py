@@ -1,6 +1,4 @@
-"""Tests for the generic state store and the deploy effective-config layer."""
-
-import json
+"""Tests for the deploy effective-config layer."""
 
 import pytest
 
@@ -14,7 +12,11 @@ from modelship.deploy.effective_config import (
     write_effective,
 )
 from modelship.infer.infer_config import ModelshipModelConfig
-from modelship.state.file import FileStateStore
+from modelship.state import MemoryStoreActor
+
+# The plain class behind @ray.remote — a real store with no cluster, the same
+# pattern test_state.py uses.
+_MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 
 def _model(name: str, **overrides) -> dict:
@@ -22,41 +24,6 @@ def _model(name: str, **overrides) -> dict:
     base = {"name": name, "model": f"org/{name}", "usecase": "generate", "loader": "llama_server"}
     base.update(overrides)
     return base
-
-
-class TestFileStateStore:
-    def test_set_get_roundtrip(self, tmp_path):
-        store = FileStateStore(tmp_path)
-        store.set("k", {"a": 1, "b": [1, 2, 3]})
-        assert store.get("k") == {"a": 1, "b": [1, 2, 3]}
-
-    def test_missing_key_returns_none(self, tmp_path):
-        assert FileStateStore(tmp_path).get("nope") is None
-
-    def test_delete(self, tmp_path):
-        store = FileStateStore(tmp_path)
-        store.set("k", {"x": 1})
-        store.delete("k")
-        assert store.get("k") is None
-        # idempotent — no error when already absent
-        store.delete("k")
-
-    def test_namespaced_key_maps_to_nested_path(self, tmp_path):
-        store = FileStateStore(tmp_path)
-        store.set("effective/modelship api", {"models": []})
-        # spaces slugified, namespace becomes a subdirectory
-        assert (tmp_path / "effective" / "modelship-api.json").exists()
-        assert store.get("effective/modelship api") == {"models": []}
-
-    def test_corrupt_file_treated_as_missing(self, tmp_path):
-        store = FileStateStore(tmp_path)
-        (tmp_path / "k.json").write_text("{not valid json")
-        assert store.get("k") is None
-
-    def test_write_is_atomic_no_tmp_left_behind(self, tmp_path):
-        store = FileStateStore(tmp_path)
-        store.set("k", {"x": 1})
-        assert not list(tmp_path.glob("*.tmp"))
 
 
 class TestResolveMode:
@@ -102,14 +69,14 @@ class TestEvictFailed:
 
 
 class TestReadWriteEffective:
-    def test_write_then_read(self, tmp_path):
-        store = FileStateStore(tmp_path)
+    def test_write_then_read(self):
+        store = _MemoryStore()
         models = [_model("a"), _model("b")]
         write_effective(store, "modelship api", models)
         assert read_effective(store, "modelship api") == models
 
-    def test_read_absent_gateway_is_empty(self, tmp_path):
-        assert read_effective(FileStateStore(tmp_path), "never-deployed") == []
+    def test_read_absent_gateway_is_empty(self):
+        assert read_effective(_MemoryStore(), "never-deployed") == []
 
 
 class TestRawRoundTrip:
@@ -117,9 +84,9 @@ class TestRawRoundTrip:
     round-trip (num_gpus=2 -> num_gpus=1.0/tp=2, which fails re-validation). Raw
     dicts reload identically."""
 
-    def test_multi_gpu_vllm_survives_store_roundtrip(self, tmp_path):
+    def test_multi_gpu_vllm_survives_store_roundtrip(self):
         raw = {"name": "x", "model": "org/x", "usecase": "generate", "loader": "vllm", "num_gpus": 2}
-        store = FileStateStore(tmp_path)
+        store = _MemoryStore()
         write_effective(store, "g", [raw])
 
         back = read_effective(store, "g")
@@ -130,14 +97,12 @@ class TestRawRoundTrip:
         # identity preserved: same fingerprint as a fresh validate of the original
         assert m.fingerprint("g") == ModelshipModelConfig.model_validate(raw).fingerprint("g")
 
-    def test_stored_file_is_raw_not_normalized(self, tmp_path):
-        # The persisted JSON keeps the user's num_gpus=2, not the normalized 1.0.
+    def test_stored_value_is_raw_not_normalized(self):
+        # The persisted value keeps the user's num_gpus=2, not the normalized 1.0.
         raw = {"name": "x", "model": "org/x", "usecase": "generate", "loader": "vllm", "num_gpus": 2}
-        store = FileStateStore(tmp_path)
+        store = _MemoryStore()
         write_effective(store, "g", [raw])
-        # The value is stored inside the TTL envelope; unwrap to inspect it.
-        on_disk = json.loads((tmp_path / "effective" / "g.json").read_text())
-        assert on_disk["value"]["models"][0]["num_gpus"] == 2
+        assert store.get("effective/g")["models"][0]["num_gpus"] == 2
 
 
 def _dep(name: str, gw: str = "g", **overrides) -> str:

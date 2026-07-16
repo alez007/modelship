@@ -1,7 +1,7 @@
 """Responses API (``/v1/responses``) schemas and the request-side chat adapter.
 
 Each loader implements its own ``create_response`` natively (shaping straight
-from its parsed chat output — see ``chat_utils.build_responses_items_from_parsed``),
+from its parsed chat output — see ``utils.responses.build_responses_items_from_parsed``),
 non-streaming and streaming alike; there is no generic response-side fallback.
 The one thing every loader shares is the request-side translation: an incoming
 ``ResponsesRequest`` is turned into a ``ChatCompletionRequest`` via
@@ -35,9 +35,14 @@ from modelship.openai.protocol.responses.schemas import (
     ResponsesRequest,
     ResponseUsage,
 )
-from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
+from modelship.openai.protocol.responses.streaming import (
+    TERMINAL_EVENT_TYPES,
+    ResponsesStreamTranslator,
+    store_failure_event,
+)
 
 __all__ = [
+    "TERMINAL_EVENT_TYPES",
     "ResponseFunctionToolCall",
     "ResponseInputItem",
     "ResponseInputTokensDetails",
@@ -54,4 +59,5 @@ __all__ = [
     "ResponsesStreamTranslator",
     "UnsupportedResponsesFeatureError",
     "responses_request_to_chat",
+    "store_failure_event",
 ]

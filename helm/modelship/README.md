@@ -105,44 +105,50 @@ kubectl port-forward svc/<release>-modelship-gateway 8000:8000
 curl http://localhost:8000/v1/models
 ```
 
-## Head-node HA (Redis)
+## Redis (required)
 
-The head pod runs the GCS (Ray's control store). By default it's in-memory, so a
-head restart (OOM, drain, eviction) loses cluster state: KubeRay recycles the
-workers and every model has to be redeployed — minutes of full outage for a routine
-reschedule. Set `redis.enabled=true` (pointing at a Redis you run) to close that gap.
-One Redis backs two things at once:
-
-1. **Ray GCS fault tolerance** (`gcsFaultToleranceOptions`) — a restarted head
-   recovers GCS from Redis; workers and model actors **survive**, and Serve's
-   controller redeploys anything that died. The restart becomes a sub-minute blip
-   with no full redeploy.
-2. **The modelship state store** (`MSHIP_STATE_STORE=redis://…`) — the deploy
-   coordinator's routing registry and effective config live in Redis, so the gateway
-   self-heals its routing on recovery instead of coming back empty.
+`redis.address` is required. The chart wires an address but does **not** deploy
+Redis — bring your own (a small single instance with a PVC is plenty). Rendering
+fails with a clear message if it's unset, because there is no durable fallback to
+degrade to.
 
 ```yaml
 redis:
-  enabled: true
   address: my-redis-master:6379
   password: "s3cret"          # or existingSecret + passwordKey
 ```
 
-When `redis.enabled=false`, GCS stays in-memory and the state store falls back to
-`file://` on the cache PVC — the effective config is still durable (so a manual
-`helm upgrade` restores the model set after a full cluster loss), but live actors
-don't survive a head restart. **What recovers automatically:**
+One Redis backs three things at once:
 
-| event | `redis.enabled=false` | `redis.enabled=true` |
-|-------|----------------------|----------------------|
-| head pod restart | full redeploy (workers recycled) | actors survive, routing self-heals — no redeploy |
-| full cluster loss, Redis kept | `helm upgrade` | Serve + coordinator restore from Redis |
-| full cluster loss, Redis also gone | `helm upgrade` | `helm upgrade` |
+1. **Ray GCS fault tolerance** (`gcsFaultToleranceOptions`) — the head pod runs the
+   GCS (Ray's control store). In-memory, a head restart (OOM, drain, eviction) loses
+   cluster state: KubeRay recycles the workers and every model has to be redeployed —
+   minutes of outage for a routine reschedule. Backed by Redis, a restarted head
+   recovers GCS; workers and model actors **survive**, and Serve's controller
+   redeploys anything that died. The restart becomes a sub-minute blip.
+2. **The modelship state store** (`MSHIP_STATE_STORE=redis://…`) — the deploy
+   coordinator's routing registry and effective config live in Redis, so the gateway
+   self-heals its routing on recovery instead of coming back empty.
+3. **`/v1/responses` conversations** — stored responses survive head restarts and
+   full cluster loss, so `previous_response_id` keeps working across them.
+
+**What recovers automatically:**
+
+| event | outcome |
+|-------|---------|
+| head pod restart | actors survive, routing self-heals — no redeploy |
+| full cluster loss, Redis kept | Serve + coordinator restore from Redis; conversations intact |
+| full cluster loss, Redis also gone | `helm upgrade` |
 
 `externalStorageNamespace` is pinned to the release name so a recreated cluster
 recovers; the password is injected via the Secret and expanded into the URI at
-runtime, never landing in the pod manifest or argv. Bring your own Redis (a small
-single instance with a PVC is plenty; the chart only wires an address).
+runtime, never landing in the pod manifest or argv.
+
+> Before v0.7.0 `redis.enabled=false` fell back to a `file://` state store on the
+> cache PVC. That backend is gone — see the main
+> [state-store docs](../../docs/model-configuration.md#state-store-mship_state_store).
+> Outside k8s the default is `memory://`, which is cluster-scoped but dies with the
+> cluster.
 
 ## Common values
 
@@ -158,8 +164,7 @@ single instance with a PVC is plenty; the chart only wires an address).
 | `workerGroups` | `[]` | Worker pool layout (a list — set the full set; copy the example in `values.yaml`) |
 | `deploy.reconcile` | `false` | Remove dropped models on upgrade |
 | `deploy.replaceStrategy` | `blue_green` | How changed models are replaced |
-| `redis.enabled` | `false` | Redis-backed GCS-FT + state store for head-node HA (see [Head-node HA](#head-node-ha-redis)) |
-| `redis.address` | `""` | `host:port` of your Redis |
+| `redis.address` | `""` | **Required.** `host:port` of your Redis — backs GCS-FT + the state store (see [Redis](#redis-required)) |
 | `redis.password` / `redis.existingSecret` | `""` | Redis password inline, or reference an existing Secret (`passwordKey`) |
 | `service.type` | `ClusterIP` | Set `LoadBalancer` to expose externally |
 | `podMonitor.enabled` | `false` | Prometheus Operator scraping |

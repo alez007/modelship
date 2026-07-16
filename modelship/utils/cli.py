@@ -10,7 +10,6 @@ import os
 # reads exclusively from os.environ so a single source of truth is preserved.
 _STRING_ARG_TO_ENV: dict[str, str] = {
     "cache_dir": "MSHIP_CACHE_DIR",
-    "state_dir": "MSHIP_STATE_DIR",
     "state_store": "MSHIP_STATE_STORE",
     "log_format": "MSHIP_LOG_FORMAT",
     "log_target": "MSHIP_LOG_TARGET",
@@ -26,17 +25,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", help="Path to models.yaml config file (default: config/models.yaml)")
     parser.add_argument("--cache-dir", help="Model cache directory (env: MSHIP_CACHE_DIR)")
     parser.add_argument(
-        "--state-dir",
-        help=(
-            "Directory for the durable effective-config state store (env: MSHIP_STATE_DIR, default: <cache-dir>/state)"
-        ),
-    )
-    parser.add_argument(
         "--state-store",
         help=(
-            "State-store connection URI for the effective config and deploy coordinator "
-            "(env: MSHIP_STATE_STORE, default: memory://). Schemes: memory:// | file:///path | "
-            "redis://[:password@]host:port/db (rediss:// for TLS). A redis:// store also enables "
+            "State-store connection URI for the effective config, deploy coordinator and "
+            "/v1/responses conversations (env: MSHIP_STATE_STORE, default: memory://). Schemes: "
+            "memory:// | redis://[:password@]host:port/db (rediss:// for TLS). memory:// is "
+            "cluster-scoped but dies with the cluster; redis:// survives it and also enables "
             "GCS fault tolerance when modelship starts its own Ray head."
         ),
     )
@@ -114,6 +108,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--responses-ttl-s",
+        type=float,
+        help=(
+            "TTL in seconds for stored /v1/responses conversation state; <=0 disables "
+            "expiry (env: MSHIP_RESPONSES_TTL_S, default: 2592000 = 30 days)"
+        ),
+    )
+    parser.add_argument(
+        "--state-sweep-interval-s",
+        type=float,
+        help=(
+            "Interval in seconds between expired-key sweeps in the in-memory state store "
+            "(env: MSHIP_STATE_SWEEP_INTERVAL_S, default: 300)"
+        ),
+    )
+    parser.add_argument(
         "--replace-strategy",
         choices=["blue_green", "stop_start"],
         default="blue_green",
@@ -147,3 +157,7 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_GATEWAY_REPLICAS"] = str(args.gateway_replicas)
     if args.openai_api_port is not None:
         os.environ["MSHIP_OPENAI_API_PORT"] = str(args.openai_api_port)
+    if args.responses_ttl_s is not None:
+        os.environ["MSHIP_RESPONSES_TTL_S"] = str(args.responses_ttl_s)
+    if args.state_sweep_interval_s is not None:
+        os.environ["MSHIP_STATE_SWEEP_INTERVAL_S"] = str(args.state_sweep_interval_s)

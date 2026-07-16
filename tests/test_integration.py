@@ -1535,10 +1535,9 @@ _WEATHER_TOOL_RESPONSES = {
 @pytest.mark.integration
 @pytest.mark.vllm
 class TestResponsesEndpoint:
-    """End-to-end /v1/responses through the stateless adapter over the vLLM
-    chat pipeline. Verifies the official OpenAI SDK's ``responses.create``
-    parses our payload and that unsupported features are rejected, not
-    silently dropped."""
+    """End-to-end /v1/responses over the vLLM chat pipeline. Verifies the official
+    OpenAI SDK's ``responses.create`` parses our payload and that unsupported
+    features are rejected, not silently dropped."""
 
     @pytest.fixture(autouse=True, scope="class")
     def _deploy(self, model_deployer):
@@ -1554,8 +1553,8 @@ class TestResponsesEndpoint:
         assert resp.status in {"completed", "incomplete"}
         assert resp.output_text.strip()
         assert resp.usage.input_tokens > 0
-        # Phase A never persists, so the echoed store flag must be False.
-        assert resp.store is False
+        # Stored by default (OpenAI parity), so an unset `store` echoes True.
+        assert resp.store is True
 
     def test_instructions_and_message_list_input(self, client):
         resp = client.responses.create(
@@ -1632,14 +1631,35 @@ class TestResponsesEndpoint:
         # streamed argument fragments must reconstruct the final arguments
         assert "".join(arg_deltas) == function_calls[0].arguments
 
-    def test_previous_response_id_rejected_400(self):
+    def test_truncation_reports_incomplete_details(self, client):
+        # A generation cut short by max_output_tokens is `incomplete` with a reason,
+        # not `completed` — the only signal a client has that output was truncated.
+        resp = client.responses.create(
+            model="chat-capable",
+            input="Write a long essay about the sea.",
+            max_output_tokens=16,
+        )
+        assert resp.status == "incomplete"
+        assert resp.incomplete_details is not None
+        assert resp.incomplete_details.reason == "max_output_tokens"
+        assert resp.output_text.strip()
+
+    def test_unknown_previous_response_id_404(self):
         response = httpx.post(
             f"{OPENAI_API_BASE}/responses",
             json={"model": "chat-capable", "input": "hi", "previous_response_id": "resp_does_not_exist"},
             timeout=60,
         )
+        assert response.status_code == 404, response.text
+
+    def test_background_rejected_400(self):
+        response = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "hi", "background": True},
+            timeout=60,
+        )
         assert response.status_code == 400, response.text
-        assert "previous_response_id" in response.json()["error"]["message"]
+        assert "background" in response.json()["error"]["message"]
 
     def test_hosted_tool_rejected_400(self):
         response = httpx.post(
@@ -1649,6 +1669,265 @@ class TestResponsesEndpoint:
         )
         assert response.status_code == 400, response.text
         assert "hosted tool" in response.json()["error"]["message"]
+
+
+@pytest.mark.integration
+@pytest.mark.vllm
+class TestResponsesState:
+    """Server-side conversation state on /v1/responses, end-to-end against the real
+    store (``memory://`` — a detached Ray actor on the live cluster).
+
+    The payoff test is `test_continuation_recalls_earlier_turn`: the model answers from
+    history the client never resent, which is the whole point of the endpoint. The rest
+    pin the lifecycle (store/retrieve/delete) and the failure modes that must not
+    silently degrade.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _deploy(self, model_deployer):
+        model_deployer.deploy("chat-capable")
+
+    def test_continuation_recalls_earlier_turn(self, client):
+        first = client.responses.create(
+            model="chat-capable",
+            input="My name is Alex. Remember it.",
+            max_output_tokens=30,
+        )
+        assert first.store is True
+
+        # Turn 2 sends only the new question — the name is recalled from stored state.
+        second = client.responses.create(
+            model="chat-capable",
+            input="What is my name? Reply with just the name.",
+            previous_response_id=first.id,
+            max_output_tokens=20,
+        )
+        assert second.previous_response_id == first.id
+        assert "alex" in second.output_text.lower()
+
+    def test_continuation_chains_across_three_turns(self, client):
+        first = client.responses.create(model="chat-capable", input="My name is Alex.", max_output_tokens=20)
+        second = client.responses.create(
+            model="chat-capable",
+            input="I live in Berlin.",
+            previous_response_id=first.id,
+            max_output_tokens=20,
+        )
+        third = client.responses.create(
+            model="chat-capable",
+            input="What is my name? Reply with just the name.",
+            previous_response_id=second.id,
+            max_output_tokens=20,
+        )
+        # Turn 1's fact survives two hops — each snapshot embeds the whole conversation.
+        assert "alex" in third.output_text.lower()
+
+    def test_streaming_response_can_be_continued(self, client):
+        stream = client.responses.create(
+            model="chat-capable",
+            input="My name is Alex. Remember it.",
+            max_output_tokens=30,
+            stream=True,
+        )
+        completed = None
+        for event in stream:
+            if event.type == "response.completed":
+                completed = event.response
+        assert completed is not None
+        assert completed.store is True
+
+        # A streamed response is persisted by re-reading its terminal event, so this
+        # proves that path stores the same shape the non-streaming one does.
+        second = client.responses.create(
+            model="chat-capable",
+            input="What is my name? Reply with just the name.",
+            previous_response_id=completed.id,
+            max_output_tokens=20,
+        )
+        assert "alex" in second.output_text.lower()
+
+    def test_get_returns_stored_response(self, client):
+        created = client.responses.create(model="chat-capable", input="Say hi.", max_output_tokens=20)
+        fetched = client.responses.retrieve(created.id)
+        assert fetched.id == created.id
+        assert fetched.output_text == created.output_text
+
+    def test_input_items_lists_what_went_in(self):
+        created = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "Say hi.", "max_output_tokens": 20},
+            timeout=120,
+        ).json()
+        listed = httpx.get(f"{OPENAI_API_BASE}/responses/{created['id']}/input_items", timeout=60)
+        assert listed.status_code == 200, listed.text
+        body = listed.json()
+        assert body["object"] == "list"
+        assert any("Say hi." in str(item.get("content", "")) for item in body["data"])
+
+    def test_input_items_reflects_the_continued_chain(self, client):
+        # After a continuation the snapshot's input is the resolved history, not just
+        # the turn the client sent: user -> assistant -> user, in order.
+        first = client.responses.create(model="chat-capable", input="My name is Alex.", max_output_tokens=20)
+        second = client.responses.create(
+            model="chat-capable",
+            input="What is my name?",
+            previous_response_id=first.id,
+            max_output_tokens=20,
+        )
+        body = httpx.get(f"{OPENAI_API_BASE}/responses/{second.id}/input_items", timeout=60).json()
+        roles = [item.get("role") for item in body["data"]]
+        assert roles == ["user", "assistant", "user"], body["data"]
+        assert "My name is Alex." in str(body["data"][0]["content"])
+
+    def test_store_false_is_not_retrievable(self):
+        created = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "Say hi.", "max_output_tokens": 20, "store": False},
+            timeout=120,
+        ).json()
+        assert created["store"] is False
+        assert httpx.get(f"{OPENAI_API_BASE}/responses/{created['id']}", timeout=60).status_code == 404
+
+    def test_streamed_store_false_is_not_retrievable(self, client):
+        # The streaming path persists by re-reading its own terminal event, so
+        # `store: false` has to suppress a different branch than the non-streaming one.
+        stream = client.responses.create(
+            model="chat-capable",
+            input="Say hi.",
+            max_output_tokens=20,
+            stream=True,
+            store=False,
+        )
+        completed = None
+        for event in stream:
+            if event.type == "response.completed":
+                completed = event.response
+        assert completed is not None
+        assert completed.store is False
+        assert httpx.get(f"{OPENAI_API_BASE}/responses/{completed.id}", timeout=60).status_code == 404
+
+    def test_store_false_still_reads_history(self, client):
+        # store=false governs writing this turn, not reading the chain: a caller can
+        # continue a conversation without adding to it.
+        first = client.responses.create(model="chat-capable", input="My name is Alex.", max_output_tokens=20)
+        second = client.responses.create(
+            model="chat-capable",
+            input="What is my name? Reply with just the name.",
+            previous_response_id=first.id,
+            max_output_tokens=20,
+            store=False,
+        )
+        assert "alex" in second.output_text.lower()
+        assert httpx.get(f"{OPENAI_API_BASE}/responses/{second.id}", timeout=60).status_code == 404
+
+    def test_previous_response_id_of_unstored_response_404s(self, client):
+        # An id that was never persisted is indistinguishable from an unknown one.
+        unstored = client.responses.create(model="chat-capable", input="Say hi.", max_output_tokens=20, store=False)
+        continued = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "hi", "previous_response_id": unstored.id},
+            timeout=60,
+        )
+        assert continued.status_code == 404, continued.text
+
+    def test_continuation_survives_parent_deletion(self, client):
+        # Each snapshot embeds the whole conversation, so a chain is not a linked list:
+        # deleting a parent must not strand its children.
+        first = client.responses.create(model="chat-capable", input="My name is Alex.", max_output_tokens=20)
+        second = client.responses.create(
+            model="chat-capable",
+            input="I live in Berlin.",
+            previous_response_id=first.id,
+            max_output_tokens=20,
+        )
+        assert httpx.delete(f"{OPENAI_API_BASE}/responses/{first.id}", timeout=60).status_code == 200
+
+        third = client.responses.create(
+            model="chat-capable",
+            input="What is my name? Reply with just the name.",
+            previous_response_id=second.id,
+            max_output_tokens=20,
+        )
+        assert "alex" in third.output_text.lower()
+
+    def test_concurrent_branches_from_one_parent_are_independent(self, client):
+        # Several turns may fan out from the same previous_response_id; each must get
+        # its own id and its own snapshot rather than racing over shared state.
+        parent = client.responses.create(model="chat-capable", input="My name is Alex.", max_output_tokens=20)
+
+        def _branch(_: int):
+            return client.responses.create(
+                model="chat-capable",
+                input="What is my name? Reply with just the name.",
+                previous_response_id=parent.id,
+                max_output_tokens=20,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            branches = list(pool.map(_branch, range(5)))
+
+        assert len({b.id for b in branches}) == 5, "branch ids collided"
+        for branch in branches:
+            assert branch.previous_response_id == parent.id
+            assert "alex" in branch.output_text.lower()
+
+    def test_delete_then_get_and_continue_both_404(self, client):
+        created = client.responses.create(model="chat-capable", input="Say hi.", max_output_tokens=20)
+
+        deleted = httpx.delete(f"{OPENAI_API_BASE}/responses/{created.id}", timeout=60)
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"id": created.id, "object": "response", "deleted": True}
+
+        assert httpx.get(f"{OPENAI_API_BASE}/responses/{created.id}", timeout=60).status_code == 404
+        # A deleted conversation is gone for continuation too, not just retrieval.
+        continued = httpx.post(
+            f"{OPENAI_API_BASE}/responses",
+            json={"model": "chat-capable", "input": "hi", "previous_response_id": created.id},
+            timeout=60,
+        )
+        assert continued.status_code == 404, continued.text
+
+    def test_function_call_output_round_trip(self, client):
+        # The stateful tool loop: the client returns only the tool result, and the
+        # pending call it answers is recovered from stored history.
+        first = client.responses.create(
+            model="chat-capable",
+            input="What is the weather in Paris?",
+            tools=[_WEATHER_TOOL_RESPONSES],
+            tool_choice="required",
+            max_output_tokens=128,
+        )
+        calls = [item for item in first.output if item.type == "function_call"]
+        assert calls, f"expected a function_call item, got {[i.type for i in first.output]}"
+
+        second = client.responses.create(
+            model="chat-capable",
+            input=[
+                {
+                    "type": "function_call_output",
+                    "call_id": calls[0].call_id,
+                    "output": json.dumps({"temp_c": 18, "sky": "rain"}),
+                }
+            ],
+            tools=[_WEATHER_TOOL_RESPONSES],
+            previous_response_id=first.id,
+            max_output_tokens=128,
+        )
+        assert "18" in second.output_text, second.output_text
+
+    def test_get_unknown_id_404(self):
+        assert httpx.get(f"{OPENAI_API_BASE}/responses/resp_does_not_exist", timeout=60).status_code == 404
+
+    def test_delete_unknown_id_404(self):
+        assert httpx.delete(f"{OPENAI_API_BASE}/responses/resp_does_not_exist", timeout=60).status_code == 404
+
+    def test_malformed_id_404_and_leaves_state_intact(self):
+        # response_id is a state-key segment; a traversal-shaped id must not resolve to
+        # (or delete) anything else the store holds.
+        resp = httpx.request("DELETE", f"{OPENAI_API_BASE}/responses/..%2F..%2Feffective%2Fmodelship%20api", timeout=60)
+        assert resp.status_code == 404, resp.text
+        # The gateway's own effective config is untouched — /v1/models still answers.
+        assert httpx.get(f"{OPENAI_API_BASE}/models", timeout=60).status_code == 200
 
 
 @pytest.mark.integration

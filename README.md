@@ -21,7 +21,7 @@ Most self-hosted inference tools focus on running a single model. Modelship is f
 - **One server, many models** — run a full AI stack (chat + TTS + STT + embeddings + image gen) on a single machine instead of juggling separate services
 - **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so everything fits on your hardware
 - **Mix and match backends** — use vLLM for high-throughput GPU inference, vLLM or llama.cpp for CPU-only workloads, Diffusers for images, and plugins for custom backends — in the same deployment
-- **Agentic-ready** — reasoning (`<think>` → `reasoning_content`), universal tool/function calling, and the `/v1/responses` API work across the vLLM and llama.cpp (`llama_server`) loaders — the OpenAI-spec surface agents already target
+- **Agentic-ready** — reasoning (`<think>` → `reasoning_content`), universal tool/function calling, and the `/v1/responses` API — including server-side conversation state (`previous_response_id`), shared across every gateway replica — work across the vLLM and llama.cpp (`llama_server`) loaders, the OpenAI-spec surface agents already target
 - **Drop-in OpenAI replacement** — any OpenAI SDK client works out of the box, making it easy to integrate with existing apps and tools
 
 ## Architecture
@@ -98,7 +98,8 @@ Models can be deployed across multiple GPUs, run on CPU-only, or both — multip
 | Endpoint | Usecase |
 |---|---|
 | `POST /v1/chat/completions` | Chat / text generation (streaming and non-streaming) |
-| `POST /v1/responses` | Responses API — text, reasoning and client-driven tool calls (streaming and non-streaming) |
+| `POST /v1/responses` | Responses API — text, reasoning, client-driven tool calls, and stored conversations (streaming and non-streaming) |
+| `GET`/`DELETE /v1/responses/{id}` | Fetch or drop a stored response (`/input_items` lists its input) |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/audio/transcriptions` | Speech-to-text |
 | `POST /v1/audio/translations` | Audio translation |

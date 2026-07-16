@@ -1,14 +1,16 @@
 """Generic durable state store.
 
-A pluggable key→value store shared across the codebase: the deploy driver uses it
-for the per-gateway *effective config* (durable desired state for self-heal), and
-actors can use it for their own state (e.g. ``/v1/responses``). Keys are
+A pluggable key→value store shared across the codebase. It stays generic: each
+caller owns a domain layer over it that holds the key layout and shape — the deploy
+driver's per-gateway *effective config* (``deploy.effective_config``) and the
+gateway's ``/v1/responses`` conversations (``openai.state.responses``). Keys are
 ``/``-separated namespace paths; values are JSON/YAML-serializable (``dict`` or
 ``list``).
 
 Backends differ in durability, so each caller picks the one its use needs: the
-default file backend survives cluster death (required for the effective config),
-while an in-memory / Ray-actor backend would suit ephemeral actor state.
+default ``memory://`` backend is cluster-scoped (shared by every process) but dies
+with the cluster, while ``redis://`` survives it — required to self-heal the
+effective config after cluster loss.
 
 Sync ``get``/``set``/``delete``/``list`` are the primitive each backend must
 implement; the ``*_async`` variants default to running the sync method in a thread

@@ -9,7 +9,7 @@ replicas.
 The registry is persisted through `get_state_store()` — cluster-scoped even on the
 default `memory://` (backed by its own detached actor, see `modelship.state.memory`)
 so a resurrected coordinator reloads live ownership instead of starting empty;
-`file://`/`redis://` add survival across a full cluster loss on top of that. The
+`redis://` adds survival across a full cluster loss on top of that. The
 per-gateway generation counter and its wakeup `asyncio.Event` are ephemeral: on
 restart the generation resets to 0, which `wait_for_change` already treats as
 "changed" so replicas re-pull and reconcile from the reloaded registry.
@@ -58,12 +58,11 @@ class ReplicaCoordinator:
             # coordinator resurrected on a fresh cluster reloads an empty registry,
             # and the next deploy (gen advances) re-enables removals against it —
             # dropping still-healthy models from gateway routing. Fine single-node;
-            # for survival across cluster loss set MSHIP_STATE_STORE to file:// or
-            # redis://.
+            # for survival across cluster loss set MSHIP_STATE_STORE to redis://.
             logger.warning(
                 "Replica coordinator is backed by a cluster-scoped (non-durable) memory state "
                 "store; its routing registry survives coordinator restart but is lost if the "
-                "cluster dies. Set MSHIP_STATE_STORE to file:// or redis:// to survive cluster loss."
+                "cluster dies. Set MSHIP_STATE_STORE to redis:// to survive cluster loss."
             )
         saved = self._store.get(_STATE_KEY)
         saved = saved if isinstance(saved, dict) else {}

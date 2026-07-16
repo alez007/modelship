@@ -57,6 +57,31 @@ def _sse(event_type: str, payload: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps({'type': event_type, **payload})}\n\n"
 
 
+# Terminal events carrying a complete response object. Both are continuable, so both
+# are worth persisting; ``response.failed`` deliberately is not.
+TERMINAL_EVENT_TYPES = ("response.completed", "response.incomplete")
+
+
+def store_failure_event(terminal_payload: dict[str, Any], message: str) -> str:
+    """Rewrite a terminal completed/incomplete event as ``response.failed``.
+
+    The gateway persists a stored response *before* forwarding its terminal event, so
+    a store failure can still change what the client is told. Generation did succeed,
+    but the response is uncontinuable — reporting completion would hand back an id
+    that 404s on the next turn. Reuses the terminal event's sequence number because it
+    replaces that event rather than following it.
+    """
+    response = {
+        **(terminal_payload.get("response") or {}),
+        "status": "failed",
+        "error": {"message": message},
+    }
+    return _sse(
+        "response.failed",
+        {"sequence_number": terminal_payload.get("sequence_number", 0), "response": response},
+    )
+
+
 class ResponsesStreamTranslator:
     """Stateful translator from chat stream chunks to Responses SSE events.
 

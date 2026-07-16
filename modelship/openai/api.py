@@ -53,6 +53,8 @@ from modelship.openai.protocol import (
     TranslationResponse,
     create_error_response,
 )
+from modelship.openai.utils import responses as responses_utils
+from modelship.state import get_state_store
 from modelship.utils import random_uuid
 
 logger = get_logger("api")
@@ -171,6 +173,11 @@ class ModelshipAPI:
         self.expected_models: list[str] = []
         self._started_at = time.time()
         self._gateway_name = gateway_name
+        # /v1/responses conversation state. Construction is inert (no Ray call, no
+        # connection), so it costs nothing for a gateway that never serves a stateful
+        # request. The gateway owns this rather than the loaders: GET/DELETE carry no
+        # model, so they could not be routed to one.
+        self._state_store = get_state_store()
         stamp_gateway(gateway_name)
         # Routing state is reconciled from the coordinator, the cluster-wide source
         # of truth — not pushed by the driver (a push hits only one replica). Each
@@ -559,12 +566,28 @@ class ModelshipAPI:
         handle = self._get_handle(request.model)
         watcher = RequestWatcher(raw_request, req_id, model=model, endpoint="create_response")
         headers = dict(raw_request.headers)
+
+        # Resolve conversation history here, before the Ray hop: the loader only ever
+        # sees a flat `input`, and a store outage fails the request before any GPU
+        # work starts. Costs nothing when previous_response_id is unset.
+        if request.previous_response_id is not None:
+            try:
+                request.input = await responses_utils.resolve_history(self._state_store, identity, request)
+            except BaseException:
+                # Any failure here — not just the expected 404/503 HTTPException — must
+                # still stop the watcher: _handle_response hasn't taken ownership of it
+                # yet, so nothing else will cancel its polling task.
+                watcher.stop()
+                raise
+
         logger.info(
-            "responses model=%s input_items=%s max_output_tokens=%s stream=%s",
+            "responses model=%s input_items=%s max_output_tokens=%s stream=%s store=%s previous_response_id=%s",
             model,
             1 if isinstance(request.input, str) else len(request.input),
             request.max_output_tokens,
             bool(request.stream),
+            request.store is not False,
+            request.previous_response_id,
         )
         # Under stream=True the remote() result is an async-iterable
         # DeploymentResponseGenerator; Ray's stub widens it to a union because it
@@ -573,7 +596,49 @@ class ModelshipAPI:
             "DeploymentResponseGenerator[Any]",
             handle.respond.options(stream=True).remote(request, headers, watcher.registry, req_id, identity),
         )
+        if request.store is not False:
+            response_gen = responses_utils.persist_response(
+                response_gen,
+                self._state_store,
+                identity=identity,
+                input_items=responses_utils.as_input_items(request.input),
+            )
         return await self._handle_response(response_gen, watcher, model, "create_response")
+
+    @app.get("/v1/responses/{response_id}")
+    async def get_response(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        identity = self._set_identity(raw_request)
+        snapshot = await responses_utils.load_snapshot(self._state_store, identity, response_id)
+        # Stored verbatim, so this is a passthrough — no re-derivation to drift.
+        return JSONResponse(content=snapshot["response"])
+
+    @app.delete("/v1/responses/{response_id}")
+    async def delete_response(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        identity = self._set_identity(raw_request)
+        # Read first: delete is idempotent by contract, so it alone can't tell an
+        # unknown id from a real removal.
+        await responses_utils.load_snapshot(self._state_store, identity, response_id)
+        await responses_utils.delete_snapshot(self._state_store, identity, response_id)
+        return JSONResponse(content={"id": response_id, "object": "response", "deleted": True})
+
+    @app.get("/v1/responses/{response_id}/input_items")
+    async def get_response_input_items(self, response_id: str, raw_request: Request):
+        self._set_request_id(random_uuid())
+        identity = self._set_identity(raw_request)
+        snapshot = await responses_utils.load_snapshot(self._state_store, identity, response_id)
+        # Chronological; OpenAI defaults to order=desc, which we don't support yet.
+        items = snapshot.get("input_items") or []
+        return JSONResponse(
+            content={
+                "object": "list",
+                "data": items,
+                "first_id": items[0].get("id") if items and isinstance(items[0], dict) else None,
+                "last_id": items[-1].get("id") if items and isinstance(items[-1], dict) else None,
+                "has_more": False,
+            }
+        )
 
     @app.post("/v1/embeddings")
     async def create_embeddings(self, request: EmbeddingRequest, raw_request: Request):

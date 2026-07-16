@@ -4,16 +4,17 @@
 Translates the structurally different bits (``input``/``instructions`` →
 ``messages``, flattened tools → nested, ``text.format`` → ``response_format``,
 ``max_output_tokens`` → ``max_completion_tokens``) and rejects features not yet
-supported (``previous_response_id``, ``background``, hosted built-in tools) with
-an explicit error rather than dropping them silently. Every loader's
+supported (``background``, hosted built-in tools) with an explicit error rather
+than dropping them silently. Every loader's
 ``create_response`` calls into this for the request side; ``vllm``/``llama_server``
 then shape the response natively from their own parsed output rather than going
-back through a chat-completion object (see ``chat_utils.build_responses_items_from_parsed``)
+back through a chat-completion object (see ``utils.responses.build_responses_items_from_parsed``)
 — ``build_response_object``/``_usage_from_chat``/``_status_for`` below are the shared
 envelope helpers both that native path and the streaming translator build on.
 
-``store`` is accepted but never persisted — the response echoes ``store=False``.
-Image/audio input parts are reduced to their text for now.
+``store`` and ``previous_response_id`` are acted on by the gateway (it persists the
+snapshot and resolves the history); here they are echoed onto the response object
+only. Image/audio input parts are reduced to their text for now.
 
 Imports come from the sibling ``schemas`` submodule and the ``chat`` submodule,
 never from the top-level ``modelship.openai.protocol`` package — that package
@@ -51,14 +52,15 @@ class UnsupportedResponsesFeatureError(ValueError):
 def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionRequest:
     """Translate a ``ResponsesRequest`` into a ``ChatCompletionRequest``.
 
-    Raises :class:`UnsupportedResponsesFeatureError` for stateful/background/hosted-tool
-    features that the stateless Phase A adapter cannot fulfill.
+    ``previous_response_id`` is **already resolved** by the time this runs: the
+    gateway looks the prior snapshot up and prepends its items to ``input`` before
+    the Ray hop, so the field survives here only to be echoed on the response. This
+    contract can't be checked from inside the loader — it holds because
+    ``ModelDeployment`` is reachable only via the gateway, never over HTTP.
+
+    Raises :class:`UnsupportedResponsesFeatureError` for background/hosted-tool
+    features the adapter cannot fulfill.
     """
-    if request.previous_response_id is not None:
-        raise UnsupportedResponsesFeatureError(
-            "previous_response_id is not supported: /v1/responses does not yet persist conversation "
-            "state. Send the full conversation in `input` instead."
-        )
     if request.background:
         raise UnsupportedResponsesFeatureError("background mode is not supported on /v1/responses.")
 
@@ -268,7 +270,11 @@ def build_response_object(
         "text": request.text,
         "reasoning": request.reasoning,
         "metadata": request.metadata or {},
-        "store": False,
+        # OpenAI stores by default; only an explicit `store: false` opts out. The
+        # gateway reads the same field to decide whether to persist, so what the
+        # response claims and what was actually stored cannot drift.
+        "store": request.store is not False,
+        "previous_response_id": request.previous_response_id,
     }
     if response_id is not None:
         kwargs["id"] = response_id
