@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.5] - 2026-07-16
+
+### Added
+- add CLI args for responses TTL and state sweep interval
+- add server-side conversation state to /v1/responses
+
+### Fixed
+- stop the request watcher on any history-resolution failure
+- guard against null response payloads in Responses state handling
+- reclaim expired keys in the memory state store
+- reject memory:// URIs with a path, not just a host
+- make memory:// state store cluster-scoped via a detached Ray actor
+
+### Changed
+- cache the sweep interval once per MemoryStoreActor instance
+- cover responses state gaps found by ad-hoc endpoint probing
+- split openai chat_utils into utils/{chat,responses}; extract Responses gateway helpers from api.py
+- move /v1/responses state domain module into openai/state package
+
 ## [0.6.4] - 2026-07-15
 
 ### Fixed
