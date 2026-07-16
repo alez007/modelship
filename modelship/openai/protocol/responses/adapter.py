@@ -8,7 +8,7 @@ supported (``background``, hosted built-in tools) with an explicit error rather
 than dropping them silently. Every loader's
 ``create_response`` calls into this for the request side; ``vllm``/``llama_server``
 then shape the response natively from their own parsed output rather than going
-back through a chat-completion object (see ``chat_utils.build_responses_items_from_parsed``)
+back through a chat-completion object (see ``utils.responses.build_responses_items_from_parsed``)
 — ``build_response_object``/``_usage_from_chat``/``_status_for`` below are the shared
 envelope helpers both that native path and the streaming translator build on.
 

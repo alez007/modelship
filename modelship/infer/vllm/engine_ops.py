@@ -33,7 +33,6 @@ from vllm.tokenizers import TokenizerLike as VllmTokenizerLike
 from vllm.v1.engine.async_llm import AsyncLLM as VllmAsyncLLM
 
 from modelship.logging import get_logger
-from modelship.openai.chat_utils import ParsedChatOutput
 from modelship.openai.protocol import (
     ChatCompletionLogProb,
     ChatCompletionLogProbs,
@@ -50,6 +49,7 @@ from modelship.openai.protocol import (
     UsageInfo,
     random_uuid,
 )
+from modelship.openai.utils.chat import ParsedChatOutput
 
 logger = get_logger("infer.vllm.engine_ops")
 
@@ -453,7 +453,7 @@ async def stream_chat_completion(
 
     Yields fully-formed modelship chunks; the caller owns SSE encoding and
     the trailing `[DONE]` line (symmetric with how `build_choices` leaves
-    `ChatCompletionResponse` assembly to `chat_utils.build_from_parsed`).
+    `ChatCompletionResponse` assembly to `utils.chat.build_from_parsed`).
     """
     num_choices = vllm_req.n or 1
     parsers = make_parsers(render, tokenizer, vllm_req, vllm_req.chat_template_kwargs, n=num_choices)

@@ -1,7 +1,7 @@
 """Responses API (``/v1/responses``) schemas and the request-side chat adapter.
 
 Each loader implements its own ``create_response`` natively (shaping straight
-from its parsed chat output — see ``chat_utils.build_responses_items_from_parsed``),
+from its parsed chat output — see ``utils.responses.build_responses_items_from_parsed``),
 non-streaming and streaming alike; there is no generic response-side fallback.
 The one thing every loader shares is the request-side translation: an incoming
 ``ResponsesRequest`` is turned into a ``ChatCompletionRequest`` via

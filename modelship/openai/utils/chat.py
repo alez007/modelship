@@ -1,11 +1,13 @@
-"""Validation and normalization helpers for OpenAI chat-completion messages."""
+"""Validation and normalization helpers for OpenAI chat-completion messages.
+
+Responses-specific shaping (parsed chat output -> Responses items) and gateway-side
+Responses helpers live in the sibling :mod:`.responses` module instead.
+"""
 
 import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
-
-from pydantic import ValidationError
 
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
@@ -14,23 +16,11 @@ from modelship.openai.protocol import (
     ChatCompletionStreamResponse,
     ChatMessage,
     ErrorResponse,
-    ResponseObject,
-    ResponsesRequest,
     ToolCall,
     UsageInfo,
 )
-from modelship.openai.protocol.error import create_error_response
-from modelship.openai.protocol.responses.adapter import _status_for, _usage_from_chat, build_response_object
-from modelship.openai.protocol.responses.schemas import (
-    ResponseFunctionToolCall,
-    ResponseOutputItem,
-    ResponseOutputMessage,
-    ResponseOutputText,
-    ResponseReasoningItem,
-    ResponseReasoningSummary,
-)
 
-logger = get_logger("openai.chat_utils")
+logger = get_logger("openai.utils.chat")
 
 
 class UnsupportedContentError(ValueError):
@@ -301,62 +291,3 @@ def encode_error_sse(error: ErrorResponse) -> str:
     this is only for a failure after the stream has already started.
     """
     return f"data: {json.dumps(error.model_dump(mode='json'))}\n\n"
-
-
-def build_responses_items_from_parsed(parsed: ParsedChatOutput) -> list[ResponseOutputItem]:
-    """Shape one parsed choice into Responses ``output[]`` items.
-
-    Sibling to `build_from_parsed`: same DTO in, Responses items out instead
-    of a `ChatCompletionResponse`. Order matches OpenAI's own: reasoning
-    first, then the assistant message, then one `function_call` per tool call.
-    """
-    output: list[ResponseOutputItem] = []
-    if parsed.reasoning:
-        output.append(ResponseReasoningItem(summary=[ResponseReasoningSummary(text=parsed.reasoning)]))
-    if parsed.content:
-        output.append(ResponseOutputMessage(content=[ResponseOutputText(text=parsed.content)]))
-    for call in parsed.tool_calls:
-        output.append(
-            ResponseFunctionToolCall(
-                call_id=call.id,
-                name=call.function.name,
-                arguments=call.function.arguments,
-            )
-        )
-    return output
-
-
-def build_response_from_parsed(
-    parsed: ParsedChatOutput,
-    request: ResponsesRequest,
-    *,
-    usage: UsageInfo,
-    finish_reason: str | None,
-    model: str,
-) -> ResponseObject:
-    """Build a non-streaming ``ResponseObject`` from one loader's parsed chat output.
-
-    Shared by every loader's non-streaming `create_response`: each shapes its own
-    `ParsedChatOutput` from its native response format, then hands it here for the
-    status/usage/envelope assembly (`build_response_object` + `_status_for` +
-    `_usage_from_chat`) that used to be duplicated per loader.
-    """
-    status, incomplete = _status_for(finish_reason)
-    return build_response_object(
-        request,
-        status=status,
-        output=build_responses_items_from_parsed(parsed),
-        usage=_usage_from_chat(usage),
-        incomplete=incomplete,
-        model=model,
-    )
-
-
-def responses_validation_error(exc: ValidationError) -> ErrorResponse:
-    """400 for a pydantic ``ValidationError`` surfaced by ``responses_request_to_chat``
-    (e.g. a bad ``reasoning.effort`` value) — same shape as every other rejection.
-
-    ``ValidationError.args`` is always empty (pydantic never populates it), so
-    ``str(exc)`` — its full per-field error report — is the message to use.
-    """
-    return create_error_response(message=str(exc), err_type="invalid_request_error")

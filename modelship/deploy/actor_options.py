@@ -22,7 +22,7 @@ logger = get_logger("startup")
 # MSHIP_PREFLIGHT so --no-preflight on the driver also disables it in the replicas
 # (preflight runs inside each loader's actor __init__, not on the driver), and the
 # /v1/responses state-store tuning read inside the gateway replica's own process
-# (responses_state.ttl_seconds / state.memory._sweep_interval_s), not the driver's.
+# (state.responses.ttl_seconds / state.memory._sweep_interval_s), not the driver's.
 _PASSTHROUGH_ENV_VARS = (
     "MSHIP_LOG_LEVEL",
     "MSHIP_LOG_FORMAT",

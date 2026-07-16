@@ -1,6 +1,6 @@
 import pytest
 
-from modelship.openai.chat_utils import UnsupportedContentError, normalize_chat_messages
+from modelship.openai.utils.chat import UnsupportedContentError, normalize_chat_messages
 
 
 def test_string_content_passthrough():
