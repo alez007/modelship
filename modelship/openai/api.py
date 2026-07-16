@@ -573,7 +573,10 @@ class ModelshipAPI:
         if request.previous_response_id is not None:
             try:
                 request.input = await responses_utils.resolve_history(self._state_store, identity, request)
-            except HTTPException:
+            except BaseException:
+                # Any failure here — not just the expected 404/503 HTTPException — must
+                # still stop the watcher: _handle_response hasn't taken ownership of it
+                # yet, so nothing else will cancel its polling task.
                 watcher.stop()
                 raise
 
