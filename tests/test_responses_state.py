@@ -7,7 +7,7 @@ memory:// and on the durable redis:// alike.
 
 import pytest
 
-from modelship.openai import responses_state
+from modelship.openai.state import responses as responses_state
 from modelship.state import MemoryStoreActor, StateStoreUnavailableError
 from modelship.state.redis import RedisStateStore
 
