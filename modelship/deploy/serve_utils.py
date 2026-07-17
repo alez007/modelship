@@ -173,7 +173,14 @@ def connect_ray(lib_level: int) -> None:
         # start_ray.sh used to do). mship_deploy stays alive as the operator and
         # tears it down on exit (owns_cluster in mship_deploy).
         os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
-        if os.environ.get("MSHIP_RAY_AUTH", "none").lower() == "token" and _ray_auth_is_safe():
+        if os.environ.get("MSHIP_RAY_AUTH", "none").lower() == "token":
+            if not _ray_auth_is_safe():
+                raise RuntimeError(
+                    "MSHIP_RAY_AUTH=token requested, but a local Ray cluster with no auth "
+                    "token is already running — attaching to it would start unauthenticated "
+                    "instead of failing loudly. Stop that cluster first, or unset "
+                    "MSHIP_RAY_AUTH/--ray-auth to attach to it without a token."
+                )
             os.environ.setdefault("RAY_AUTH_MODE", "token")
         # Reclaim disk from prior runs' leftover session dirs before this run's
         # session is created. Skipped on the existing-cluster branch (KubeRay /

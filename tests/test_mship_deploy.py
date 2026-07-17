@@ -671,6 +671,20 @@ class TestConnectRay:
         # setdefault: an operator's explicit RAY_AUTH_MODE always wins, even when opting into token mode.
         assert auth_mode == "disabled"
 
+    def test_own_cluster_auth_opt_in_bails_when_unsafe(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "token"}, clear=False),
+            patch.object(serve_utils, "prune_ray_sessions"),
+            patch.object(serve_utils.ray, "init") as mock_init,
+            patch.object(serve_utils, "_ray_auth_is_safe", return_value=False),
+        ):
+            os.environ.pop("RAY_AUTH_MODE", None)
+            with pytest.raises(RuntimeError, match="MSHIP_RAY_AUTH=token"):
+                serve_utils.connect_ray(20)
+        mock_init.assert_not_called()
+
     def test_existing_cluster_never_sets_auth_mode(self):
         _, auth_mode = self._init_call(
             {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"}, pop=("MSHIP_RAY_AUTH", "RAY_AUTH_MODE")
