@@ -71,17 +71,16 @@ def remove_apps(app_names: list[str], replica_coordinator, gateway_name: str) ->
 
 
 def _own_cluster_init_kwargs() -> dict[str, object]:
-    """ray.init kwargs to start our own head, mirroring the flags start_ray.sh
-    used to pass. Resources auto-detect when RAY_HEAD_* are unset."""
-    kwargs: dict[str, object] = {}
-    if os.environ.get("MSHIP_RAY_DASHBOARD", "false").lower() == "true":
-        kwargs["include_dashboard"] = True
-        kwargs["dashboard_host"] = "0.0.0.0"
-    else:
-        kwargs["include_dashboard"] = False
-    if cpus := os.environ.get("RAY_HEAD_CPU_NUM"):
+    """ray.init kwargs to start our own head. Dashboard always starts;
+    MSHIP_RAY_DASHBOARD sets its bind host (default 127.0.0.1), not on/off.
+    Resources auto-detect when MSHIP_NODE_NUM_* are unset."""
+    kwargs: dict[str, object] = {
+        "include_dashboard": True,
+        "dashboard_host": os.environ.get("MSHIP_RAY_DASHBOARD", "127.0.0.1"),
+    }
+    if cpus := os.environ.get("MSHIP_NODE_NUM_CPUS"):
         kwargs["num_cpus"] = int(cpus)
-    if gpus := os.environ.get("RAY_HEAD_GPU_NUM"):
+    if gpus := os.environ.get("MSHIP_NODE_NUM_GPUS"):
         kwargs["num_gpus"] = int(gpus)
     if os.environ.get("MSHIP_METRICS", "true").lower() == "true":
         # _metrics_export_port is a private ray.init kwarg (accepted via **kwargs)
@@ -148,6 +147,17 @@ def prune_ray_sessions() -> None:
         logger.warning("Ray session pruning failed; continuing without it.", exc_info=True)
 
 
+def _ray_auth_is_safe() -> bool:
+    """False only when attaching to an already-running local cluster with no
+    auth token — Ray only generates one when starting a new cluster."""
+    try:
+        if (Path.home() / ".ray" / "auth_token").exists():
+            return True
+        return not (Path(get_ray_temp_dir()) / "ray_current_cluster").exists()
+    except (OSError, RuntimeError):
+        return False
+
+
 def connect_ray(lib_level: int) -> None:
     use_existing_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() == "true"
     os.environ.setdefault("RAY_GCS_RPC_TIMEOUT_S", "30")
@@ -159,10 +169,12 @@ def connect_ray(lib_level: int) -> None:
         # GCS address from off-cluster.
         ray.init(address="auto", ignore_reinit_error=True, logging_level=lib_level)
     else:
-        # We own the cluster: start a local head sized from RAY_HEAD_* (what
+        # We own the cluster: start a local head sized from MSHIP_NODE_NUM_* (what
         # start_ray.sh used to do). mship_deploy stays alive as the operator and
         # tears it down on exit (owns_cluster in mship_deploy).
         os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
+        if os.environ.get("MSHIP_RAY_AUTH", "none").lower() == "token" and _ray_auth_is_safe():
+            os.environ.setdefault("RAY_AUTH_MODE", "token")
         # Reclaim disk from prior runs' leftover session dirs before this run's
         # session is created. Skipped on the existing-cluster branch (KubeRay /
         # an operator we don't own manages its own temp root).

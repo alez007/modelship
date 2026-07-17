@@ -25,7 +25,7 @@ The recommended way to develop Modelship is with VS Code Dev Containers. The con
    uv sync --extra dev
    ```
 
-4. Start the server. It starts its own Ray head, auto-detecting CPUs/GPUs unless `RAY_HEAD_CPU_NUM` / `RAY_HEAD_GPU_NUM` are set:
+4. Start the server. It starts its own Ray head, auto-detecting CPUs/GPUs unless `MSHIP_NODE_NUM_CPUS` / `MSHIP_NODE_NUM_GPUS` are set:
 
    ```bash
    uv run mship_deploy.py
@@ -46,8 +46,10 @@ The following environment variables are set in the dev image with sensible defau
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAY_HEAD_CPU_NUM` | *(unset)* | **Optional override:** CPUs allocated to Ray head. If unset, Ray auto-detects. |
-| `RAY_HEAD_GPU_NUM` | *(unset)* | **Optional override:** GPUs allocated to Ray head. If unset, Ray auto-detects. |
+| `MSHIP_NODE_NUM_CPUS` | *(unset)* | **Optional override:** CPUs this node reserves (`--node-num-cpus` flag). Node-scoped, not head-only — the same knob a future worker node sizes itself from. If unset, auto-detects. |
+| `MSHIP_NODE_NUM_GPUS` | *(unset)* | **Optional override:** GPUs this node reserves (`--node-num-gpus` flag). If unset, auto-detects. |
+| `MSHIP_RAY_DASHBOARD` | `127.0.0.1` | Ray dashboard bind host, own-head only. The dashboard always starts; this sets *where* it binds — `0.0.0.0` exposes it beyond the container (ShadowRay/CVE-2023-48022 exposure vector; only do this on a trusted/private network). |
+| `MSHIP_RAY_AUTH` | `none` | Ray cluster authentication, own-head only (`--ray-auth` flag). `token` requires a bearer token for the dashboard and cluster-internal RPC. Never gates the OpenAI API or Prometheus metrics. |
 | `MSHIP_CACHE_DIR` | `/.cache` | Model cache directory |
 | `MSHIP_STATE_STORE` | `memory://` | State-store URI for the effective config, deploy coordinator + `/v1/responses` conversations: `memory://` or `redis://[:pw@]host:port/db`. See [model-configuration.md](model-configuration.md#state-store-mship_state_store). The chart always sets `redis://` for k8s. |
 | `MSHIP_USE_EXISTING_RAY_CLUSTER` | `false` | Set to `true` to connect to a Ray cluster you manage (must run on a cluster node) instead of starting one; implies deploy-and-exit |

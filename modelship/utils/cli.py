@@ -49,6 +49,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Connect to an existing Ray cluster (env: MSHIP_USE_EXISTING_RAY_CLUSTER)",
     )
+    parser.add_argument(
+        "--ray-auth",
+        choices=["token", "none"],
+        help=(
+            "Ray cluster authentication, applied only when modelship starts its own head "
+            "(env: MSHIP_RAY_AUTH, default: none). 'token' requires a bearer token, generated "
+            "by Ray itself at ~/.ray/auth_token, for the dashboard and cluster-internal RPC."
+        ),
+    )
+    parser.add_argument(
+        "--node-num-cpus", type=int, help="CPUs this node reserves (env: MSHIP_NODE_NUM_CPUS, default: auto-detect)"
+    )
+    parser.add_argument(
+        "--node-num-gpus", type=int, help="GPUs this node reserves (env: MSHIP_NODE_NUM_GPUS, default: auto-detect)"
+    )
     parser.add_argument("--log-format", choices=["text", "json"], help="Log format (env: MSHIP_LOG_FORMAT)")
     parser.add_argument(
         "--log-target",
@@ -145,6 +160,12 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
 
     if args.use_existing_ray_cluster is True:
         os.environ["MSHIP_USE_EXISTING_RAY_CLUSTER"] = "true"
+    if args.ray_auth is not None:
+        os.environ["MSHIP_RAY_AUTH"] = args.ray_auth
+    if args.node_num_cpus is not None:
+        os.environ["MSHIP_NODE_NUM_CPUS"] = str(args.node_num_cpus)
+    if args.node_num_gpus is not None:
+        os.environ["MSHIP_NODE_NUM_GPUS"] = str(args.node_num_gpus)
     if args.no_metrics is True:
         os.environ["MSHIP_METRICS"] = "false"
     if args.no_preflight is True:
