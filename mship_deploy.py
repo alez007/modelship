@@ -40,7 +40,6 @@ from modelship.deploy.config import (  # noqa: E402
 )
 from modelship.deploy.effective_config import (  # noqa: E402
     deployment_names,
-    evict_failed,
     merge,
     read_effective,
     resolve_mode,
@@ -246,25 +245,25 @@ def main(argv: list[str] | None = None) -> None:
         if apps_to_remove:
             remove_apps(apps_to_remove, replica_coord, gateway_name)
 
-        # Persist the achieved effective config (desired minus permanently-failed
-        # models) so a re-assert after cluster loss restores exactly this set and
-        # never retries a broken config. Written after the deploy settles so a
-        # crash mid-deploy keeps the last known-good effective config.
-        failed_deployment_names = {cfg.deployment_name(gateway_name) for cfg, _ in fatally_failed}
-        write_effective(store, gateway_name, evict_failed(desired_raw, gateway_name, failed_deployment_names))
+        # Persist the full desired config, including fatally-failed models, so
+        # a re-assert after cluster loss keeps retrying them instead of
+        # evicting them. Written after the deploy settles so a crash mid-deploy
+        # keeps the last known-good effective config.
+        write_effective(store, gateway_name, desired_raw)
 
         DEPLOY_DURATION_SECONDS.observe(time.monotonic() - deploy_started, tags={"gateway": gateway_name})
         for action, count in (
             ("add", len(deployed_this_run)),
             ("remove", removed_count),
-            ("evict", len(fatally_failed)),
+            ("fail", len(fatally_failed)),
         ):
             if count:
                 DEPLOY_MODELS_CHANGED_TOTAL.inc(count, tags={"gateway": gateway_name, "action": action})
 
         if fatally_failed:
             logger.error(
-                "%d model(s) failed to deploy and were evicted from the effective config — fix config and redeploy:",
+                "%d model(s) failed to deploy — fix config and redeploy (they remain in the effective config "
+                "and will be retried on the next deploy/self-heal):",
                 len(fatally_failed),
             )
             for cfg, reason in fatally_failed:
@@ -276,7 +275,15 @@ def main(argv: list[str] | None = None) -> None:
             # __del__ and clean up child processes like vllm EngineCore) before
             # tearing down Ray. With an external cluster we instead exit here,
             # leaving the gateway + deployments running under KubeRay.
+            #
+            # Don't exit on fatal failures here — /readyz reports 503 while
+            # pending, and healthy models keep serving via /health.
             signal.pause()
+        elif fatally_failed:
+            # Deploy-and-exit (KubeRay RayJob): no resident process to surface
+            # failures via /readyz, so fail the job loudly instead.
+            logger.error("Exiting non-zero: %d model(s) fatally failed to deploy.", len(fatally_failed))
+            sys.exit(1)
 
     except BaseException as e:
         if isinstance(e, SystemExit):

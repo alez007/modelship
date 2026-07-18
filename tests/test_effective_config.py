@@ -4,7 +4,6 @@ import pytest
 
 from modelship.deploy.config import load_raw_models
 from modelship.deploy.effective_config import (
-    evict_failed,
     merge,
     read_effective,
     resolve_mode,
@@ -54,18 +53,6 @@ class TestMerge:
     def test_reconcile_replaces(self):
         merged = merge([_model("a"), _model("b")], [_model("c")], "g", "reconcile")
         assert [m["name"] for m in merged] == ["c"]
-
-
-class TestEvictFailed:
-    def test_evicts_named_deployment(self):
-        a, b = _model("a"), _model("b")
-        failed = {ModelshipModelConfig.model_validate(b).deployment_name("g")}
-        kept = evict_failed([a, b], "g", failed)
-        assert [m["name"] for m in kept] == ["a"]
-
-    def test_no_failures_keeps_all(self):
-        models = [_model("a"), _model("b")]
-        assert evict_failed(models, "g", set()) == models
 
 
 class TestReadWriteEffective:
