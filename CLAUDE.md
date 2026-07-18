@@ -7,15 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Toolchain essentials
 
 - Python is pinned exactly to `3.12.10` (not `>=`). Dependency manager is **uv** with a workspace; `plugins/*` are workspace members. Never use `pip install`.
-- `gpu` and `cpu` extras are **mutually exclusive** (declared in `[tool.uv] conflicts`) — `torch`/`torchvision` come from different indexes per extra.
+- `cuda` and `cpu` extras are **mutually exclusive** (declared in `[tool.uv] conflicts`) — `torch`/`torchvision` come from different indexes per extra. A third extra, `thin`, is empty — no torch/vllm.
 - Line length is **120**, not 88. Ruff owns formatting (`E501` disabled); don't hand-sort imports (isort via `I` rule handles it). `plugins/*` are third-party to isort; `modelship` is first-party.
 - Pyright runs in `basic` mode, scoped to `modelship`, `plugins`, `mship_deploy.py`. Pre-commit only runs ruff — don't rely on it to catch type errors.
 
 ## Common commands
 
 ```bash
-# Install (choose gpu XOR cpu, plus dev, plus optional plugin extras)
-uv sync --extra dev --extra gpu                        # what CI uses
+# Install (choose cuda XOR cpu, plus dev, plus optional plugin extras)
+uv sync --extra dev --extra cuda                       # what CI uses
 uv sync --extra dev --extra cpu --extra kokoroonnx     # CPU + a plugin
 
 make lint        # ruff check + ruff format --check + pyright — all three MUST pass
@@ -28,7 +28,7 @@ uv run pytest tests/test_config.py::TestLlamaServerConfig::test_defaults -v
 
 CI mirrors `make lint` + `pytest tests/ -v`. Match it locally before pushing.
 
-`make lint` requires the `gpu` extra — pyright fails with `reportMissingImports` for `gguf`, `diffusers`, and `psutil` under the cpu sync. (`vllm` is now importable under both extras — Stage E0 wired a CPU wheel index — but that alone doesn't unblock a cpu-only lint.) Tests pass on either extra.
+`make lint` requires the `cuda` extra — pyright fails with `reportMissingImports` for `gguf`, `diffusers`, and `psutil` under the cpu sync. (`vllm` is now importable under both extras — Stage E0 wired a CPU wheel index — but that alone doesn't unblock a cpu-only lint.) Tests pass on either extra.
 
 When running tests on your own initiative, skip the slow integration suite: `uv run pytest tests/ -v -m "not integration"`. Only run full `make test` when explicitly requested.
 
@@ -41,7 +41,7 @@ When running tests on your own initiative, skip the slow integration suite: `uv 
 3. Deploys models **additively** by default (each gets a random suffix like `qwen-a3f9k`). Use `--reconcile` to instead make the cluster match the config exactly (add/remove/replace) — it never tears the cluster down.
 4. Starts a FastAPI Ray Serve app named `modelship api` on port 8000. Override via `--gateway-name` (multiple gateways can coexist on one cluster).
 
-Docker's `CMD` is `uv run --no-sync mship_deploy.py` (auto-detecting CPUs/GPUs unless `MSHIP_NODE_NUM_CPUS`/`MSHIP_NODE_NUM_GPUS` set), against the prebuilt venv (extras chosen by `--build-arg MSHIP_VARIANT=gpu|cpu`). Plugin wheels in `MSHIP_PLUGIN_WHEEL_DIR` ship to Ray workers per-deployment via `runtime_env`, resolved from `models.yaml`. The Dev Container overrides this — inside it you must `uv sync` and run `mship_deploy.py` manually.
+Docker's `CMD` is `uv run --no-sync mship_deploy.py` (auto-detecting CPUs/GPUs unless `MSHIP_NODE_NUM_CPUS`/`MSHIP_NODE_NUM_GPUS` set), against the prebuilt venv (extras chosen by `--build-arg MSHIP_VARIANT=thin|cpu|cuda`). Plugin wheels in `MSHIP_PLUGIN_WHEEL_DIR` ship to Ray workers per-deployment via `runtime_env`, resolved from `models.yaml`. The Dev Container overrides this — inside it you must `uv sync` and run `mship_deploy.py` manually. Right after connecting, the driver logs the cluster's observed node/GPU/CPU totals (total vs. currently schedulable) — the quickest way to tell a legitimately-waiting head apart from a misconfigured one.
 
 ## Architecture map
 
@@ -72,7 +72,7 @@ Under `tests/`, `pytest-asyncio` for async. Tests **mock out Ray Serve** — the
 - Metrics live on port **8079** (not 8000). `MSHIP_METRICS=false` or `--no-metrics` disables. When `mship_deploy` starts its own head (no `--use-existing-ray-cluster`), `connect_ray` pins that port via `ray.init(_metrics_export_port=…)` — a **private** Ray kwarg (accepted through `**kwargs`). A `TestConnectRay` test guards it so a Ray bump that drops it fails loudly.
 - The Ray dashboard always starts on the own-head path; `MSHIP_RAY_DASHBOARD` sets its bind host (default `127.0.0.1`, not on/off). Ray cluster auth (`RAY_AUTH_MODE=token`) is off by default; opt in via `--ray-auth=token`/`MSHIP_RAY_AUTH=token` — Ray generates and reads its own token at `~/.ray/auth_token`, modelship never writes it. `connect_ray` only honors this opt-in when `_ray_auth_is_safe()` holds (a token already exists, or no local cluster is running yet to attach to instead of start) — otherwise it raises `RuntimeError` before calling `ray.init` rather than silently attaching unauthenticated or letting Ray crash at connect time (Ray only auto-generates a token on the start-a-new-cluster path, never on attach). Both the dashboard and auth settings are scoped to `connect_ray`'s own-head branch only; the existing-cluster branch (`MSHIP_USE_EXISTING_RAY_CLUSTER=true`, what KubeRay's RayJob always uses) never touches either.
 - `TRACE` is a custom log level below `DEBUG`; it logs full request/response payloads.
-- Docker CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a `:latest-cpu` tag suffix.
+- Three images are published from the unified `Dockerfile` (`--build-arg MSHIP_VARIANT=thin|cpu|cuda`), all under `ghcr.io/alez007/modelship`: `thin` (bare tag, `:X.Y.Z`/`:latest`, amd64+arm64) is the control/coordinator image — no torch/vllm, bakes `MSHIP_NODE_NUM_CPUS=0`/`MSHIP_NODE_NUM_GPUS=0` so it never advertises capacity it can't serve; `cuda` (`-cuda` suffix, amd64 only) is the GPU node image; `cpu` (`-cpu` suffix, amd64+arm64) is the CPU node image. Floating tags (`:latest*`) are single-node only — multi-node deployments must pin every node to the same `X.Y.Z`(-suffix) tag or Ray refuses to form the cluster across mismatched versions.
 - `llama_server` loader launches a `llama-server` subprocess (found via `MSHIP_LLAMA_SERVER_BIN`, pinned in the Docker images at `/opt/llama.cpp`) and proxies its native OpenAI API — concurrency comes from `--parallel` slots instead of a single `asyncio.Lock`. `num_gpus` must be `0` or a whole integer (fractional is rejected, llama.cpp has no VRAM-fraction knob). Tool-call/reasoning parsing is llama-server's own, auto-detected per chat template: named-function `tool_choice` forcing is globally unsupported (silently falls back to `auto`), and `tool_choice: required` is grammar-enforced for harmony-style templates but a silent no-op for hermes-style ones (e.g. Qwen3); bare `response_format: {"type": "json_object"}` (no `schema` key) is also unenforced despite llama-server's own docs claiming support (verified against the b9859 binary directly) — `type: json_schema` requests, which is what modelship actually sends whenever a schema is given, are unaffected and correctly constrained. See `docs/model-configuration.md`'s llama_server section. No persistent on-disk prompt cache.
 - `LlamaServerPreflight` (`modelship/preflight/llama_cpp.py`) sizes `n_ctx` + `n_gpu_layers` from GGUF metadata and hardware — RAM budget on `num_gpus: 0`, VRAM (with a CPU-RAM fallback check for any partially-offloaded layers) on `num_gpus >= 1` — and always emits an explicit `n_gpu_layers` rather than trusting `-1`. Verified against the pinned b9859 `llama-server` binary: any negative `n_gpu_layers` (not just `-1`) hits the same `params.n_gpu_layers < 0` auto-fit-to-free-memory code path (`--help` documents `'auto'`/`'all'` string tokens instead, which this int-typed config field can't send) — the old "`<= -2` offloads all layers" convention from earlier llama.cpp releases is **not** how this binary behaves. It also recommends `threads` from `num_cpus` when the deploy reserves one or more whole CPUs — but declines if that would undercut `parallel` (Ray's `num_cpus` is a scheduling hint, not an enforced cap like `num_gpus`, so a low-`num_cpus`/high-`parallel` deploy shouldn't have its concurrent slots starved of compute; a prior version of this without the guard broke `test_concurrent_requests_are_not_serialized`).
 

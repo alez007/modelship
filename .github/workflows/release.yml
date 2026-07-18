@@ -14,17 +14,40 @@ permissions:
   packages: write   # push to GHCR
 
 jobs:
-  docker:
+  version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: version
+    strategy:
+      # Cheapest-first: thin has no torch/vllm, cpu is the mid-weight build,
+      # cuda is the slowest. max-parallel: 1 keeps them sequential in this
+      # order so the lightest variant lands in the registry first.
+      max-parallel: 1
+      matrix:
+        include:
+          - variant: thin
+            target: prod-thin
+            platforms: linux/amd64,linux/arm64
+            tag_suffix: ""
+          - variant: cpu
+            target: prod
+            platforms: linux/amd64,linux/arm64
+            tag_suffix: "-cpu"
+          - variant: cuda
+            target: prod
+            platforms: linux/amd64
+            tag_suffix: "-cuda"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -39,46 +62,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # CPU image builds and pushes first so the lightweight variant is available
-      # in the registry before the slower GPU build runs.
-      - name: Build and push (CPU)
+      - name: Build and push (${{ matrix.variant }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          target: prod
-          platforms: linux/amd64,linux/arm64
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platforms }}
           push: true
           build-args: |
-            PYTHON_VERSION=3.12.10
-            MSHIP_VARIANT=cpu
+            MSHIP_VARIANT=${{ matrix.variant }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-cpu
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-cpu
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push (GPU)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          target: prod
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            CUDA_VERSION=12.8.1
-            PYTHON_VERSION=3.12.10
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}${{ matrix.tag_suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   helm:
     runs-on: ubuntu-latest
     # After docker so a published chart's image tag always exists in GHCR.
-    needs: docker
+    needs: [version, docker]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,12 +111,12 @@ jobs:
 
       - name: Push chart to GHCR (OCI)
         run: |
-          helm push "modelship-${{ needs.docker.outputs.version }}.tgz" \
+          helm push "modelship-${{ needs.version.outputs.version }}.tgz" \
             "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts"
 
   github-release:
     runs-on: ubuntu-latest
-    needs: [docker, helm]
+    needs: [version, docker, helm]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,22 +130,31 @@ jobs:
           body: |
             ## Docker images
 
-            ### GPU (Standard)
+            ### Thin (control/coordinator — default, no torch/vllm)
             ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.docker.outputs.version }}
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
             ```
 
-            ### CPU (Lightweight)
+            ### CUDA (GPU node)
             ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.docker.outputs.version }}-cpu
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}-cuda
             ```
+
+            ### CPU (CPU node)
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}-cpu
+            ```
+
+            Floating tags (`:latest`, `:latest-cuda`, `:latest-cpu`) are single-node only — for any
+            multi-node cluster, pin every node to the same `X.Y.Z` tag to avoid a Ray version
+            mismatch between head and workers.
 
             ## Helm chart (Kubernetes)
 
             ```bash
             helm install modelship \
               oci://ghcr.io/${{ github.repository_owner }}/charts/modelship \
-              --version ${{ needs.docker.outputs.version }} \
+              --version ${{ needs.version.outputs.version }} \
               -f values.yaml
             ```
 

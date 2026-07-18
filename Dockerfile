@@ -1,14 +1,14 @@
 ARG CUDA_VERSION=13.0.2
 ARG PYTHON_VERSION=3.12.10
-ARG MSHIP_VARIANT=gpu
+ARG MSHIP_VARIANT=cuda
 ARG UID=1000
 ARG GID=1000
 
 # llama.cpp's official server images, pinned by manifest digest (the digest IS
 # the sha256 of the content). Upstream publishes no Linux CUDA binary in its
-# GitHub releases, so the GPU variant sources their CUDA 13 Docker build
+# GitHub releases, so the CUDA variant sources their CUDA 13 Docker build
 # instead. Bump the tag and digest together.
-ARG LLAMA_CPP_IMAGE_GPU=ghcr.io/ggml-org/llama.cpp:server-cuda13-b9859@sha256:e8e003c66cb77615dfef2f6ae1b7f5ad0de7bd048e19c40357220cb4141d1cdc
+ARG LLAMA_CPP_IMAGE_CUDA=ghcr.io/ggml-org/llama.cpp:server-cuda13-b9859@sha256:e8e003c66cb77615dfef2f6ae1b7f5ad0de7bd048e19c40357220cb4141d1cdc
 ARG LLAMA_CPP_IMAGE_CPU=ghcr.io/ggml-org/llama.cpp:server-b9859@sha256:f415de2e2c3e61b3dfab40d7fd26136c13d342c1ae4b3ffa8657fcc6a2f43d60
 
 # =============================================================================
@@ -16,13 +16,13 @@ ARG LLAMA_CPP_IMAGE_CPU=ghcr.io/ggml-org/llama.cpp:server-b9859@sha256:f415de2e2
 #
 # /app in the upstream images holds the llama-server binary plus the .so
 # backends it dlopen()s (GGML_BACKEND_DL). The CUDA backend is skipped
-# gracefully when no GPU/driver is present, so the GPU build also runs
+# gracefully when no GPU/driver is present, so the CUDA build also runs
 # CPU-only. libggml-cuda.so dynamically links libcudart/libcublas(Lt) — copied
 # in from the same image so they can't skew against the venv's torch-bundled
 # CUDA libs — and the driver's libcuda.so.1, which the NVIDIA Container
 # Toolkit provides at run time.
 # =============================================================================
-FROM ${LLAMA_CPP_IMAGE_GPU} AS llama-server-gpu
+FROM ${LLAMA_CPP_IMAGE_CUDA} AS llama-server-cuda
 
 RUN set -e && \
     mkdir -p /opt/llama.cpp && \
@@ -35,6 +35,13 @@ RUN set -e && \
 FROM ${LLAMA_CPP_IMAGE_CPU} AS llama-server-cpu
 
 RUN mkdir -p /opt/llama.cpp && cp -a /app/. /opt/llama.cpp/
+
+# thin ships no llama-server binary — it never loads a model. The wrapper
+# script + MSHIP_LLAMA_SERVER_BIN below still get written pointing at this
+# empty dir; harmless, since thin never invokes it.
+FROM ubuntu:24.04 AS llama-server-thin
+
+RUN mkdir -p /opt/llama.cpp
 
 # The raw binary can't run standalone: it resolves its sibling .so files via
 # the loader path. The wrapper scopes LD_LIBRARY_PATH to the llama-server
@@ -86,12 +93,12 @@ RUN apt-get update -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Register the NVIDIA CUDA apt repo and install cuda-cudart, cuda-nvcc, and
-# cuda-cuobjdump (GPU variant only). gcc/g++ + libc6-dev and ninja-build stay
+# cuda-cuobjdump (cuda variant only). gcc/g++ + libc6-dev and ninja-build stay
 # because torch/triton and flashinfer JIT-compile kernels at model-load time
 # and shell out to $CC/nvcc; without them, vllm crashes in _inductor (needs
 # g++ for its CPU codegen backend, e.g. the vllm CPU loader's torch.compile
 # path) or flashinfer on newer architectures (such as Blackwell).
-RUN if [ "$MSHIP_VARIANT" = "gpu" ]; then \
+RUN if [ "$MSHIP_VARIANT" = "cuda" ]; then \
     CUDA_VERSION_DASH=$(echo $CUDA_VERSION | cut -d. -f1,2 | tr '.' '-') && \
     curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub \
         | gpg --dearmor -o /usr/share/keyrings/cuda-keyring.gpg && \
@@ -172,7 +179,7 @@ ARG MSHIP_VARIANT
 ARG UID
 ARG GID
 
-RUN if [ "$MSHIP_VARIANT" = "gpu" ]; then \
+RUN if [ "$MSHIP_VARIANT" = "cuda" ]; then \
     apt-get update -y && \
     apt-get install -y --no-install-recommends gnupg && \
     curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub \
@@ -187,7 +194,7 @@ RUN apt-get update -y && \
         build-essential \
         cmake \
         git && \
-    if [ "$MSHIP_VARIANT" = "gpu" ]; then \
+    if [ "$MSHIP_VARIANT" = "cuda" ]; then \
     CUDA_VERSION_DASH=$(echo $CUDA_VERSION | cut -d. -f1,2 | tr '.' '-') && \
     apt-get install -y --no-install-recommends \
         cuda-nvcc-${CUDA_VERSION_DASH} \
@@ -263,3 +270,11 @@ USER root
 
 ENTRYPOINT ["/modelship/scripts/entrypoint.sh"]
 CMD ["uv", "run", "--no-sync", "mship_deploy.py"]
+
+# thin variant: pin capacity to 0 so it never advertises resources it can't
+# serve (no torch/vllm). Layered on top since a shared stage can't
+# conditionally set ENV.
+FROM prod AS prod-thin
+
+ENV MSHIP_NODE_NUM_CPUS=0
+ENV MSHIP_NODE_NUM_GPUS=0

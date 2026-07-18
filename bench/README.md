@@ -21,9 +21,9 @@ picks GPU vs CPU for that stack. The four combinations:
 
 - `docker` and `curl` on the host.
 - For `--device gpu`: the NVIDIA container runtime (`--gpus all` must work) and `nvidia-smi`.
-- A built modelship image. Default tag is `modelship:dev` (GPU) / `modelship:dev-cpu`
-  (CPU) — override with `--image`. GPU and CPU are separate image variants
-  (`--build-arg MSHIP_VARIANT=gpu|cpu`, see the root `Dockerfile`); the `cpu`
+- A built modelship image. Default tag is `modelship:dev` (CUDA) / `modelship:dev-cpu`
+  (CPU) — override with `--image`. CUDA and CPU are separate image variants
+  (`--build-arg MSHIP_VARIANT=cuda|cpu`, see the root `Dockerfile`); the `cpu`
   variant is required for `--device cpu` (it ships the `vllm==...+cpu` wheel).
 
 ## Run

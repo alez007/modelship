@@ -83,7 +83,7 @@ secrets:
   coordinator.
 - **Worker groups** — where models actually run. **Empty by default**, so a
   no-values install brings up only the head and schedules nothing; declare the
-  groups that match your hardware under `workerGroups` (a commented gpu+cpu
+  groups that match your hardware under `workerGroups` (a commented cuda+cpu
   example ships in `values.yaml`). This is a **list — Helm replaces it wholesale**
   (no per-item merge), so always declare the full set you want; omitting the key
   keeps the empty default.
@@ -155,7 +155,7 @@ runtime, never landing in the pod manifest or argv.
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `image.repository` / `image.tag` | `ghcr.io/alez007/modelship` / `<app version>` | Stamped to the release version |
-| `image.variant` | `gpu` | `cpu` appends `-cpu` to the tag. GPU runs everywhere; set `cpu` on CPU-only clusters, or per worker group for a mixed cluster |
+| `image.variant` | `cuda` | `cuda`\|`cpu`\|`thin`. Appends `-cuda`/`-cpu` to the tag (`thin` is bare). CUDA runs everywhere with a GPU; set `cpu` on CPU-only clusters, or per worker group for a mixed cluster |
 | `rayVersion` | `2.54.1` | Must match the Ray in the image |
 | `models.config` / `models.existingConfigMap` | `models: []` | Your model set |
 | `gateway.replicas` | `1` | API gateway replicas; raise (with ≥1 worker) for routing/ingress HA |

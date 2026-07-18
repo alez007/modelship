@@ -49,8 +49,8 @@ cluster-wide image values. Call with a dict: (dict "root" $) or
 */}}
 {{- define "modelship.imageTag" -}}
 {{- $tag := .tag | default .root.Values.image.tag -}}
-{{- $variant := .variant | default .root.Values.image.variant | default "gpu" -}}
-{{- if eq $variant "cpu" -}}{{ printf "%s-cpu" $tag }}{{- else -}}{{ $tag }}{{- end -}}
+{{- $variant := .variant | default .root.Values.image.variant | default "cuda" -}}
+{{- if eq $variant "cpu" -}}{{ printf "%s-cpu" $tag }}{{- else if eq $variant "cuda" -}}{{ printf "%s-cuda" $tag }}{{- else -}}{{ $tag }}{{- end -}}
 {{- end -}}
 
 {{/*

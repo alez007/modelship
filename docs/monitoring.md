@@ -133,7 +133,7 @@ docker run --rm --shm-size=8g --gpus all \
   -v ./models.yaml:/modelship/config/models.yaml \
   -v ./models-cache:/.cache \
   -p 8000:8000 -p 8079:8079 -p 8265:8265 \
-  ghcr.io/alez007/modelship:latest
+  ghcr.io/alez007/modelship:latest-cuda
 ```
 
 > The dashboard always starts and binds `127.0.0.1` by default — `MSHIP_RAY_DASHBOARD=0.0.0.0` above is what makes the published `8265` port actually reachable. Only do this on a trusted/private network (see [troubleshooting.md](troubleshooting.md)). Pair it with `--ray-auth=token` to require a bearer token for the now-reachable dashboard — retrieve it with `docker exec <container> cat /home/modelship/.ray/auth_token`.

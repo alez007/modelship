@@ -2,32 +2,31 @@ version = 1
 revision = 3
 requires-python = "==3.12.10"
 resolution-markers = [
-    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "(platform_machine == 's390x' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "(platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')",
-    "platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
+    "sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "(platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "(platform_machine == 's390x' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "(platform_machine == 's390x' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "platform_machine == 'aarch64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "platform_machine == 'aarch64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "(platform_machine == 'ppc64le' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
 ]
 conflicts = [[
     { package = "modelship", extra = "cpu" },
-    { package = "modelship", extra = "gpu" },
+    { package = "modelship", extra = "cuda" },
 ]]
 
 [manifest]
@@ -318,7 +317,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -375,7 +374,7 @@ name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
@@ -405,7 +404,7 @@ name = "colorful"
 version = "0.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/31/109ef4bedeb32b4202e02ddb133162457adc4eb890a9ed9c05c9dd126ed0/colorful-0.5.8.tar.gz", hash = "sha256:bb16502b198be2f1c42ba3c52c703d5f651d826076817185f0294c1a549a7445", size = 209361, upload-time = "2025-10-29T11:53:21.663Z" }
 wheels = [
@@ -417,7 +416,7 @@ name = "colorlog"
 version = "6.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a2/61/f083b5ac52e505dfc1c624eafbf8c7589a0d7f32daa398d2e7590efa5fda/colorlog-6.10.1.tar.gz", hash = "sha256:eb4ae5cb65fe7fec7773c2306061a8e63e02efc2c72eba9d27b0fa23c94f1321", size = 17162, upload-time = "2025-10-16T16:14:11.978Z" }
 wheels = [
@@ -431,9 +430,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "transformers" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2c/9e/d7f18bd9a0354088abc11a0c1f2c7698f7c49e5a709faedf6a46e388f693/compressed_tensors-0.17.0.tar.gz", hash = "sha256:15c20d06bdbcf35b51fc99fd125e7b9be1e1855567c33b7a46dfac26ad6fb126", size = 257091, upload-time = "2026-06-03T16:49:17.208Z" }
@@ -446,7 +445,7 @@ name = "cryptography"
 version = "46.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a4/ba/04b1bd4218cbc58dc90ce967106d51582371b898690f3ae0402876cc4f34/cryptography-46.0.6.tar.gz", hash = "sha256:27550628a518c5c6c903d84f637fbecf287f6cb9ced3804838a1295dc1fd0759", size = 750542, upload-time = "2026-03-25T23:34:53.396Z" }
 wheels = [
@@ -504,32 +503,10 @@ wheels = [
 
 [[package]]
 name = "cuda-bindings"
-version = "12.9.4"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "cuda-pathfinder", marker = "sys_platform == 'emscripten' or sys_platform == 'win32'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/c2/65bfd79292b8ff18be4dd7f7442cea37bcbc1a228c1886f1dea515c45b67/cuda_bindings-12.9.4-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:694ba35023846625ef471257e6b5a4bc8af690f961d197d77d34b1d1db393f56", size = 11760260, upload-time = "2025-10-21T14:51:40.79Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/c1/dabe88f52c3e3760d861401bb994df08f672ec893b8f7592dc91626adcf3/cuda_bindings-12.9.4-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fda147a344e8eaeca0c6ff113d2851ffca8f7dfc0a6c932374ee5c47caa649c8", size = 12151019, upload-time = "2025-10-21T14:51:43.167Z" },
-    { url = "https://files.pythonhosted.org/packages/df/6b/9c1b1a6c01392bfdd758e9486f52a1a72bc8f49e98f9355774ef98b5fb4e/cuda_bindings-12.9.4-cp312-cp312-win_amd64.whl", hash = "sha256:696ca75d249ddf287d01b9a698b8e2d8a05046495a9c051ca15659dc52d17615", size = 11586961, upload-time = "2025-10-21T14:51:45.394Z" },
-]
-
-[[package]]
-name = "cuda-bindings"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-]
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "cuda-pathfinder", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/c8/b2589d68acf7e3d63e2be330b84bc25712e97ed799affbca7edd7eae25d6/cuda_bindings-13.2.0-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e865447abfb83d6a98ad5130ed3c70b1fc295ae3eeee39fd07b4ddb0671b6788", size = 5722404, upload-time = "2026-03-11T00:12:44.041Z" },
@@ -547,30 +524,11 @@ wheels = [
 
 [[package]]
 name = "cuda-python"
-version = "12.9.4"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "cuda-bindings", version = "12.9.4", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'emscripten' or sys_platform == 'win32'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/af/f3/6b032a554019cfb3447e671798c1bd3e79b5f1af20d10253f56cea269ef2/cuda_python-12.9.4-py3-none-any.whl", hash = "sha256:d2cacea882a69863f1e7d27ee71d75f0684f4c76910aff839067e4f89c902279", size = 7594, upload-time = "2025-10-21T14:55:12.846Z" },
-]
-
-[[package]]
-name = "cuda-python"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'darwin'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-]
 dependencies = [
-    { name = "cuda-bindings", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "cuda-pathfinder", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cuda-bindings" },
+    { name = "cuda-pathfinder" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4a/da/b4dbe129f941afe1c24a09ba53521b78875626763d96414798a74763282f/cuda_python-13.2.0-py3-none-any.whl", hash = "sha256:2f092b0ec13a860115fa595411889ee939ad203450ea4f91e9461b174ea7b084", size = 8145, upload-time = "2026-03-11T13:55:19.143Z" },
@@ -606,37 +564,37 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cublas", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cuda-runtime", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cufft", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cufile", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cuda-cupti", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-curand", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cusolver", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cusparse", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cuda-nvrtc", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-nvtx", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 
 [[package]]
@@ -811,13 +769,13 @@ wheels = [
 [package.optional-dependencies]
 standard = [
     { name = "email-validator" },
-    { name = "fastapi-cli", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "fastapi-cli", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "pydantic-extra-types" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
 ]
 
 [[package]]
@@ -827,7 +785,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich-toolkit" },
     { name = "typer" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6e/58/74797ae9e4610cfa0c6b34c8309096d3b20bb29be3b8b5fbf1004d10fa5f/fastapi_cli-0.0.24.tar.gz", hash = "sha256:1afc9c9e21d7ebc8a3ca5e31790cd8d837742be7e4f8b9236e99cb3451f0de00", size = 19043, upload-time = "2026-02-24T10:45:10.476Z" }
 wheels = [
@@ -837,7 +795,7 @@ wheels = [
 [package.optional-dependencies]
 standard = [
     { name = "fastapi-cloud-cli" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
 ]
 
 [[package]]
@@ -847,12 +805,12 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastar" },
     { name = "httpx" },
-    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
     { name = "rich-toolkit" },
     { name = "rignore" },
     { name = "sentry-sdk" },
     { name = "typer" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7f/f2/fcd66ce245b7e3c3d84ca8717eda8896945fbc17c87a9b03f490ff06ace7/fastapi_cloud_cli-0.15.1.tar.gz", hash = "sha256:71a46f8a1d9fea295544113d6b79f620dc5768b24012887887306d151165745d", size = 43851, upload-time = "2026-03-26T10:23:12.932Z" }
 wheels = [
@@ -921,7 +879,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-tvm-ffi" },
     { name = "click" },
-    { name = "cuda-tile", extra = ["tileiras"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "cuda-tile", extra = ["tileiras"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "einops" },
     { name = "ninja" },
     { name = "numpy" },
@@ -1142,7 +1100,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "pyyaml" },
@@ -1160,8 +1118,7 @@ name = "humming-kernels"
 version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-bindings", version = "12.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'emscripten' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "cuda-bindings", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "cuda-bindings" },
     { name = "jinja2" },
     { name = "numpy" },
     { name = "nvidia-ml-py" },
@@ -1533,7 +1490,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pyjwt", extra = ["crypto"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "pyjwt", extra = ["crypto"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "sse-starlette" },
@@ -1565,7 +1522,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pillow" },
     { name = "pydantic" },
-    { name = "pydantic-extra-types", extra = ["pycountry"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-gpu'" },
+    { name = "pydantic-extra-types", extra = ["pycountry"], marker = "extra == 'extra-9-modelship-cpu' or extra == 'extra-9-modelship-cuda'" },
     { name = "requests" },
     { name = "tiktoken" },
     { name = "typing-extensions" },
@@ -1610,7 +1567,7 @@ dependencies = [
     { name = "jmespath" },
     { name = "pydantic" },
     { name = "setuptools", version = "77.0.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-modelship-cpu'" },
-    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "starlette" },
     { name = "supervisor" },
 ]
@@ -1629,7 +1586,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "gguf" },
     { name = "httpx" },
-    { name = "librosa" },
+    { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "pip" },
     { name = "psutil" },
@@ -1639,20 +1596,36 @@ dependencies = [
     { name = "ray", extra = ["data", "default", "serve-grpc"] },
     { name = "redis" },
     { name = "requests" },
-    { name = "scipy" },
-    { name = "soundfile" },
 ]
 
 [package.optional-dependencies]
 cpu = [
+    { name = "librosa" },
     { name = "onnxruntime" },
+    { name = "scipy" },
+    { name = "soundfile" },
     { name = "stable-diffusion-cpp-python" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "transformers" },
     { name = "vllm", version = "0.24.0+cpu", source = { registry = "https://wheels.vllm.ai/0.24.0/cpu" }, extra = ["audio"], marker = "extra == 'extra-9-modelship-cpu'" },
+]
+cuda = [
+    { name = "bitsandbytes" },
+    { name = "diffusers" },
+    { name = "flashinfer-python" },
+    { name = "librosa" },
+    { name = "nvidia-ml-py" },
+    { name = "onnxruntime-gpu" },
+    { name = "scipy" },
+    { name = "soundfile" },
+    { name = "stable-diffusion-cpp-python" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
+    { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
+    { name = "transformers" },
+    { name = "vllm", version = "0.24.0", source = { registry = "https://pypi.org/simple" }, extra = ["audio"], marker = "extra == 'extra-9-modelship-cuda'" },
 ]
 dev = [
     { name = "fakeredis" },
@@ -1661,18 +1634,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
-]
-gpu = [
-    { name = "bitsandbytes" },
-    { name = "diffusers" },
-    { name = "flashinfer-python" },
-    { name = "nvidia-ml-py" },
-    { name = "onnxruntime-gpu" },
-    { name = "stable-diffusion-cpp-python" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
-    { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
-    { name = "transformers" },
-    { name = "vllm", version = "0.24.0", source = { registry = "https://pypi.org/simple" }, extra = ["audio"], marker = "extra == 'extra-9-modelship-gpu'" },
 ]
 kokoroonnx = [
     { name = "kokoroonnx" },
@@ -1692,19 +1653,21 @@ whispercpp = [
 requires-dist = [
     { name = "argparse", specifier = ">=1.4.0" },
     { name = "asyncio", specifier = ">=4.0.0" },
-    { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.49.0" },
-    { name = "diffusers", marker = "extra == 'gpu'", specifier = ">=0.31.0" },
+    { name = "bitsandbytes", marker = "extra == 'cuda'", specifier = ">=0.49.0" },
+    { name = "diffusers", marker = "extra == 'cuda'", specifier = ">=0.31.0" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.36.2" },
     { name = "fastapi", specifier = ">=0.116.1" },
-    { name = "flashinfer-python", marker = "extra == 'gpu'", specifier = ">=0.6.1" },
+    { name = "flashinfer-python", marker = "extra == 'cuda'", specifier = ">=0.6.1" },
     { name = "gguf", specifier = ">=0.18.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "huggingface-hub", specifier = ">=1.12.0" },
     { name = "kokoroonnx", marker = "extra == 'kokoroonnx'", editable = "plugins/kokoroonnx" },
-    { name = "librosa", specifier = ">=0.11.0" },
+    { name = "librosa", marker = "extra == 'cpu'", specifier = ">=0.11.0" },
+    { name = "librosa", marker = "extra == 'cuda'", specifier = ">=0.11.0" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "nvidia-ml-py", marker = "extra == 'gpu'" },
+    { name = "nvidia-ml-py", marker = "extra == 'cuda'" },
     { name = "onnxruntime", marker = "extra == 'cpu'", specifier = ">=1.20.1" },
-    { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = ">=1.20.1" },
+    { name = "onnxruntime-gpu", marker = "extra == 'cuda'", specifier = ">=1.20.1" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "orpheus", marker = "extra == 'orpheus'", editable = "plugins/orpheus" },
@@ -1721,23 +1684,25 @@ requires-dist = [
     { name = "redis", specifier = ">=8.0.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
-    { name = "scipy", specifier = ">=1.16.1" },
-    { name = "soundfile", specifier = ">=0.13.0" },
+    { name = "scipy", marker = "extra == 'cpu'", specifier = ">=1.16.1" },
+    { name = "scipy", marker = "extra == 'cuda'", specifier = ">=1.16.1" },
+    { name = "soundfile", marker = "extra == 'cpu'", specifier = ">=0.13.0" },
+    { name = "soundfile", marker = "extra == 'cuda'", specifier = ">=0.13.0" },
     { name = "stable-diffusion-cpp-python", marker = "extra == 'cpu'", specifier = ">=0.4.7" },
-    { name = "stable-diffusion-cpp-python", marker = "extra == 'gpu'", specifier = ">=0.4.7" },
+    { name = "stable-diffusion-cpp-python", marker = "extra == 'cuda'", specifier = ">=0.4.7" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "modelship", extra = "cpu" } },
-    { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "modelship", extra = "gpu" } },
+    { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "modelship", extra = "cuda" } },
     { name = "torchvision", marker = "extra == 'cpu'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "modelship", extra = "cpu" } },
-    { name = "torchvision", marker = "extra == 'gpu'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "modelship", extra = "gpu" } },
+    { name = "torchvision", marker = "extra == 'cuda'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "modelship", extra = "cuda" } },
     { name = "transformers", marker = "extra == 'cpu'", specifier = ">=5.5.3" },
-    { name = "transformers", marker = "extra == 'gpu'", specifier = ">=5.5.3" },
+    { name = "transformers", marker = "extra == 'cuda'", specifier = ">=5.5.3" },
     { name = "vllm", marker = "extra == 'cpu'", specifier = "==0.24.0", index = "https://wheels.vllm.ai/0.24.0/cpu", conflict = { package = "modelship", extra = "cpu" } },
-    { name = "vllm", marker = "extra == 'gpu'", specifier = "==0.24.0" },
+    { name = "vllm", marker = "extra == 'cuda'", specifier = "==0.24.0" },
     { name = "vllm", extras = ["audio"], marker = "extra == 'cpu'", specifier = "==0.24.0", index = "https://wheels.vllm.ai/0.24.0/cpu", conflict = { package = "modelship", extra = "cpu" } },
-    { name = "vllm", extras = ["audio"], marker = "extra == 'gpu'", specifier = "==0.24.0" },
+    { name = "vllm", extras = ["audio"], marker = "extra == 'cuda'", specifier = "==0.24.0" },
     { name = "whispercpp", marker = "extra == 'whispercpp'", editable = "plugins/whispercpp" },
 ]
-provides-extras = ["gpu", "cpu", "kokoroonnx", "orpheus", "whispercpp", "otel", "dev"]
+provides-extras = ["thin", "cuda", "cpu", "kokoroonnx", "orpheus", "whispercpp", "otel", "dev"]
 
 [[package]]
 name = "mpmath"
@@ -1980,7 +1945,7 @@ name = "nvidia-cudnn-cu13"
 version = "9.19.0.56"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/84/26025437c1e6b61a707442184fa0c03d083b661adf3a3eecfd6d21677740/nvidia_cudnn_cu13-9.19.0.56-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:6ed29ffaee1176c612daf442e4dd6cfeb6a0caa43ddcbeb59da94953030b1be4", size = 433781201, upload-time = "2026-02-03T20:40:53.805Z" },
@@ -2003,7 +1968,7 @@ name = "nvidia-cufft"
 version = "12.0.0.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -2035,9 +2000,9 @@ name = "nvidia-cusolver"
 version = "12.0.4.66"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-cusparse", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-cusparse", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -2050,7 +2015,7 @@ name = "nvidia-cusparse"
 version = "12.6.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -2089,8 +2054,7 @@ name = "nvidia-cutlass-dsl-libs-base"
 version = "4.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-python", version = "12.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'emscripten' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "cuda-python", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "cuda-python" },
     { name = "numpy" },
     { name = "typing-extensions" },
 ]
@@ -2104,8 +2068,7 @@ name = "nvidia-cutlass-dsl-libs-cu13"
 version = "4.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-python", version = "12.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'emscripten' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "cuda-python", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "cuda-python" },
     { name = "numpy" },
     { name = "nvidia-cutlass-dsl-libs-base" },
     { name = "typing-extensions" },
@@ -2473,7 +2436,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "python-dateutil" },
-    { name = "tzdata", marker = "sys_platform == 'emscripten' or sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "tzdata", marker = "sys_platform == 'emscripten' or sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/99/b342345300f13440fe9fe385c3c481e2d9a595ee3bab4d3219247ac94e9a/pandas-3.0.2.tar.gz", hash = "sha256:f4753e73e34c8d83221ba58f232433fca2748be8b18dbca02d242ed153945043", size = 4645855, upload-time = "2026-03-31T06:48:30.816Z" }
 wheels = [
@@ -2954,7 +2917,7 @@ name = "pytest"
 version = "9.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -3327,7 +3290,7 @@ name = "ruamel-yaml"
 version = "0.18.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ruamel-yaml-clib", marker = "platform_python_implementation == 'CPython' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "ruamel-yaml-clib", marker = "platform_python_implementation == 'CPython' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3a/2b/7a1f1ebcd6b3f14febdc003e658778d81e76b40df2267904ee6b13f0c5c6/ruamel_yaml-0.18.17.tar.gz", hash = "sha256:9091cd6e2d93a3a4b157ddb8fabf348c3de7f1fb1381346d985b6b247dcd8d3c", size = 149602, upload-time = "2025-12-17T20:02:55.757Z" }
 wheels = [
@@ -3505,21 +3468,20 @@ name = "setuptools"
 version = "77.0.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "(platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')",
     "platform_machine == 'aarch64' and sys_platform == 'darwin'",
-    "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
+    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
+    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine == 'aarch64' and sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
+    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
+    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
+    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/ed/7101d53811fd359333583330ff976e5177c5e871ca8b909d1d6c30553aa3/setuptools-77.0.3.tar.gz", hash = "sha256:583b361c8da8de57403743e756609670de6fb2345920e36dc5c2d914c319c945", size = 1367236, upload-time = "2025-03-20T14:38:08.777Z" }
 wheels = [
@@ -3531,13 +3493,13 @@ name = "setuptools"
 version = "80.9.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu'",
-    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu'",
+    "sys_platform == 'darwin' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda'",
+    "sys_platform == 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "sys_platform == 'emscripten' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
+    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/18/5d/3bf57dcd21979b887f014ea83c24ae194cfcd12b9e0fda66b957c69d1fca/setuptools-80.9.0.tar.gz", hash = "sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c", size = 1319958, upload-time = "2025-05-27T00:56:51.443Z" }
 wheels = [
@@ -3582,10 +3544,10 @@ dependencies = [
     { name = "einops" },
     { name = "huggingface-hub" },
     { name = "numpy" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-cuda'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/38/5b64fb15c1cf02233252975c43c4b85ccacd9f77c55f7fee72b16b3bd2f6/snac-1.2.1.tar.gz", hash = "sha256:697f27fc5b98308eee8946739e5fd9c1b4ec629ef51b4f01c08dace1290685ee", size = 8737, upload-time = "2024-09-11T15:00:46.175Z" }
 wheels = [
@@ -3826,16 +3788,16 @@ name = "torch"
 version = "2.11.0"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
-    "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "filelock", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "fsspec", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "jinja2", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "networkx", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "setuptools", version = "77.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "sympy", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "typing-extensions", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "filelock", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "fsspec", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "jinja2", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "networkx", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "setuptools", version = "77.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "sympy", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "typing-extensions", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.11.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:43b35116802c85fb88d99f4a396b8bd4472bfca1dd82e69499e5a4f9b8b4e252", upload-time = "2026-03-23T15:16:58Z" },
@@ -3851,20 +3813,20 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "cuda-bindings", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "filelock", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "fsspec", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "jinja2", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "networkx", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "sympy", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
-    { name = "triton", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "typing-extensions", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-gpu')" },
+    { name = "cuda-bindings", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "filelock", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "fsspec", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "jinja2", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "networkx", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "sympy", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
+    { name = "triton", marker = "(sys_platform == 'linux' and extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "typing-extensions", marker = "(extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (extra != 'extra-9-modelship-cpu' and extra != 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/8b/69e3008d78e5cee2b30183340cc425081b78afc5eff3d080daab0adda9aa/torch-2.11.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4b5866312ee6e52ea625cd211dcb97d6a2cdc1131a5f15cc0d87eec948f6dd34", size = 80606338, upload-time = "2026-03-23T18:11:34.781Z" },
@@ -3878,29 +3840,28 @@ name = "torch"
 version = "2.11.0+cpu"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
-    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "(platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')",
     "platform_machine == 'aarch64' and sys_platform == 'darwin'",
+    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
+    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
+    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine == 'aarch64' and sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
+    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
+    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "fsspec", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "jinja2", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "networkx", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "setuptools", version = "77.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "sympy", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "typing-extensions", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
+    { name = "filelock", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "fsspec", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "jinja2", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "networkx", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "setuptools", version = "77.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "sympy", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "typing-extensions", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-linux_s390x.whl", hash = "sha256:2db3ae5404e32cb42b5fcbd94f13607761eaec0cf1687fde95095289d1e26cfb", upload-time = "2026-04-28T00:06:06Z" },
@@ -3914,26 +3875,26 @@ name = "torch"
 version = "2.11.0+cu130"
 source = { registry = "https://download.pytorch.org/whl/cu130" }
 resolution-markers = [
+    "sys_platform == 'darwin'",
     "sys_platform == 'win32'",
     "sys_platform == 'emscripten'",
-    "sys_platform == 'darwin'",
     "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "cuda-bindings", version = "13.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "filelock", marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "fsspec", marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "jinja2", marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "networkx", marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "sympy", marker = "extra == 'extra-9-modelship-gpu'" },
-    { name = "triton", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-gpu') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "typing-extensions", marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "cuda-bindings", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "filelock", marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "fsspec", marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "jinja2", marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "networkx", marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "sympy", marker = "extra == 'extra-9-modelship-cuda'" },
+    { name = "triton", marker = "(sys_platform == 'linux' and extra == 'extra-9-modelship-cuda') or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "typing-extensions", marker = "extra == 'extra-9-modelship-cuda'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.11.0%2Bcu130-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:252f237d417fac3ba59b1635815c1f035a8241f2af038f2c076ed430932d89f1", upload-time = "2026-04-27T20:01:46Z" },
@@ -3972,12 +3933,12 @@ name = "torchvision"
 version = "0.26.0"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
-    "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 dependencies = [
-    { name = "numpy", marker = "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'" },
-    { name = "pillow", marker = "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'" },
+    { name = "numpy", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
+    { name = "pillow", marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.26.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c409e1c3fdebec7a3834465086dbda8bf7680eff79abf7fd2f10c6b59520a7a4", upload-time = "2026-03-23T15:36:09Z" },
@@ -3988,25 +3949,24 @@ name = "torchvision"
 version = "0.26.0+cpu"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
-    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "(platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')",
     "platform_machine == 'aarch64' and sys_platform == 'darwin'",
+    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
+    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
+    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine == 'aarch64' and sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
+    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
+    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", marker = "platform_machine == 'aarch64' or platform_machine == 's390x' or platform_machine == 'x86_64' or sys_platform != 'darwin'" },
-    { name = "pillow", marker = "platform_machine == 'aarch64' or platform_machine == 's390x' or platform_machine == 'x86_64' or sys_platform != 'darwin'" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'aarch64' or platform_machine == 's390x' or platform_machine == 'x86_64' or sys_platform != 'darwin'" },
+    { name = "numpy", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'darwin') or (platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or sys_platform == 'emscripten' or sys_platform == 'win32'" },
+    { name = "pillow", marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'darwin') or (platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or sys_platform == 'emscripten' or sys_platform == 'win32'" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'darwin') or (platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or sys_platform == 'emscripten' or sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.26.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:17f0b542331fc94230b4214c6d123f038af7330fd81019608c0d2402f3bc3079", upload-time = "2026-03-23T15:36:09Z" },
@@ -4019,9 +3979,9 @@ name = "torchvision"
 version = "0.26.0+cu130"
 source = { registry = "https://download.pytorch.org/whl/cu130" }
 resolution-markers = [
+    "sys_platform == 'darwin'",
     "sys_platform == 'win32'",
     "sys_platform == 'emscripten'",
-    "sys_platform == 'darwin'",
     "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -4040,7 +4000,7 @@ name = "tqdm"
 version = "4.67.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
 wheels = [
@@ -4154,11 +4114,11 @@ wheels = [
 
 [package.optional-dependencies]
 standard = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "httptools" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'cygwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'cygwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "watchfiles" },
     { name = "websockets" },
 ]
@@ -4196,9 +4156,9 @@ name = "vllm"
 version = "0.24.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "sys_platform == 'darwin'",
     "sys_platform == 'win32'",
     "sys_platform == 'emscripten'",
-    "sys_platform == 'darwin'",
     "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -4213,26 +4173,26 @@ dependencies = [
     { name = "depyf" },
     { name = "diskcache" },
     { name = "einops" },
-    { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "fastsafetensors" },
     { name = "filelock" },
     { name = "flashinfer-cubin" },
     { name = "flashinfer-python" },
-    { name = "humming-kernels", extra = ["cu13"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "humming-kernels", extra = ["cu13"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "ijson" },
     { name = "jsonschema" },
     { name = "lark" },
     { name = "llguidance", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 'x86_64'" },
     { name = "lm-format-enforcer" },
     { name = "mcp" },
-    { name = "mistral-common", extra = ["image"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "mistral-common", extra = ["image"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "model-hosting-container-standards" },
     { name = "msgspec" },
     { name = "ninja" },
     { name = "numba" },
     { name = "numpy" },
     { name = "nvidia-cudnn-frontend" },
-    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "openai" },
     { name = "openai-harmony" },
     { name = "opencv-python-headless" },
@@ -4284,7 +4244,7 @@ wheels = [
 [package.optional-dependencies]
 audio = [
     { name = "av" },
-    { name = "mistral-common", extra = ["audio"], marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "mistral-common", extra = ["audio"], marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "scipy" },
     { name = "soundfile" },
     { name = "soxr" },
@@ -4295,21 +4255,20 @@ name = "vllm"
 version = "0.24.0+cpu"
 source = { registry = "https://wheels.vllm.ai/0.24.0/cpu" }
 resolution-markers = [
-    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "(platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "(platform_machine == 's390x' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')",
     "platform_machine == 'aarch64' and sys_platform == 'darwin'",
-    "platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "(platform_machine == 's390x' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
+    "(platform_machine == 's390x' and sys_platform == 'emscripten') or (platform_machine == 'x86_64' and sys_platform == 'emscripten')",
+    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine == 'aarch64' and sys_platform == 'win32'",
+    "platform_machine == 'aarch64' and sys_platform == 'emscripten'",
+    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "(platform_machine == 'ppc64le' and sys_platform == 'win32') or (platform_machine == 'riscv64' and sys_platform == 'win32')",
+    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten') or (platform_machine == 'riscv64' and sys_platform == 'emscripten')",
+    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten'",
+    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "aiohttp" },
@@ -4367,11 +4326,11 @@ dependencies = [
     { name = "starlette" },
     { name = "tiktoken" },
     { name = "tokenizers" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'ppc64le' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "torchaudio", marker = "platform_machine != 'riscv64' and platform_machine != 's390x'" },
-    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'riscv64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'riscv64' and platform_machine != 's390x' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
+    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'riscv64' and platform_machine != 's390x' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'riscv64' and platform_machine != 's390x' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
     { name = "tqdm" },
     { name = "transformers" },
     { name = "typing-extensions" },
@@ -4482,9 +4441,9 @@ dependencies = [
     { name = "apache-tvm-ffi" },
     { name = "numpy" },
     { name = "pydantic" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-gpu') or (platform_machine == 'aarch64' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and extra == 'extra-9-modelship-cpu') or (sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu')" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-gpu'" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'ppc64le' and platform_machine != 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda') or (sys_platform == 'emscripten' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'win32' and extra == 'extra-9-modelship-cpu') or (sys_platform == 'darwin' and extra == 'extra-9-modelship-cpu' and extra == 'extra-9-modelship-cuda')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-9-modelship-cuda'" },
     { name = "transformers" },
     { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "typing-extensions" },

@@ -92,6 +92,19 @@ def main(argv: list[str] | None = None) -> None:
     serve_logging_config = LoggingConfig(log_level=lib_level_name)
 
     connect_ray(lib_level)
+
+    alive_nodes = sum(1 for node in ray.nodes() if node.get("Alive"))
+    total_resources = ray.cluster_resources()
+    available_resources = ray.available_resources()
+    logger.info(
+        "Connected to Ray: %d node(s), %s GPU / %s CPU total (%s GPU / %s CPU schedulable now).",
+        alive_nodes,
+        total_resources.get("GPU", 0),
+        total_resources.get("CPU", 0),
+        available_resources.get("GPU", 0),
+        available_resources.get("CPU", 0),
+    )
+
     start_serve(serve_logging_config)
 
     existing_apps = get_existing_apps()

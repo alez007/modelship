@@ -28,9 +28,9 @@ Ray's object store needs shared memory. Always pass `--shm-size=8g` (or larger f
 
 ## arm64 vs amd64 image selection
 
-Both `ghcr.io/alez007/modelship:latest` and `:latest-cpu` are multi-arch since v0.1.25. Docker picks the right one automatically for your host. If you need to force an arch (e.g. cross-building), use `--platform linux/arm64` or `linux/amd64`.
+`ghcr.io/alez007/modelship:latest` (thin) and `:latest-cpu` are multi-arch (amd64 + arm64). Docker picks the right one automatically for your host. If you need to force an arch (e.g. cross-building), use `--platform linux/arm64` or `linux/amd64`.
 
-Note that the GPU (`latest`) image on arm64 will only be useful on arm64 hosts with NVIDIA GPUs (e.g. Jetson, GH200) — not Apple Silicon. For Apple Silicon, use `latest-cpu`.
+`:latest-cuda` is **amd64-only** — the Dockerfile hard-wires the x86_64 CUDA apt repo and torch's CUDA wheels aren't guaranteed for arm64 at this pin. arm64+CUDA hosts (Jetson, GH200) aren't supported by this image; use `:latest-cpu` there, or build a custom image. Apple Silicon should always use `:latest-cpu` (no CUDA path applies).
 
 ## Port 8000 already in use
 

@@ -71,27 +71,32 @@ If you prefer not to use Dev Containers, you can build and run the dev image dir
 
 ### Building the dev image
 
-**GPU (Standard):**
+**CUDA (GPU):**
 ```bash
-docker build -t modelship_dev --target dev .
+docker build -t modelship_dev_cuda --target dev .
 ```
 
-**CPU (Lightweight):**
+**CPU:**
 ```bash
 docker build -t modelship_dev_cpu --target dev --build-arg MSHIP_VARIANT=cpu .
+```
+
+**Thin (control/coordinator, no torch/vllm):**
+```bash
+docker build -t modelship_dev_thin --target dev --build-arg MSHIP_VARIANT=thin .
 ```
 
 ### Running with live source mounting
 
 The dev image does not bake in source files. Mount the repo root so changes take effect without rebuilding:
 
-**GPU:**
+**CUDA:**
 ```bash
 docker run -it --rm --shm-size=8g --gpus all \
   -e HF_TOKEN=your_token_here \
   --mount type=bind,src=./,dst=/modelship \
   -v ./models-cache:/.cache \
-  -p 8000:8000 modelship_dev
+  -p 8000:8000 modelship_dev_cuda
 ```
 
 **CPU:**
@@ -111,7 +116,7 @@ uv run mship_deploy.py
 
 ## llama-server binary (`llama_server` loader)
 
-The `llama_server` loader launches a `llama-server` subprocess and finds it via `MSHIP_LLAMA_SERVER_BIN`. Inside the Docker images (dev and prod, both variants) this is preconfigured: a pinned llama.cpp build lives at `/opt/llama.cpp`, and the env var points at its wrapper script. The GPU variant ships upstream's CUDA build, which falls back to its bundled CPU backends when no GPU is visible.
+The `llama_server` loader launches a `llama-server` subprocess and finds it via `MSHIP_LLAMA_SERVER_BIN`. Inside the Docker images (dev and prod, cpu/cuda variants) this is preconfigured: a pinned llama.cpp build lives at `/opt/llama.cpp`, and the env var points at its wrapper script. The `cuda` variant ships upstream's CUDA build, which falls back to its bundled CPU backends when no GPU is visible. The `thin` variant ships no binary at all — it never loads a model.
 
 To run outside the image (e.g. directly on a Linux or macOS host), download a build from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) and extract it. The raw `llama-server` binary does **not** run standalone — it dynamically links the `libggml*`/`libllama*` libraries that ship as sibling files in the same archive, so point `MSHIP_LLAMA_SERVER_BIN` at a small wrapper that puts the extracted directory on the loader path:
 
@@ -128,16 +133,34 @@ export MSHIP_LLAMA_SERVER_BIN=/path/to/llama-server.sh
 
 ## Production Builds
 
+Three images are published — a thin control/coordinator image (no torch/vllm) plus two accelerator
+node images:
+
+| Variant | Tag suffix | Target | Platforms |
+|---|---|---|---|
+| Thin (control/coordinator) | *(none)* — default | `prod-thin` | amd64, arm64 |
+| CUDA (GPU node) | `-cuda` | `prod` | amd64 |
+| CPU (CPU node) | `-cpu` | `prod` | amd64, arm64 |
+
+Floating tags (`:latest`, `:latest-cuda`, `:latest-cpu`) are single-node only — Ray refuses to form
+a cluster across mismatched versions, so any multi-node deployment must pin every node to the same
+`:X.Y.Z` (or `-cuda`/`-cpu`) tag.
+
 To build the production images locally:
 
-**GPU:**
+**Thin:**
 ```bash
-docker build -t modelship:latest --target prod .
+docker build -t modelship:dev-thin --target prod-thin --build-arg MSHIP_VARIANT=thin .
+```
+
+**CUDA:**
+```bash
+docker build -t modelship:dev-cuda --target prod .
 ```
 
 **CPU:**
 ```bash
-docker build -t modelship:latest-cpu --target prod --build-arg MSHIP_VARIANT=cpu .
+docker build -t modelship:dev-cpu --target prod --build-arg MSHIP_VARIANT=cpu .
 ```
 
 ## Ports
