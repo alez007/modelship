@@ -12,6 +12,7 @@ from ray import serve
 
 from modelship.infer.base_infer import BaseInfer
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, RawRequestProxy
+from modelship.infer.model_resolver import ModelDownloadError
 from modelship.logging import configure_logging, get_logger
 from modelship.metrics import (
     EMBEDDING_DURATION_SECONDS,
@@ -153,6 +154,12 @@ class ModelDeployment:
         start = time.monotonic()
         self.infer: BaseInfer
         try:
+            # Must run before the loader is constructed: preflight (which
+            # needs the model file on disk) runs synchronously inside a
+            # loader's own __init__, so `_resolved_path` has to be populated
+            # ahead of that, not lazily inside `infer.start()`.
+            await BaseInfer.ensure_downloaded(config)
+
             if config.loader == ModelLoader.vllm:
                 from modelship.infer.vllm.vllm_infer import VllmInfer
 
@@ -176,6 +183,14 @@ class ModelDeployment:
 
             await self.infer.start()
             await self.infer.warmup()
+        except ModelDownloadError as e:
+            # Deliberately NOT reported to the coordinator as fatal (see the
+            # except Exception branch below): a download blip should retry
+            # next pass, not permanently evict an otherwise-good model.
+            MODEL_LOAD_FAILURES_TOTAL.inc(tags={"model": config.name, "loader": config.loader.value})
+            self._graceful_teardown()
+            logger.warning("Download failed for '%s', will retry next pass: %s", config.name, e)
+            raise
         except Exception as e:
             MODEL_LOAD_FAILURES_TOTAL.inc(tags={"model": config.name, "loader": config.loader.value})
             self._graceful_teardown()

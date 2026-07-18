@@ -249,9 +249,9 @@ class LlamaServerInfer(BaseInfer[dict[str, Any]]):
             flag = "--chat-template-file" if os.path.isfile(self.config.chat_template) else "--chat-template"
             args += [flag, self.config.chat_template]
         if self.config.mmproj:
-            # Resolved once on the driver by resolve_all_model_sources (same as
-            # the primary model path, self.model_config._resolved_path) — no
-            # re-resolution here.
+            # Downloaded by BaseInfer.ensure_downloaded (same as the
+            # primary model path, self.model_config._resolved_path) before
+            # this actor's loader was even constructed — no re-resolution here.
             args += ["--mmproj", self.config.mmproj]
         if self.model_config.usecase == ModelUsecase.embed:
             args += ["--embedding"]

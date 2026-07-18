@@ -6,7 +6,7 @@ from pydantic_yaml import parse_yaml_raw_as
 
 from modelship.deploy.actor_options import resolve_plugin_wheel
 from modelship.infer.infer_config import ModelLoader, ModelshipConfig
-from modelship.infer.model_resolver import resolve_model_source
+from modelship.infer.model_resolver import check_model_source
 from modelship.logging import get_logger
 
 logger = get_logger("startup")
@@ -65,11 +65,14 @@ def resolve_all_plugin_wheels(yml_conf: ModelshipConfig) -> dict[str, Path]:
 
 
 def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
-    """Pre-flight: resolve every built-in-loader model to a local path.
+    """Pre-flight: check every built-in-loader model's source, without
+    downloading any weight bytes.
 
-    Populates `_resolved_path` on each config in place. Raises on the first
-    failure (auth, missing repo, missing file, glob-no-match) so the operator
-    sees the error before any Ray actor spins up.
+    Populates `_pinned_source` (and, for llama_server, the mmproj pin) on each
+    config in place; actual download happens per-replica in
+    `BaseInfer.ensure_downloaded`. Raises on the first failure (auth,
+    missing repo, missing file, glob-no-match) so the operator sees it before
+    any Ray actor spins up.
 
     Plugins (`loader=custom`) are skipped — they manage their own download.
 
@@ -82,22 +85,19 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
             continue
         assert cfg.model is not None  # validator guarantees this for built-in loaders
         trust_remote_code = bool(cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)
-        logger.info("Resolving model source for '%s': %s", cfg.name, cfg.model)
-        cfg._resolved_path = resolve_model_source(cfg.model, trust_remote_code=trust_remote_code)
-        logger.info("Resolved '%s' -> %s", cfg.name, cfg._resolved_path)
+        logger.info("Checking model source for '%s': %s", cfg.name, cfg.model)
+        cfg._pinned_source = check_model_source(cfg.model, trust_remote_code=trust_remote_code)
+        logger.info("Checked '%s' (revision=%s)", cfg.name, cfg._pinned_source.revision or "local")
 
         if cfg.loader == ModelLoader.llama_server and cfg.llama_server_config and cfg.llama_server_config.mmproj:
-            logger.info("Resolving mmproj source for '%s': %s", cfg.name, cfg.llama_server_config.mmproj)
-            cfg.llama_server_config.mmproj = resolve_model_source(
+            logger.info("Checking mmproj source for '%s': %s", cfg.name, cfg.llama_server_config.mmproj)
+            cfg.llama_server_config._pinned_mmproj = check_model_source(
                 cfg.llama_server_config.mmproj, trust_remote_code=trust_remote_code
             )
-            logger.info("Resolved mmproj -> %s", cfg.llama_server_config.mmproj)
 
-        # GGUF is not supported on the vllm loader: vLLM 0.24 moved GGUF out of
-        # tree, and the only external plugin is incompatible with 0.24's
-        # quantization API. Reject early with a pointer to llama_server instead
-        # of letting vLLM misparse the .gguf as a config.json deep in engine init.
-        if cfg.loader == ModelLoader.vllm and cfg._resolved_path.lower().endswith(".gguf"):
+        # GGUF is not supported on the vllm loader (vLLM 0.24 dropped in-tree
+        # GGUF). Reject early using the listed filename, before any download.
+        if cfg.loader == ModelLoader.vllm and cfg._pinned_source.resolves_to_gguf:
             raise ValueError(
                 f"Model '{cfg.name}' resolves to a GGUF file, which the vllm loader does not support "
                 f"(vLLM 0.24 dropped in-tree GGUF). Use `loader: llama_server` for GGUF models, or point "

@@ -16,6 +16,16 @@ def test_build_cache_env_vars_defaults():
         assert env_vars["FLASHINFER_CACHE_DIR"] == "/.cache/flashinfer"
         assert env_vars["TRITON_CACHE_DIR"] == "/.cache/triton"
         assert env_vars["VLLM_CONFIG_ROOT"] == "/.cache/vllm-config"
+        assert "HF_TOKEN" not in env_vars
+        assert "HF_HUB_OFFLINE" not in env_vars
+
+
+def test_build_cache_env_vars_forwards_hf_token_and_offline():
+    # Needed actor-side so a replica can auth/skip-network the same as the driver.
+    with mock.patch.dict(os.environ, {"HF_TOKEN": "hf_secret", "HF_HUB_OFFLINE": "1"}, clear=True):
+        env_vars = build_cache_env_vars()
+        assert env_vars["HF_TOKEN"] == "hf_secret"
+        assert env_vars["HF_HUB_OFFLINE"] == "1"
 
 
 def test_build_cache_env_vars_custom_dir():

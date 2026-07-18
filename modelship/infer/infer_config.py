@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from ray.exceptions import RayActorError
 from starlette.datastructures import Headers, State
 
+from modelship.infer.model_resolver import PinnedSource
 from modelship.logging import get_logger
 
 _logger = get_logger("config")
@@ -123,6 +124,9 @@ class LlamaServerConfig(BaseModel):
     chat_template: str | None = None
     # Path to the multimodal projector file (e.g. clip-model-f16.gguf)
     mmproj: str | None = None
+    # Checked by `resolve_all_model_sources`, downloaded by
+    # `BaseInfer.ensure_downloaded`, which overwrites `mmproj` above.
+    _pinned_mmproj: PinnedSource | None = PrivateAttr(default=None)
     # Min chunk size for fuzzy KV-cache reuse via position-shifting
     # (--cache-reuse). 0 (llama-server's default) means exact-prefix reuse
     # only; raising it also reuses cached chunks after a mid-prompt
@@ -240,6 +244,9 @@ class ModelshipModelConfig(BaseModel):
     # something if the model's template branches on the key.
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
+    # Checked by `resolve_all_model_sources`, downloaded into
+    # `_resolved_path` by `BaseInfer.ensure_downloaded`.
+    _pinned_source: PinnedSource | None = PrivateAttr(default=None)
     _resolved_path: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="before")

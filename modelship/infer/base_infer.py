@@ -9,6 +9,7 @@ from ray.exceptions import RayActorError
 
 from modelship.infer import infer_config
 from modelship.infer.infer_config import ModelshipModelConfig, RawRequestProxy
+from modelship.infer.model_resolver import ModelDownloadError, download_model_source
 from modelship.logging import get_logger
 from modelship.openai.protocol import (
     ChatCompletionRequest,
@@ -90,6 +91,39 @@ class BaseInfer[Prepared](ABC):
     def _set_max_context_length(self, length: int | None) -> None:
         self.max_context_length = length
         logger.info("max_context_length for %s: %s", self.model_config.name, self.max_context_length)
+
+    @staticmethod
+    async def ensure_downloaded(model_config: ModelshipModelConfig) -> None:
+        """Actor-side hook: download (or confirm already-cached) this
+        deployment's model weights, then stamp the final path(s) onto
+        `model_config`. Called before the loader is constructed, since
+        preflight needs the file on disk during the loader's own `__init__`.
+
+        Runs the download in a thread to avoid blocking the event loop.
+        Failures are wrapped in `ModelDownloadError` so they classify
+        as transient (retried next pass), not fatal. Idempotent once
+        `_resolved_path` is set."""
+        loop = asyncio.get_running_loop()
+
+        if model_config._pinned_source is not None and model_config._resolved_path is None:
+            try:
+                model_config._resolved_path = await loop.run_in_executor(
+                    None, download_model_source, model_config._pinned_source
+                )
+            except Exception as e:
+                raise ModelDownloadError(f"Failed to download model for '{model_config.name}': {e}") from e
+            logger.info("Downloaded '%s' -> %s", model_config.name, model_config._resolved_path)
+
+        llama_cfg = model_config.llama_server_config
+        if llama_cfg is not None and llama_cfg._pinned_mmproj is not None:
+            # Overwrites the public `mmproj` field with the final path.
+            # Clearing the pin makes a second call a no-op.
+            try:
+                llama_cfg.mmproj = await loop.run_in_executor(None, download_model_source, llama_cfg._pinned_mmproj)
+            except Exception as e:
+                raise ModelDownloadError(f"Failed to download mmproj for '{model_config.name}': {e}") from e
+            llama_cfg._pinned_mmproj = None
+            logger.info("Downloaded mmproj for '%s' -> %s", model_config.name, llama_cfg.mmproj)
 
     async def run_cancellable(self, work: Coroutine[Any, Any, T], raw_request: RawRequestProxy) -> T:
         """Run `work` to completion, or cancel it and raise `ClientDisconnectedError`
