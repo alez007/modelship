@@ -33,18 +33,19 @@ def parse_model_ref(model: str) -> ResolvedSource:
 
     Path-first: if the literal full string is an existing local path, treat it
     as one (covers the rare colon-in-filename case). Otherwise split on the
-    first ':' — the part before is the source (HF repo or local dir), the part
-    after is the selector for picking a file inside it.
-    """
+    first ':' — the part before is the source, the part after is the selector.
+
+    A pathy source (starts with /, ./, or ~) is always local regardless of
+    whether it exists, so a missing path fails clearly downstream instead of
+    being misread as an HF repo id."""
     if _is_pathy(model) and Path(model).exists():
         return ResolvedSource(source=model, selector=None, is_local=True)
 
     if ":" in model:
         source, selector = model.split(":", 1)
-        is_local = _is_pathy(source) and Path(source).exists()
-        return ResolvedSource(source=source, selector=selector, is_local=is_local)
+        return ResolvedSource(source=source, selector=selector, is_local=_is_pathy(source))
 
-    return ResolvedSource(source=model, selector=None, is_local=False)
+    return ResolvedSource(source=model, selector=None, is_local=_is_pathy(model))
 
 
 def _select_patterns(repo_files: list[str], trust_remote_code: bool = False) -> list[str] | None:
