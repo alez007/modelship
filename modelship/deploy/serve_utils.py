@@ -19,6 +19,9 @@ from modelship.utils import rand_suffix
 
 logger = get_logger("startup")
 _DEFAULT_OPENAI_API_PORT = 8000
+# Not 6379 (ray-start-head's default) — that collides with the docs-recommended
+# same-host Redis state store (MSHIP_STATE_STORE=redis://) under --network=host.
+_DEFAULT_RAY_GCS_PORT = 6380
 
 # Ray names each head's session dir `session_<timestamp>_<pid>` under its temp
 # root and never cleans them up; the trailing group captures the owning pid.
@@ -173,6 +176,13 @@ def connect_ray(lib_level: int) -> None:
         # start_ray.sh used to do). mship_deploy stays alive as the operator and
         # tears it down on exit (owns_cluster in mship_deploy).
         os.environ.setdefault("RAY_USAGE_STATS_ENABLED", "0")
+        # RAY_GCS_SERVER_PORT is the only hook ray.init() exposes for this — it's not a
+        # kwarg. Left unset, Ray picks a random GCS port every head start, which breaks a
+        # joiner's --address across restarts — so pin a stable default here rather than
+        # requiring every operator to pass --ray-port (setdefault: an operator's explicit
+        # RAY_GCS_SERVER_PORT always wins over both).
+        ray_port = os.environ.get("MSHIP_RAY_PORT", str(_DEFAULT_RAY_GCS_PORT))
+        os.environ.setdefault("RAY_GCS_SERVER_PORT", ray_port)
         if os.environ.get("MSHIP_RAY_AUTH", "none").lower() == "token":
             if not _ray_auth_is_safe():
                 raise RuntimeError(

@@ -59,6 +59,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ray-port",
+        type=int,
+        help=(
+            "Port for Ray's GCS server, applied only when modelship starts its own head "
+            "(env: MSHIP_RAY_PORT, default: 6380). Change this if 6380 is already taken on "
+            "the host — e.g. avoid 6379, which the docs-recommended same-host Redis state "
+            "store (MSHIP_STATE_STORE=redis://) may also want under --network=host."
+        ),
+    )
+    parser.add_argument(
         "--node-num-cpus", type=int, help="CPUs this node reserves (env: MSHIP_NODE_NUM_CPUS, default: auto-detect)"
     )
     parser.add_argument(
@@ -162,6 +172,8 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_USE_EXISTING_RAY_CLUSTER"] = "true"
     if args.ray_auth is not None:
         os.environ["MSHIP_RAY_AUTH"] = args.ray_auth
+    if args.ray_port is not None:
+        os.environ["MSHIP_RAY_PORT"] = str(args.ray_port)
     if args.node_num_cpus is not None:
         os.environ["MSHIP_NODE_NUM_CPUS"] = str(args.node_num_cpus)
     if args.node_num_gpus is not None:

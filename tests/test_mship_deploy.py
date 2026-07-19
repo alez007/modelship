@@ -58,6 +58,12 @@ class TestParseArgs:
     def test_ray_auth_defaults_to_none(self):
         assert parse_args([]).ray_auth is None
 
+    def test_ray_port(self):
+        assert parse_args(["--ray-port", "6380"]).ray_port == 6380
+
+    def test_ray_port_defaults_to_none(self):
+        assert parse_args([]).ray_port is None
+
     def test_node_num_cpus(self):
         assert parse_args(["--node-num-cpus", "4"]).node_num_cpus == 4
 
@@ -129,6 +135,16 @@ class TestApplyArgsToEnv:
         monkeypatch.delenv("MSHIP_RAY_AUTH", raising=False)
         apply_args_to_env(parse_args([]))
         assert "MSHIP_RAY_AUTH" not in os.environ
+
+    def test_ray_port_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RAY_PORT", raising=False)
+        apply_args_to_env(parse_args(["--ray-port", "6380"]))
+        assert os.environ["MSHIP_RAY_PORT"] == "6380"
+
+    def test_ray_port_absent_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RAY_PORT", raising=False)
+        apply_args_to_env(parse_args([]))
+        assert "MSHIP_RAY_PORT" not in os.environ
 
     def test_node_num_cpus_sets_env(self, monkeypatch):
         monkeypatch.delenv("MSHIP_NODE_NUM_CPUS", raising=False)
@@ -684,6 +700,67 @@ class TestConnectRay:
             with pytest.raises(RuntimeError, match="MSHIP_RAY_AUTH=token"):
                 serve_utils.connect_ray(20)
         mock_init.assert_not_called()
+
+    def test_own_cluster_ray_port_sets_gcs_server_port(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_PORT": "6390"}, clear=False),
+            patch.object(serve_utils.ray, "init"),
+            patch.object(serve_utils, "prune_ray_sessions"),
+            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+        ):
+            os.environ.pop("RAY_GCS_SERVER_PORT", None)
+            serve_utils.connect_ray(20)
+            assert os.environ.get("RAY_GCS_SERVER_PORT") == "6390"
+
+    def test_own_cluster_ray_port_absent_defaults_gcs_server_port_to_6380(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, clear=False),
+            patch.object(serve_utils.ray, "init"),
+            patch.object(serve_utils, "prune_ray_sessions"),
+            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+        ):
+            os.environ.pop("MSHIP_RAY_PORT", None)
+            os.environ.pop("RAY_GCS_SERVER_PORT", None)
+            serve_utils.connect_ray(20)
+            # Not Ray's own 6379 default — that collides with the recommended
+            # same-host Redis state store under --network=host.
+            assert os.environ.get("RAY_GCS_SERVER_PORT") == "6380"
+
+    def test_own_cluster_ray_port_respects_explicit_gcs_server_port(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MSHIP_USE_EXISTING_RAY_CLUSTER": "false",
+                    "MSHIP_RAY_PORT": "6380",
+                    "RAY_GCS_SERVER_PORT": "6381",
+                },
+                clear=False,
+            ),
+            patch.object(serve_utils.ray, "init"),
+            patch.object(serve_utils, "prune_ray_sessions"),
+            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+        ):
+            serve_utils.connect_ray(20)
+            # setdefault: an operator's explicit RAY_GCS_SERVER_PORT always wins.
+            assert os.environ["RAY_GCS_SERVER_PORT"] == "6381"
+
+    def test_existing_cluster_never_sets_gcs_server_port(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true", "MSHIP_RAY_PORT": "6380"}, clear=False),
+            patch.object(serve_utils.ray, "init"),
+        ):
+            os.environ.pop("RAY_GCS_SERVER_PORT", None)
+            serve_utils.connect_ray(20)
+            assert "RAY_GCS_SERVER_PORT" not in os.environ
 
     def test_existing_cluster_never_sets_auth_mode(self):
         _, auth_mode = self._init_call(
