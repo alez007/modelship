@@ -2,7 +2,7 @@ import fnmatch
 from pathlib import Path
 from typing import NamedTuple
 
-from huggingface_hub import hf_hub_download, list_repo_files, repo_info, snapshot_download
+from huggingface_hub import hf_hub_download, model_info, snapshot_download
 
 from modelship.logging import get_logger
 
@@ -117,9 +117,9 @@ def check_model_source(model_ref: str, trust_remote_code: bool = False) -> Pinne
     """Driver-side: validate model_ref without fetching any weight bytes.
 
     - Local path: fully resolved here (existence + selector match).
-    - HF repo: listed via `list_repo_files` (surfaces auth/missing-repo/
-      selector-no-match) and pinned to its current commit SHA, so every node
-      downloads the same revision later.
+    - HF repo: `repo_info` gives both the file listing (siblings, surfacing
+      auth/missing-repo/selector-no-match) and the current commit SHA in one
+      call, so every node downloads the same pinned revision later.
     """
     source, selector, is_local = parse_model_ref(model_ref)
 
@@ -160,14 +160,15 @@ def check_model_source(model_ref: str, trust_remote_code: bool = False) -> Pinne
 
     # HF Resolve
     try:
-        repo_files = list_repo_files(source)
+        info = model_info(source)
     except Exception as e:
-        raise RuntimeError(f"Failed to list files for HF repo {source!r}: {e}") from e
+        raise RuntimeError(f"Failed to fetch info for HF repo {source!r}: {e}") from e
 
-    try:
-        revision = repo_info(source).sha
-    except Exception as e:
-        raise RuntimeError(f"Failed to resolve commit revision for HF repo {source!r}: {e}") from e
+    if info.siblings is None:
+        raise RuntimeError(f"HF repo {source!r} returned no file listing")
+
+    repo_files = [s.rfilename for s in info.siblings]
+    revision = info.sha
 
     if selector:
         matches = sorted(fnmatch.filter(repo_files, selector))
