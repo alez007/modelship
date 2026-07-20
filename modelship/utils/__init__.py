@@ -7,11 +7,6 @@ from typing import Any
 
 import requests
 
-# Re-exported from a ray-free leaf module so importing modelship.utils (hence
-# modelship.utils.cli) never pulls in `import ray` — mship_deploy needs to parse
-# argv and set Ray's auth env vars before its own `import ray`. base_request_id
-# is a pure re-export (alias form marks that for the linter); random_uuid is also
-# used by download() below.
 from modelship.utils.request_id import base_request_id as base_request_id
 from modelship.utils.request_id import random_uuid
 

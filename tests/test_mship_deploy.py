@@ -645,8 +645,8 @@ class TestResolvePluginWheel:
 
 class TestConnectRay:
     def _init_call(self, env, pop=()):
-        """Returns (ray.init kwargs, RAY_AUTH_MODE seen in os.environ), captured
-        before patch.dict reverts it. `pop` clears env vars before the call."""
+        """Returns the kwargs connect_ray passed to ray.init(). `pop` clears
+        env vars before the call."""
         from modelship.deploy import serve_utils
 
         with patch.dict(os.environ, env, clear=False):
@@ -656,24 +656,20 @@ class TestConnectRay:
                 patch.object(serve_utils.ray, "init") as mock_init,
                 # Don't let the own-cluster branch sweep the real /tmp/ray during tests.
                 patch.object(serve_utils, "prune_ray_sessions"),
-                # _ray_auth_is_safe has its own dedicated tests; decouple these from
-                # the real filesystem's /tmp/ray and ~/.ray state.
-                patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
             ):
                 serve_utils.connect_ray(20)
-                auth_mode = os.environ.get("RAY_AUTH_MODE")
         _, kwargs = mock_init.call_args
-        return kwargs, auth_mode
+        return kwargs
 
     def test_existing_cluster_connects_via_auto(self):
-        kwargs, _ = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})
         assert kwargs["address"] == "auto"
         # No head is started: resource/metrics kwargs must be absent.
         assert "_metrics_export_port" not in kwargs
         assert "num_cpus" not in kwargs
 
     def test_own_cluster_starts_head_with_metrics_port(self):
-        kwargs, _ = self._init_call(
+        kwargs = self._init_call(
             {
                 "MSHIP_USE_EXISTING_RAY_CLUSTER": "false",
                 "MSHIP_METRICS": "true",
@@ -687,64 +683,25 @@ class TestConnectRay:
         assert kwargs["_metrics_export_port"] == 8079
 
     def test_own_cluster_dashboard_always_on_bound_localhost(self):
-        kwargs, _ = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_RAY_DASHBOARD",))
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_RAY_DASHBOARD",))
         assert kwargs["include_dashboard"] is True
         assert kwargs["dashboard_host"] == "127.0.0.1"
 
     def test_own_cluster_dashboard_host_overridable(self):
-        kwargs, _ = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_DASHBOARD": "0.0.0.0"})
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_DASHBOARD": "0.0.0.0"})
         # Still on — MSHIP_RAY_DASHBOARD only ever changes the bind host now, never on/off.
         assert kwargs["include_dashboard"] is True
         assert kwargs["dashboard_host"] == "0.0.0.0"
 
     def test_existing_cluster_never_sets_dashboard_kwargs(self):
-        kwargs, _ = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})
         assert "include_dashboard" not in kwargs
         assert "dashboard_host" not in kwargs
 
     def test_own_cluster_omits_metrics_port_when_disabled(self):
-        kwargs, _ = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_METRICS": "false"})
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_METRICS": "false"})
         assert "address" not in kwargs
         assert "_metrics_export_port" not in kwargs
-
-    def test_own_cluster_auth_disabled_by_default(self):
-        _, auth_mode = self._init_call(
-            {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_RAY_AUTH", "RAY_AUTH_MODE")
-        )
-        assert auth_mode is None
-
-    def test_own_cluster_auth_explicit_none(self):
-        _, auth_mode = self._init_call(
-            {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "none"}, pop=("RAY_AUTH_MODE",)
-        )
-        assert auth_mode is None
-
-    def test_own_cluster_auth_opt_in(self):
-        _, auth_mode = self._init_call(
-            {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "token"}, pop=("RAY_AUTH_MODE",)
-        )
-        assert auth_mode == "token"
-
-    def test_own_cluster_auth_respects_explicit_ray_auth_mode(self):
-        _, auth_mode = self._init_call(
-            {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "token", "RAY_AUTH_MODE": "disabled"}
-        )
-        # setdefault: an operator's explicit RAY_AUTH_MODE always wins, even when opting into token mode.
-        assert auth_mode == "disabled"
-
-    def test_own_cluster_auth_opt_in_bails_when_unsafe(self):
-        from modelship.deploy import serve_utils
-
-        with (
-            patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "token"}, clear=False),
-            patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils.ray, "init") as mock_init,
-            patch.object(serve_utils, "ray_auth_is_safe", return_value=False),
-        ):
-            os.environ.pop("RAY_AUTH_MODE", None)
-            with pytest.raises(RuntimeError, match="MSHIP_RAY_AUTH=token"):
-                serve_utils.connect_ray(20)
-        mock_init.assert_not_called()
 
     def test_own_cluster_ray_port_sets_gcs_server_port(self):
         from modelship.deploy import serve_utils
@@ -753,7 +710,6 @@ class TestConnectRay:
             patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_PORT": "6390"}, clear=False),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             os.environ.pop("RAY_GCS_SERVER_PORT", None)
             serve_utils.connect_ray(20)
@@ -766,7 +722,6 @@ class TestConnectRay:
             patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, clear=False),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             os.environ.pop("MSHIP_RAY_PORT", None)
             os.environ.pop("RAY_GCS_SERVER_PORT", None)
@@ -790,7 +745,6 @@ class TestConnectRay:
             ),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             serve_utils.connect_ray(20)
             # setdefault: an operator's explicit RAY_GCS_SERVER_PORT always wins.
@@ -806,12 +760,6 @@ class TestConnectRay:
             os.environ.pop("RAY_GCS_SERVER_PORT", None)
             serve_utils.connect_ray(20)
             assert "RAY_GCS_SERVER_PORT" not in os.environ
-
-    def test_existing_cluster_never_sets_auth_mode(self):
-        _, auth_mode = self._init_call(
-            {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"}, pop=("MSHIP_RAY_AUTH", "RAY_AUTH_MODE")
-        )
-        assert auth_mode is None
 
     def test_prunes_stale_sessions_on_own_cluster(self):
         from modelship.deploy import serve_utils
@@ -1051,64 +999,12 @@ class TestSuperviseJoinNode:
         node.kill_all_processes.assert_not_called()
 
 
-class TestRayAuthIsSafe:
-    """ray_auth_is_safe lives in the ray-free modelship.utils.ray_auth leaf
-    module (so it can run before `import ray`); connect_ray imports it. The
-    marker path mirrors Ray's get_ray_temp_dir() == <RAY_TMPDIR>/ray."""
-
-    def test_true_when_token_already_exists(self, tmp_path):
-        from modelship.utils import ray_auth
-
-        home = tmp_path / "home"
-        (home / ".ray").mkdir(parents=True)
-        (home / ".ray" / "auth_token").write_text("abc")
-        with (
-            patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(ray_auth.Path, "home", return_value=home),
-        ):
-            assert ray_auth.ray_auth_is_safe() is True
-
-    def test_true_when_no_cluster_running(self, tmp_path):
-        from modelship.utils import ray_auth
-
-        home = tmp_path / "home"
-        home.mkdir()
-        with (
-            patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(ray_auth.Path, "home", return_value=home),
-        ):
-            assert ray_auth.ray_auth_is_safe() is True
-
-    def test_false_when_attaching_to_cluster_with_no_token(self, tmp_path):
-        from modelship.utils import ray_auth
-
-        home = tmp_path / "home"
-        home.mkdir()
-        ray_root = tmp_path / "ray"
-        ray_root.mkdir()
-        (ray_root / "ray_current_cluster").write_text("127.0.0.1:6379")
-        with (
-            patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(ray_auth.Path, "home", return_value=home),
-        ):
-            assert ray_auth.ray_auth_is_safe() is False
-
-    def test_false_on_no_passwd_entry(self, tmp_path):
-        from modelship.utils import ray_auth
-
-        with (
-            patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(ray_auth.Path, "home", side_effect=RuntimeError),
-        ):
-            assert ray_auth.ray_auth_is_safe() is False
-
-
 class TestResolveRayAuthEnv:
     """resolve_ray_auth_env front-runs Ray's import-time RAY_AUTH_MODE latch:
     it translates the MSHIP_* auth/join vars into RAY_AUTH_MODE/RAY_AUTH_TOKEN
     before mship_deploy imports ray. Runs with a clean auth env each time."""
 
-    def _resolve(self, env, safe=True):
+    def _resolve(self, env):
         from modelship.utils import ray_auth
 
         base = dict.fromkeys(
@@ -1120,18 +1016,12 @@ class TestResolveRayAuthEnv:
                     os.environ.pop(key, None)
             os.environ.pop("RAY_AUTH_MODE", None)
             os.environ.pop("RAY_AUTH_TOKEN", None)
-            with patch.object(ray_auth, "ray_auth_is_safe", return_value=safe):
-                ray_auth.resolve_ray_auth_env()
+            ray_auth.resolve_ray_auth_env()
             return os.environ.get("RAY_AUTH_MODE"), os.environ.get("RAY_AUTH_TOKEN")
 
-    def test_own_head_token_safe_sets_mode(self):
-        mode, _ = self._resolve({"MSHIP_RAY_AUTH": "token"}, safe=True)
+    def test_own_head_token_sets_mode(self):
+        mode, _ = self._resolve({"MSHIP_RAY_AUTH": "token"})
         assert mode == "token"
-
-    def test_own_head_token_unsafe_leaves_mode_unset(self):
-        # Deferred to connect_ray's own re-check, which raises the clear error.
-        mode, _ = self._resolve({"MSHIP_RAY_AUTH": "token"}, safe=False)
-        assert mode is None
 
     def test_join_with_token_sets_mode_and_token(self):
         mode, token = self._resolve({"MSHIP_ADDRESS": "head:6380", "MSHIP_RAY_AUTH_TOKEN": "secret"})
@@ -1153,8 +1043,7 @@ class TestResolveRayAuthEnv:
         with patch.dict(os.environ, {"MSHIP_RAY_AUTH": "token", "RAY_AUTH_MODE": "disabled"}, clear=False):
             os.environ.pop("MSHIP_ADDRESS", None)
             os.environ.pop("MSHIP_USE_EXISTING_RAY_CLUSTER", None)
-            with patch.object(ray_auth, "ray_auth_is_safe", return_value=True):
-                ray_auth.resolve_ray_auth_env()
+            ray_auth.resolve_ray_auth_env()
             # setdefault: an operator's explicit RAY_AUTH_MODE always wins.
             assert os.environ["RAY_AUTH_MODE"] == "disabled"
 

@@ -22,7 +22,6 @@ from modelship.infer.infer_config import ModelshipConfig
 from modelship.logging import get_logger
 from modelship.openai.api import ModelshipAPI
 from modelship.utils import rand_suffix
-from modelship.utils.ray_auth import ray_auth_is_safe
 
 if TYPE_CHECKING:
     from ray._private.node import Node
@@ -298,10 +297,7 @@ def connect_ray(lib_level: int) -> None:
     elif join_address:
         # Join an existing cluster as an additional node: create this container's
         # own node in-process (Node(head=False)), then attach the driver to it.
-        # No ray_auth_is_safe() guard here — that guard exists for the own-head
-        # case where a bare ray.init() might silently attach to a running local
-        # cluster with no token. Here the local node is freshly created below, so
-        # a bad/missing token surfaces as an auth error from the join itself.
+        # A bad/missing token surfaces as an auth error from the join itself.
         # RAY_AUTH_MODE/RAY_AUTH_TOKEN are already resolved upfront (before
         # `import ray`, see resolve_ray_auth_env) — setting them now would be too
         # late for this process's latched auth singleton anyway.
@@ -324,15 +320,10 @@ def connect_ray(lib_level: int) -> None:
         # RAY_GCS_SERVER_PORT always wins over both).
         ray_port = os.environ.get("MSHIP_RAY_PORT", str(_DEFAULT_RAY_GCS_PORT))
         os.environ.setdefault("RAY_GCS_SERVER_PORT", ray_port)
-        if os.environ.get("MSHIP_RAY_AUTH", "none").lower() == "token":
-            if not ray_auth_is_safe():
-                raise RuntimeError(
-                    "MSHIP_RAY_AUTH=token requested, but a local Ray cluster with no auth "
-                    "token is already running — attaching to it would start unauthenticated "
-                    "instead of failing loudly. Stop that cluster first, or unset "
-                    "MSHIP_RAY_AUTH/--ray-auth to attach to it without a token."
-                )
-            os.environ.setdefault("RAY_AUTH_MODE", "token")
+        # RAY_AUTH_MODE/RAY_AUTH_TOKEN are already resolved upfront (before
+        # `import ray`, see resolve_ray_auth_env). A no-auth cluster already
+        # running here surfaces as Ray's own AuthenticationError on ray.init()
+        # below — no local guard needed.
         # Reclaim disk from prior runs' leftover session dirs before this run's
         # session is created. Skipped on the existing-cluster branch (KubeRay /
         # an operator we don't own manages its own temp root).
