@@ -852,11 +852,14 @@ class TestJoinRayCluster:
         kw = self._join({"MSHIP_NODE_NUM_GPUS": "0"})["params_kwargs"]
         assert kw["num_gpus"] == 0
 
-    def test_metrics_export_port_set(self):
+    def test_metrics_export_port_always_none(self):
+        # A joining node never pins its metrics port, even if RAY_METRICS_EXPORT_PORT is set
+        # (e.g. inherited from a shared .env with the head) — only the head's port needs to
+        # be fixed/predictable; forcing the same fixed value onto a join node sharing the
+        # head's network namespace (Docker --network=host) would just collide with it.
         kw = self._join({"MSHIP_METRICS": "true", "RAY_METRICS_EXPORT_PORT": "9999"})["params_kwargs"]
-        assert kw["metrics_export_port"] == 9999
+        assert kw["metrics_export_port"] is None
 
-    def test_metrics_export_port_none_when_disabled(self):
         kw = self._join({"MSHIP_METRICS": "false"})["params_kwargs"]
         assert kw["metrics_export_port"] is None
 

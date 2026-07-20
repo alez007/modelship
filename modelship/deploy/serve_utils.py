@@ -204,17 +204,17 @@ def _join_ray_cluster(address: str) -> Node:
 
     cpus = os.environ.get("MSHIP_NODE_NUM_CPUS")
     gpus = os.environ.get("MSHIP_NODE_NUM_GPUS")
-    metrics_port = (
-        int(os.environ.get("RAY_METRICS_EXPORT_PORT", "8079"))
-        if os.environ.get("MSHIP_METRICS", "true").lower() == "true"
-        else None
-    )
+    # Unlike the head, a joining node never needs a fixed metrics port: nothing external
+    # targets it directly, and the head's PrometheusServiceDiscoveryWriter already picks up
+    # whatever port Ray actually binds (via GCS) every few seconds. Leaving this None lets
+    # Ray assign an ephemeral port, which also avoids colliding with the head's own fixed
+    # port when both share a host network namespace (e.g. Docker --network=host).
     ray_params = RayParams(
         gcs_address=bootstrap,
         node_ip_address=services.get_node_ip_address(bootstrap),
         num_cpus=int(cpus) if cpus else None,
         num_gpus=int(gpus) if gpus else None,
-        metrics_export_port=metrics_port,
+        metrics_export_port=None,
     )
 
     # Fail early and clearly if auth is on but no token is available locally,
