@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> None:
     from ray.serve.schema import LoggingConfig
 
     from modelship.deploy.config import (
+        default_config_path,
         load_raw_models,
         resolve_all_model_sources,
         resolve_all_plugin_wheels,
@@ -192,16 +193,28 @@ def main(argv: list[str] | None = None) -> None:
     # the true model set after the cluster is recreated empty). A config-less join
     # is the same self-heal merge: the joiner contributes no new model input, but
     # deploy always reconciles live -> effective, so pending models get deployed now
-    # that this node's resources arrived. Any other mode, or an explicit --config,
-    # loads the user input and folds it into effective per the merge verb
-    # (additive=union, reconcile=replace) — an explicit --config on a joiner keeps
-    # today's additive/reconcile semantics unchanged.
+    # that this node's resources arrived. An own-head bootstrap with no --config and
+    # no default config/models.yaml present (e.g. a bare `docker run modelship:thin`)
+    # is the same no-op merge: nothing to contribute yet, so the coordinator comes up
+    # empty and waits (see the fresh_install/owns_cluster signal.pause() below) until
+    # a later --reconcile/--config redeploy or a join brings in models. An explicit
+    # --config still loads and folds the user input per the merge verb
+    # (additive=union, reconcile=replace) — on a joiner this keeps today's semantics
+    # unchanged, and an explicit --config that doesn't exist is still a hard error
+    # (load_raw_models -> resolve_config_path raises), not silently treated as absent.
+    config_absent = args.config is None and not default_config_path().exists()
     if args.config is None and (mode == "reconcile" or joined_cluster):
         desired_raw = effective_raw
         logger.info(
             "Self-heal: reconciling to persisted effective config (no --config given)."
             if not joined_cluster
             else "Join: no config given — contributing resources, reconciling to effective set."
+        )
+    elif config_absent:
+        desired_raw = effective_raw
+        logger.info(
+            "No --config given and no default config/models.yaml found — bootstrapping an empty "
+            "coordinator; it will wait for capacity/models via a later --config, --reconcile, or join."
         )
     else:
         input_raw = load_raw_models(args.config)

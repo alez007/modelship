@@ -36,7 +36,7 @@ When running tests on your own initiative, skip the slow integration suite: `uv 
 
 `mship_deploy.py` is the entry point (not a console script, not `python -m`). It:
 
-1. Reads `config/models.yaml` (gitignored — copy from `config/examples/`; `mship_deploy.py` errors out pointing there if missing).
+1. Reads `config/models.yaml` (gitignored — copy from `config/examples/`). An explicit `--config <path>` that doesn't exist is still a hard error. Absent both `--config` and the default file, `mship_deploy.py` no longer errors — it bootstraps an empty coordinator (gateway up, no models) that waits for a later `--config`/`--reconcile` redeploy or a joining node to bring capacity; this is the mode a bare `docker run modelship:thin` with no mounted config exercises.
 2. Starts its **own** Ray head by default and tears it down on exit. With `--use-existing-ray-cluster` it instead connects to a cluster you manage via `ray.init(address="auto")` and deploys-and-exits without teardown — the driver must run **on** a cluster node (it can't attach from off-cluster; k8s does this via a KubeRay RayJob).
 3. Deploys models **additively** by default (each gets a random suffix like `qwen-a3f9k`). Use `--reconcile` to instead make the cluster match the config exactly (add/remove/replace) — it never tears the cluster down.
 4. Starts a FastAPI Ray Serve app named `modelship api` on port 8000. Override via `--gateway-name` (multiple gateways can coexist on one cluster).

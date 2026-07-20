@@ -12,6 +12,12 @@ from modelship.logging import get_logger
 logger = get_logger("startup")
 
 
+def default_config_path(config_dir: Path | None = None) -> Path:
+    """The default config/models.yaml path used absent an explicit --config."""
+    config_dir = config_dir or Path(__file__).resolve().parent.parent.parent / "config"
+    return config_dir / "models.yaml"
+
+
 def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) -> str:
     """Resolve the models.yaml to deploy.
 
@@ -19,14 +25,12 @@ def resolve_config_path(arg_path: str | None, config_dir: Path | None = None) ->
     1. An explicit ``--config`` path always wins (most specific signal); it must exist.
     2. Otherwise the default ``config/models.yaml`` must exist.
     """
-    config_dir = config_dir or Path(__file__).resolve().parent.parent.parent / "config"
-
     if arg_path:
         if not os.path.exists(arg_path):
             raise FileNotFoundError(f"--config {arg_path} not found.")
         return arg_path
 
-    default = config_dir / "models.yaml"
+    default = default_config_path(config_dir)
     if default.exists():
         return str(default)
 
