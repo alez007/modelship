@@ -268,8 +268,7 @@ ADD --chown=$UID:$GID ./scripts scripts
 
 USER root
 
-ENTRYPOINT ["/modelship/scripts/entrypoint.sh"]
-CMD ["uv", "run", "--no-sync", "mship_deploy.py"]
+ENTRYPOINT ["/modelship/scripts/entrypoint.sh", "--serve"]
 
 # thin variant: pin capacity to 0 so it never advertises resources it can't
 # serve (no torch/vllm). Layered on top since a shared stage can't
