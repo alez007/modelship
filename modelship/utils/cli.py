@@ -17,6 +17,8 @@ _STRING_ARG_TO_ENV: dict[str, str] = {
     "api_keys": "MSHIP_API_KEYS",
     "trusted_identity_header": "MSHIP_TRUSTED_IDENTITY_HEADER",
     "gateway_name": "MSHIP_GATEWAY_NAME",
+    "address": "MSHIP_ADDRESS",
+    "token": "MSHIP_RAY_AUTH_TOKEN",
 }
 
 
@@ -56,6 +58,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Ray cluster authentication, applied only when modelship starts its own head "
             "(env: MSHIP_RAY_AUTH, default: none). 'token' requires a bearer token, generated "
             "by Ray itself at ~/.ray/auth_token, for the dashboard and cluster-internal RPC."
+        ),
+    )
+    parser.add_argument(
+        "--address",
+        help=(
+            "Join an existing Ray cluster as an additional compute node, given the head's GCS "
+            "server address as plain host:port, e.g. mship-docker-head:6380 (env: MSHIP_ADDRESS; "
+            "matches --ray-port's default on the head). Not a ray:// Ray Client URI — this node "
+            "becomes real cluster compute, not a remote driver. Mutually exclusive with "
+            "--use-existing-ray-cluster (that attaches to a cluster this process deploys to and "
+            "exits, without joining it as a node)."
+        ),
+    )
+    parser.add_argument(
+        "--token",
+        help=(
+            "Cluster auth token for joining a Ray cluster whose head runs --ray-auth=token "
+            "(env: MSHIP_RAY_AUTH_TOKEN). Only meaningful together with --address; retrieve the "
+            "head's token via `docker exec <head> cat ~/.ray/auth_token`."
         ),
     )
     parser.add_argument(

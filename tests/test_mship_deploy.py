@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import mship_deploy
 import pytest
 
 from modelship.deploy.actor_options import (
@@ -63,6 +62,18 @@ class TestParseArgs:
 
     def test_ray_port_defaults_to_none(self):
         assert parse_args([]).ray_port is None
+
+    def test_address(self):
+        assert parse_args(["--address", "mship-head:6380"]).address == "mship-head:6380"
+
+    def test_address_defaults_to_none(self):
+        assert parse_args([]).address is None
+
+    def test_token(self):
+        assert parse_args(["--token", "secret"]).token == "secret"
+
+    def test_token_defaults_to_none(self):
+        assert parse_args([]).token is None
 
     def test_node_num_cpus(self):
         assert parse_args(["--node-num-cpus", "4"]).node_num_cpus == 4
@@ -145,6 +156,32 @@ class TestApplyArgsToEnv:
         monkeypatch.delenv("MSHIP_RAY_PORT", raising=False)
         apply_args_to_env(parse_args([]))
         assert "MSHIP_RAY_PORT" not in os.environ
+
+    def test_address_sets_env(self):
+        # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit
+        # — MSHIP_ADDRESS actively changes connect_ray's branch, so a leak here
+        # would silently flip every later TestConnectRay(Join) test onto the join
+        # path (same hazard test_prune_ray_sessions_*_sets_env guards against).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_ADDRESS", None)
+            apply_args_to_env(parse_args(["--address", "mship-head:6380"]))
+            assert os.environ["MSHIP_ADDRESS"] == "mship-head:6380"
+
+    def test_address_absent_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_ADDRESS", raising=False)
+        apply_args_to_env(parse_args([]))
+        assert "MSHIP_ADDRESS" not in os.environ
+
+    def test_token_sets_env(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_RAY_AUTH_TOKEN", None)
+            apply_args_to_env(parse_args(["--token", "secret"]))
+            assert os.environ["MSHIP_RAY_AUTH_TOKEN"] == "secret"
+
+    def test_token_absent_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RAY_AUTH_TOKEN", raising=False)
+        apply_args_to_env(parse_args([]))
+        assert "MSHIP_RAY_AUTH_TOKEN" not in os.environ
 
     def test_node_num_cpus_sets_env(self, monkeypatch):
         monkeypatch.delenv("MSHIP_NODE_NUM_CPUS", raising=False)
@@ -463,21 +500,27 @@ class TestReservationTotals:
 
 
 class TestRemoveApps:
+    # remove_apps is defined in serve_utils (mship_deploy imports it lazily inside
+    # main() now, so it's no longer a mship_deploy module attribute).
     def test_noop_on_empty_list(self):
+        from modelship.deploy import serve_utils
+
         replica_coordinator = MagicMock()
         with patch("modelship.deploy.serve_utils.serve.delete") as mock_delete:
-            mship_deploy.remove_apps([], replica_coordinator, "gw")
+            serve_utils.remove_apps([], replica_coordinator, "gw")
         replica_coordinator.unregister_deployment.remote.assert_not_called()
         mock_delete.assert_not_called()
 
     def test_unregisters_then_deletes(self):
+        from modelship.deploy import serve_utils
+
         replica_coordinator = MagicMock()
         apps = ["qwen-aaaaaaaaaa", "kokoro-bbbbbbbbbb"]
         with (
             patch("modelship.deploy.serve_utils.ray.get") as mock_get,
             patch("modelship.deploy.serve_utils.serve.delete") as mock_delete,
         ):
-            mship_deploy.remove_apps(apps, replica_coordinator, "gw")
+            serve_utils.remove_apps(apps, replica_coordinator, "gw")
 
         # Each app is dropped from the replica coordinator's registry (which bumps
         # the gateway generation so replicas stop routing) before serve.delete tears
@@ -488,12 +531,14 @@ class TestRemoveApps:
         assert mock_delete.call_args_list == [(("qwen-aaaaaaaaaa",),), (("kokoro-bbbbbbbbbb",),)]
 
     def test_continues_on_serve_delete_error(self):
+        from modelship.deploy import serve_utils
+
         replica_coordinator = MagicMock()
         with (
             patch("modelship.deploy.serve_utils.ray.get"),
             patch("modelship.deploy.serve_utils.serve.delete", side_effect=[Exception("gone"), None]) as mock_delete,
         ):
-            mship_deploy.remove_apps(["a-1234567890", "b-1234567890"], replica_coordinator, "gw")
+            serve_utils.remove_apps(["a-1234567890", "b-1234567890"], replica_coordinator, "gw")
         # Both deletes attempted even though the first raised.
         assert mock_delete.call_count == 2
 
@@ -613,7 +658,7 @@ class TestConnectRay:
                 patch.object(serve_utils, "prune_ray_sessions"),
                 # _ray_auth_is_safe has its own dedicated tests; decouple these from
                 # the real filesystem's /tmp/ray and ~/.ray state.
-                patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+                patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
             ):
                 serve_utils.connect_ray(20)
                 auth_mode = os.environ.get("RAY_AUTH_MODE")
@@ -694,7 +739,7 @@ class TestConnectRay:
             patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_AUTH": "token"}, clear=False),
             patch.object(serve_utils, "prune_ray_sessions"),
             patch.object(serve_utils.ray, "init") as mock_init,
-            patch.object(serve_utils, "_ray_auth_is_safe", return_value=False),
+            patch.object(serve_utils, "ray_auth_is_safe", return_value=False),
         ):
             os.environ.pop("RAY_AUTH_MODE", None)
             with pytest.raises(RuntimeError, match="MSHIP_RAY_AUTH=token"):
@@ -708,7 +753,7 @@ class TestConnectRay:
             patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_PORT": "6390"}, clear=False),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             os.environ.pop("RAY_GCS_SERVER_PORT", None)
             serve_utils.connect_ray(20)
@@ -721,7 +766,7 @@ class TestConnectRay:
             patch.dict(os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, clear=False),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             os.environ.pop("MSHIP_RAY_PORT", None)
             os.environ.pop("RAY_GCS_SERVER_PORT", None)
@@ -745,7 +790,7 @@ class TestConnectRay:
             ),
             patch.object(serve_utils.ray, "init"),
             patch.object(serve_utils, "prune_ray_sessions"),
-            patch.object(serve_utils, "_ray_auth_is_safe", return_value=True),
+            patch.object(serve_utils, "ray_auth_is_safe", return_value=True),
         ):
             serve_utils.connect_ray(20)
             # setdefault: an operator's explicit RAY_GCS_SERVER_PORT always wins.
@@ -792,32 +837,250 @@ class TestConnectRay:
         mock_prune.assert_not_called()
 
 
-class TestRayAuthIsSafe:
-    def test_true_when_token_already_exists(self, tmp_path):
+@pytest.fixture
+def _reset_join_node():
+    """_join_ray_cluster assigns the module-level _join_node global as soon as
+    Node() succeeds, so every test that goes through it leaves that global set
+    unless reset — otherwise isolation would depend on test-definition order."""
+    from modelship.deploy import serve_utils
+
+    serve_utils._join_node = None
+    yield
+    serve_utils._join_node = None
+
+
+class TestJoinRayCluster:
+    """_join_ray_cluster starts THIS container's node in-process via
+    ray._private.node.Node(head=False) — the same path `ray start --address`
+    takes internally — instead of shelling out. These tests mock that
+    Ray-internal surface (and so double as the loud-failure guard for a Ray
+    bump that moves it); TestClusterJoin exercises it for real."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self, _reset_join_node):
+        yield
+
+    def _join(self, env, pop=(), bootstrap="10.0.0.1:6380"):
         from modelship.deploy import serve_utils
+
+        mock_node = MagicMock()
+        mock_node.get_temp_dir_path.return_value = "/tmp/ray"
+        with patch.dict(os.environ, env, clear=False):
+            for key in pop:
+                os.environ.pop(key, None)
+            with (
+                patch("ray._private.services.canonicalize_bootstrap_address", return_value=bootstrap) as mock_canon,
+                patch("ray._private.services.get_node_ip_address", return_value="10.0.0.2"),
+                patch("ray._private.parameter.RayParams") as mock_params,
+                patch("ray._private.node.Node", return_value=mock_node) as mock_node_cls,
+                patch(
+                    "ray._private.authentication.authentication_token_setup.ensure_token_if_auth_enabled"
+                ) as mock_ensure,
+                patch("ray._private.utils.write_ray_address") as mock_write,
+            ):
+                result = serve_utils._join_ray_cluster("head:6380")
+        return {
+            "node": mock_node,
+            "node_cls": mock_node_cls,
+            "params_kwargs": mock_params.call_args.kwargs,
+            "canon": mock_canon,
+            "ensure": mock_ensure,
+            "write": mock_write,
+            "result": result,
+        }
+
+    def test_builds_rayparams_with_cpus_and_gpus(self):
+        kw = self._join({"MSHIP_NODE_NUM_CPUS": "4", "MSHIP_NODE_NUM_GPUS": "2"})["params_kwargs"]
+        assert kw["num_cpus"] == 4
+        assert kw["num_gpus"] == 2
+
+    def test_omits_resources_when_unset(self):
+        kw = self._join({}, pop=("MSHIP_NODE_NUM_CPUS", "MSHIP_NODE_NUM_GPUS"))["params_kwargs"]
+        assert kw["num_cpus"] is None
+        assert kw["num_gpus"] is None
+
+    def test_explicit_zero_gpus_honored(self):
+        # Thin-image case: MSHIP_NODE_NUM_GPUS=0 is a real reservation, not "unset".
+        kw = self._join({"MSHIP_NODE_NUM_GPUS": "0"})["params_kwargs"]
+        assert kw["num_gpus"] == 0
+
+    def test_metrics_export_port_set(self):
+        kw = self._join({"MSHIP_METRICS": "true", "RAY_METRICS_EXPORT_PORT": "9999"})["params_kwargs"]
+        assert kw["metrics_export_port"] == 9999
+
+    def test_metrics_export_port_none_when_disabled(self):
+        kw = self._join({"MSHIP_METRICS": "false"})["params_kwargs"]
+        assert kw["metrics_export_port"] is None
+
+    def test_passes_bootstrap_gcs_address(self):
+        kw = self._join({}, bootstrap="10.9.9.9:6380")["params_kwargs"]
+        assert kw["gcs_address"] == "10.9.9.9:6380"
+
+    def test_creates_worker_node_supervised(self):
+        out = self._join({})
+        _, kwargs = out["node_cls"].call_args
+        assert kwargs["head"] is False
+        assert kwargs["shutdown_at_exit"] is True
+        assert kwargs["spawn_reaper"] is True
+        out["node"].check_version_info.assert_called_once()
+
+    def test_writes_discovery_marker_with_bootstrap_address(self):
+        out = self._join({}, bootstrap="10.9.9.9:6380")
+        out["write"].assert_called_once_with("10.9.9.9:6380", "/tmp/ray")
+
+    def test_sets_module_global_and_returns_node(self):
+        from modelship.deploy import serve_utils
+
+        out = self._join({})
+        assert serve_utils._join_node is out["node"]
+        assert out["result"] is out["node"]
+
+    def test_calls_ensure_token_preflight(self):
+        self._join({})["ensure"].assert_called_once()
+
+    def test_unresolvable_address_raises(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch("ray._private.services.canonicalize_bootstrap_address", return_value=None),
+            pytest.raises(RuntimeError, match="Could not resolve the Ray head address"),
+        ):
+            serve_utils._join_ray_cluster("bogus:1")
+
+
+class TestConnectRayJoinBranch:
+    """connect_ray's MSHIP_ADDRESS branch: brings up the local node via
+    _join_ray_cluster (mocked here — TestJoinRayCluster covers its internals),
+    then attaches the driver with ray.init(address='auto')."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self, _reset_join_node):
+        yield
+
+    def test_join_branch_creates_node_then_attaches_via_auto(self):
+        from modelship.deploy import serve_utils
+
+        with patch.dict(os.environ, {"MSHIP_ADDRESS": "head:6380"}, clear=False):
+            os.environ.pop("MSHIP_USE_EXISTING_RAY_CLUSTER", None)
+            with (
+                patch.object(serve_utils, "_join_ray_cluster") as mock_join,
+                patch.object(serve_utils, "prune_ray_sessions") as mock_prune,
+                patch.object(serve_utils.ray, "init") as mock_init,
+            ):
+                serve_utils.connect_ray(20)
+            mock_join.assert_called_once_with("head:6380")
+            mock_prune.assert_called_once()
+            # R2: address="auto", not a bare init — a bare init would silently
+            # form a split-brain cluster if local discovery somehow failed.
+            assert mock_init.call_args.kwargs["address"] == "auto"
+
+    def test_address_and_existing_cluster_mutually_exclusive_raises(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(
+                os.environ, {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true", "MSHIP_ADDRESS": "head:6380"}, clear=False
+            ),
+            pytest.raises(RuntimeError, match="mutually exclusive"),
+        ):
+            serve_utils.connect_ray(20)
+
+
+class TestLeaveRayCluster:
+    @pytest.fixture(autouse=True)
+    def _reset(self, _reset_join_node):
+        yield
+
+    def test_leave_tears_down_only_the_join_node(self):
+        from modelship.deploy import serve_utils
+
+        mock_node = MagicMock()
+        serve_utils._join_node = mock_node
+        with patch.object(serve_utils.ray, "shutdown") as mock_shutdown:
+            serve_utils.leave_ray_cluster()
+        mock_shutdown.assert_called_once()
+        # allow_graceful lets the raylet drain hosted actors; check_alive=False
+        # because a partially-started node may not have every process up.
+        mock_node.kill_all_processes.assert_called_once_with(check_alive=False, allow_graceful=True)
+
+    def test_leave_noop_when_not_joined(self):
+        from modelship.deploy import serve_utils
+
+        assert serve_utils._join_node is None
+        with patch.object(serve_utils.ray, "shutdown") as mock_shutdown:
+            serve_utils.leave_ray_cluster()  # must not raise with no node to stop
+        mock_shutdown.assert_called_once()
+
+
+class TestSuperviseJoinNode:
+    @pytest.fixture(autouse=True)
+    def _reset(self, _reset_join_node):
+        yield
+
+    def test_exits_nonzero_and_kills_when_core_process_dies(self):
+        from modelship.deploy import serve_utils
+
+        node = MagicMock()
+        dead = MagicMock()
+        dead.returncode = 1  # not a graceful SIGTERM/0 exit
+        node.dead_processes.return_value = [("raylet", dead)]
+        serve_utils._join_node = node
+        with (
+            patch.object(serve_utils.time, "sleep"),
+            pytest.raises(SystemExit) as exc,
+        ):
+            serve_utils.supervise_join_node()
+        assert exc.value.code == 1
+        node.kill_all_processes.assert_called_once_with(check_alive=False, allow_graceful=False)
+
+    def test_ignores_graceful_exits_and_keeps_supervising(self):
+        from modelship.deploy import serve_utils
+
+        node = MagicMock()
+        graceful = MagicMock()
+        graceful.returncode = 0  # in _GRACEFUL_EXIT_CODES — expected, not a failure
+        node.dead_processes.return_value = [("agent", graceful)]
+        serve_utils._join_node = node
+        # First sleep returns, second breaks the otherwise-infinite loop so the
+        # test can assert the graceful exit was NOT treated as a failure.
+        with (
+            patch.object(serve_utils.time, "sleep", side_effect=[None, RuntimeError("stop")]),
+            pytest.raises(RuntimeError, match="stop"),
+        ):
+            serve_utils.supervise_join_node()
+        node.kill_all_processes.assert_not_called()
+
+
+class TestRayAuthIsSafe:
+    """ray_auth_is_safe lives in the ray-free modelship.utils.ray_auth leaf
+    module (so it can run before `import ray`); connect_ray imports it. The
+    marker path mirrors Ray's get_ray_temp_dir() == <RAY_TMPDIR>/ray."""
+
+    def test_true_when_token_already_exists(self, tmp_path):
+        from modelship.utils import ray_auth
 
         home = tmp_path / "home"
         (home / ".ray").mkdir(parents=True)
         (home / ".ray" / "auth_token").write_text("abc")
         with (
             patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(serve_utils.Path, "home", return_value=home),
+            patch.object(ray_auth.Path, "home", return_value=home),
         ):
-            assert serve_utils._ray_auth_is_safe() is True
+            assert ray_auth.ray_auth_is_safe() is True
 
     def test_true_when_no_cluster_running(self, tmp_path):
-        from modelship.deploy import serve_utils
+        from modelship.utils import ray_auth
 
         home = tmp_path / "home"
         home.mkdir()
         with (
             patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(serve_utils.Path, "home", return_value=home),
+            patch.object(ray_auth.Path, "home", return_value=home),
         ):
-            assert serve_utils._ray_auth_is_safe() is True
+            assert ray_auth.ray_auth_is_safe() is True
 
     def test_false_when_attaching_to_cluster_with_no_token(self, tmp_path):
-        from modelship.deploy import serve_utils
+        from modelship.utils import ray_auth
 
         home = tmp_path / "home"
         home.mkdir()
@@ -826,18 +1089,74 @@ class TestRayAuthIsSafe:
         (ray_root / "ray_current_cluster").write_text("127.0.0.1:6379")
         with (
             patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(serve_utils.Path, "home", return_value=home),
+            patch.object(ray_auth.Path, "home", return_value=home),
         ):
-            assert serve_utils._ray_auth_is_safe() is False
+            assert ray_auth.ray_auth_is_safe() is False
 
     def test_false_on_no_passwd_entry(self, tmp_path):
-        from modelship.deploy import serve_utils
+        from modelship.utils import ray_auth
 
         with (
             patch.dict(os.environ, {"RAY_TMPDIR": str(tmp_path)}, clear=False),
-            patch.object(serve_utils.Path, "home", side_effect=RuntimeError),
+            patch.object(ray_auth.Path, "home", side_effect=RuntimeError),
         ):
-            assert serve_utils._ray_auth_is_safe() is False
+            assert ray_auth.ray_auth_is_safe() is False
+
+
+class TestResolveRayAuthEnv:
+    """resolve_ray_auth_env front-runs Ray's import-time RAY_AUTH_MODE latch:
+    it translates the MSHIP_* auth/join vars into RAY_AUTH_MODE/RAY_AUTH_TOKEN
+    before mship_deploy imports ray. Runs with a clean auth env each time."""
+
+    def _resolve(self, env, safe=True):
+        from modelship.utils import ray_auth
+
+        base = dict.fromkeys(
+            ["MSHIP_ADDRESS", "MSHIP_USE_EXISTING_RAY_CLUSTER", "MSHIP_RAY_AUTH", "MSHIP_RAY_AUTH_TOKEN"], ""
+        )
+        with patch.dict(os.environ, {**base, **env}, clear=False):
+            for key in ["MSHIP_ADDRESS", "MSHIP_USE_EXISTING_RAY_CLUSTER", "MSHIP_RAY_AUTH", "MSHIP_RAY_AUTH_TOKEN"]:
+                if not os.environ.get(key):
+                    os.environ.pop(key, None)
+            os.environ.pop("RAY_AUTH_MODE", None)
+            os.environ.pop("RAY_AUTH_TOKEN", None)
+            with patch.object(ray_auth, "ray_auth_is_safe", return_value=safe):
+                ray_auth.resolve_ray_auth_env()
+            return os.environ.get("RAY_AUTH_MODE"), os.environ.get("RAY_AUTH_TOKEN")
+
+    def test_own_head_token_safe_sets_mode(self):
+        mode, _ = self._resolve({"MSHIP_RAY_AUTH": "token"}, safe=True)
+        assert mode == "token"
+
+    def test_own_head_token_unsafe_leaves_mode_unset(self):
+        # Deferred to connect_ray's own re-check, which raises the clear error.
+        mode, _ = self._resolve({"MSHIP_RAY_AUTH": "token"}, safe=False)
+        assert mode is None
+
+    def test_join_with_token_sets_mode_and_token(self):
+        mode, token = self._resolve({"MSHIP_ADDRESS": "head:6380", "MSHIP_RAY_AUTH_TOKEN": "secret"})
+        assert mode == "token"
+        assert token == "secret"
+
+    def test_join_without_token_leaves_auth_unset(self):
+        mode, token = self._resolve({"MSHIP_ADDRESS": "head:6380"})
+        assert mode is None
+        assert token is None
+
+    def test_existing_cluster_never_sets_mode(self):
+        mode, _ = self._resolve({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true", "MSHIP_RAY_AUTH": "token"})
+        assert mode is None
+
+    def test_explicit_ray_auth_mode_wins(self):
+        from modelship.utils import ray_auth
+
+        with patch.dict(os.environ, {"MSHIP_RAY_AUTH": "token", "RAY_AUTH_MODE": "disabled"}, clear=False):
+            os.environ.pop("MSHIP_ADDRESS", None)
+            os.environ.pop("MSHIP_USE_EXISTING_RAY_CLUSTER", None)
+            with patch.object(ray_auth, "ray_auth_is_safe", return_value=True):
+                ray_auth.resolve_ray_auth_env()
+            # setdefault: an operator's explicit RAY_AUTH_MODE always wins.
+            assert os.environ["RAY_AUTH_MODE"] == "disabled"
 
 
 class TestPruneRaySessions:

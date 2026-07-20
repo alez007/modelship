@@ -2,13 +2,18 @@ import logging
 import os
 import random
 import string
-import uuid
 from collections.abc import Iterable
 from typing import Any
 
 import requests
 
-from modelship.infer.infer_config import RawRequestProxy
+# Re-exported from a ray-free leaf module so importing modelship.utils (hence
+# modelship.utils.cli) never pulls in `import ray` — mship_deploy needs to parse
+# argv and set Ray's auth env vars before its own `import ray`. base_request_id
+# is a pure re-export (alias form marks that for the linter); random_uuid is also
+# used by download() below.
+from modelship.utils.request_id import base_request_id as base_request_id
+from modelship.utils.request_id import random_uuid
 
 _RAND_CHARS = string.ascii_lowercase + string.digits
 
@@ -30,19 +35,8 @@ def drop_reserved_kwargs(
     return {k: v for k, v in kwargs.items() if k not in reserved}
 
 
-def random_uuid() -> str:
-    return str(uuid.uuid4().hex)
-
-
 def rand_suffix(length: int = 5) -> str:
     return "".join(random.choices(_RAND_CHARS, k=length))
-
-
-def base_request_id(raw_request: RawRequestProxy | None = None) -> str:
-    """Return the request ID from a RawRequestProxy, or generate a new one."""
-    if raw_request is not None and raw_request.request_id is not None:
-        return raw_request.request_id
-    return random_uuid()
 
 
 def download(url: str, file_path: str, overwrite: bool = False):
