@@ -15,8 +15,45 @@ from modelship.deploy.actor_options import (
     total_gpu_reservation,
 )
 from modelship.infer.infer_config import ModelLoader, ModelshipModelConfig, ModelUsecase, VllmEngineConfig
-from modelship.utils import rand_suffix
+from modelship.utils import parse_memory_bytes, rand_suffix
 from modelship.utils.cli import apply_args_to_env, parse_args
+
+
+class TestParseMemoryBytes:
+    def test_bare_bytes(self):
+        assert parse_memory_bytes("1024") == 1024
+
+    def test_ki_suffix(self):
+        assert parse_memory_bytes("4Ki") == 4 * 1024
+
+    def test_mi_suffix(self):
+        assert parse_memory_bytes("512Mi") == 512 * 1024**2
+
+    def test_gi_suffix(self):
+        assert parse_memory_bytes("8Gi") == 8 * 1024**3
+
+    def test_ti_suffix(self):
+        assert parse_memory_bytes("2Ti") == 2 * 1024**4
+
+    def test_case_insensitive(self):
+        assert parse_memory_bytes("8gi") == 8 * 1024**3
+        assert parse_memory_bytes("8GI") == 8 * 1024**3
+
+    def test_whitespace_tolerant(self):
+        assert parse_memory_bytes(" 8Gi ") == 8 * 1024**3
+        assert parse_memory_bytes("8 Gi") == 8 * 1024**3
+
+    def test_rejects_decimal_units(self):
+        with pytest.raises(ValueError, match="Invalid memory size"):
+            parse_memory_bytes("8GB")
+
+    def test_rejects_garbage(self):
+        with pytest.raises(ValueError, match="Invalid memory size"):
+            parse_memory_bytes("not-a-size")
+
+    def test_rejects_negative(self):
+        with pytest.raises(ValueError, match="Invalid memory size"):
+            parse_memory_bytes("-8Gi")
 
 
 class TestParseArgs:
@@ -86,6 +123,12 @@ class TestParseArgs:
 
     def test_node_num_gpus_defaults_to_none(self):
         assert parse_args([]).node_num_gpus is None
+
+    def test_node_memory(self):
+        assert parse_args(["--node-memory", "8Gi"]).node_memory == 8 * 1024**3
+
+    def test_node_memory_defaults_to_none(self):
+        assert parse_args([]).node_memory is None
 
     def test_responses_ttl_s(self):
         assert parse_args(["--responses-ttl-s", "60"]).responses_ttl_s == 60.0
@@ -202,6 +245,16 @@ class TestApplyArgsToEnv:
         monkeypatch.delenv("MSHIP_NODE_NUM_GPUS", raising=False)
         apply_args_to_env(parse_args([]))
         assert "MSHIP_NODE_NUM_GPUS" not in os.environ
+
+    def test_node_memory_sets_env(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_NODE_MEMORY", raising=False)
+        apply_args_to_env(parse_args(["--node-memory", "8Gi"]))
+        assert os.environ["MSHIP_NODE_MEMORY"] == str(8 * 1024**3)
+
+    def test_node_memory_absent_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_NODE_MEMORY", raising=False)
+        apply_args_to_env(parse_args([]))
+        assert "MSHIP_NODE_MEMORY" not in os.environ
 
     def test_prune_ray_sessions_false_sets_env(self):
         # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit
@@ -682,6 +735,17 @@ class TestConnectRay:
         # Guards the private ray.init kwarg that pins Ray's metrics agent port.
         assert kwargs["_metrics_export_port"] == 8079
 
+    def test_own_cluster_node_memory_splits_into_memory_and_object_store(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_NODE_MEMORY": str(10 * 1024**3)})
+        # 30% object store (Ray's own resolve_object_store_memory), 70% schedulable 'memory'.
+        assert kwargs["object_store_memory"] == int(10 * 1024**3 * 0.3)
+        assert kwargs["_memory"] == 10 * 1024**3 - kwargs["object_store_memory"]
+
+    def test_own_cluster_node_memory_absent_when_unset(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_NODE_MEMORY",))
+        assert "_memory" not in kwargs
+        assert "object_store_memory" not in kwargs
+
     def test_own_cluster_dashboard_always_on_bound_localhost(self):
         kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_RAY_DASHBOARD",))
         assert kwargs["include_dashboard"] is True
@@ -851,6 +915,17 @@ class TestJoinRayCluster:
         # Thin-image case: MSHIP_NODE_NUM_GPUS=0 is a real reservation, not "unset".
         kw = self._join({"MSHIP_NODE_NUM_GPUS": "0"})["params_kwargs"]
         assert kw["num_gpus"] == 0
+
+    def test_node_memory_splits_into_memory_and_object_store(self):
+        kw = self._join({"MSHIP_NODE_MEMORY": str(10 * 1024**3)})["params_kwargs"]
+        # 30% object store (Ray's own resolve_object_store_memory), 70% schedulable 'memory'.
+        assert kw["object_store_memory"] == int(10 * 1024**3 * 0.3)
+        assert kw["memory"] == 10 * 1024**3 - kw["object_store_memory"]
+
+    def test_node_memory_absent_when_unset(self):
+        kw = self._join({}, pop=("MSHIP_NODE_MEMORY",))["params_kwargs"]
+        assert kw["memory"] is None
+        assert kw["object_store_memory"] is None
 
     def test_metrics_export_port_always_none(self):
         # A joining node never pins its metrics port, even if RAY_METRICS_EXPORT_PORT is set

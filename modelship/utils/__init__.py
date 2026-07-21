@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import re
 import string
 from collections.abc import Iterable
 from typing import Any
@@ -11,6 +12,21 @@ from modelship.utils.request_id import base_request_id as base_request_id
 from modelship.utils.request_id import random_uuid
 
 _RAND_CHARS = string.ascii_lowercase + string.digits
+
+_MEMORY_SIZE_RE = re.compile(r"(\d+)\s*(ki|mi|gi|ti)?", re.IGNORECASE)
+_MEMORY_UNIT_MULTIPLIERS = {"": 1, "ki": 1024, "mi": 1024**2, "gi": 1024**3, "ti": 1024**4}
+
+
+def parse_memory_bytes(value: str) -> int:
+    """Parse a memory size into bytes: a bare integer (bytes) or a binary-unit
+    suffix (Ki/Mi/Gi/Ti, case-insensitive) — matching the Helm chart's own
+    `memory: 8Gi` convention (helm/modelship/values.yaml) rather than introducing
+    a second SI/decimal convention alongside it."""
+    match = _MEMORY_SIZE_RE.fullmatch(value.strip())
+    if not match:
+        raise ValueError(f"Invalid memory size {value!r}; expected e.g. '8Gi', '512Mi', or a plain byte count")
+    num, unit = match.groups()
+    return int(num) * _MEMORY_UNIT_MULTIPLIERS[(unit or "").lower()]
 
 
 def drop_reserved_kwargs(

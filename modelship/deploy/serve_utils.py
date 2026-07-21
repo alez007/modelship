@@ -95,10 +95,32 @@ def remove_apps(app_names: list[str], replica_coordinator, gateway_name: str) ->
     delete_apps_quietly(app_names)
 
 
+def _resolve_node_memory_kwargs() -> dict[str, int]:
+    """Split MSHIP_NODE_MEMORY (this node's total memory budget) into Ray's
+    object_store_memory and schedulable 'memory' resource, using Ray's own
+    object-store proportion (resolve_object_store_memory) so the split stays in
+    sync with however Ray itself derives these from an auto-detected total,
+    rather than hardcoding the 30% split separately.
+
+    Both keys are always set together: leaving 'memory' to auto-derive would
+    still compute it from the full host's estimate_available_memory(), undoing
+    the fix for exactly the co-located-container double-counting this exists to
+    solve (see --node-memory's help text). Empty when MSHIP_NODE_MEMORY is unset
+    (both keep auto-detecting, as before)."""
+    total = os.environ.get("MSHIP_NODE_MEMORY")
+    if not total:
+        return {}
+    from ray._private.utils import resolve_object_store_memory
+
+    total_bytes = int(total)
+    object_store_memory = resolve_object_store_memory(total_bytes)
+    return {"memory": total_bytes - object_store_memory, "object_store_memory": object_store_memory}
+
+
 def _own_cluster_init_kwargs() -> dict[str, object]:
     """ray.init kwargs to start our own head. Dashboard always starts;
     MSHIP_RAY_DASHBOARD sets its bind host (default 127.0.0.1), not on/off.
-    Resources auto-detect when MSHIP_NODE_NUM_* are unset."""
+    Resources auto-detect when MSHIP_NODE_NUM_*/MSHIP_NODE_MEMORY are unset."""
     kwargs: dict[str, object] = {
         "include_dashboard": True,
         "dashboard_host": os.environ.get("MSHIP_RAY_DASHBOARD", "127.0.0.1"),
@@ -107,6 +129,12 @@ def _own_cluster_init_kwargs() -> dict[str, object]:
         kwargs["num_cpus"] = int(cpus)
     if gpus := os.environ.get("MSHIP_NODE_NUM_GPUS"):
         kwargs["num_gpus"] = int(gpus)
+    if node_memory := _resolve_node_memory_kwargs():
+        # _memory is a private ray.init kwarg (accepted via **kwargs, popped internally) for
+        # the schedulable 'memory' resource; object_store_memory is public. Same convention
+        # as _metrics_export_port below.
+        kwargs["_memory"] = node_memory["memory"]
+        kwargs["object_store_memory"] = node_memory["object_store_memory"]
     if os.environ.get("MSHIP_METRICS", "true").lower() == "true":
         # _metrics_export_port is a private ray.init kwarg (accepted via **kwargs)
         # that pins Ray's metrics agent — and thus all serve_*/vllm:*/modelship
@@ -204,6 +232,7 @@ def _join_ray_cluster(address: str) -> Node:
 
     cpus = os.environ.get("MSHIP_NODE_NUM_CPUS")
     gpus = os.environ.get("MSHIP_NODE_NUM_GPUS")
+    node_memory = _resolve_node_memory_kwargs()
     # Unlike the head, a joining node never needs a fixed metrics port: nothing external
     # targets it directly, and the head's PrometheusServiceDiscoveryWriter already picks up
     # whatever port Ray actually binds (via GCS) every few seconds. Leaving this None lets
@@ -214,6 +243,8 @@ def _join_ray_cluster(address: str) -> Node:
         node_ip_address=services.get_node_ip_address(bootstrap),
         num_cpus=int(cpus) if cpus else None,
         num_gpus=int(gpus) if gpus else None,
+        memory=node_memory.get("memory"),
+        object_store_memory=node_memory.get("object_store_memory"),
         metrics_export_port=None,
     )
 

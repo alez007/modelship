@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 
+from modelship.utils import parse_memory_bytes
+
 # Maps argparse attribute names to the env vars they override. CLI flags take
 # precedence over env vars; downstream code (Ray init, logging, gateway start)
 # reads exclusively from os.environ so a single source of truth is preserved.
@@ -94,6 +96,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--node-num-gpus", type=int, help="GPUs this node reserves (env: MSHIP_NODE_NUM_GPUS, default: auto-detect)"
+    )
+    parser.add_argument(
+        "--node-memory",
+        type=parse_memory_bytes,
+        help=(
+            "This node's total memory budget, e.g. '8Gi' (env: MSHIP_NODE_MEMORY, default: "
+            "auto-detect). Split into Ray's object_store_memory (30%%) and schedulable 'memory' "
+            "resource (70%%) the same way Ray splits an auto-detected total. Set this explicitly "
+            "when co-locating multiple modelship node containers on one physical host without "
+            "per-container cgroup memory limits — otherwise each node auto-detects the full "
+            "host's RAM independently, and the cluster total double/triple-counts the same "
+            "physical memory (mirrors --node-num-cpus/--node-num-gpus for the memory dimension). "
+            "Under Docker, also pass `--shm-size` >= the derived object_store_memory (~30%% of "
+            "this value) — Docker's 64MB default /dev/shm is far below that, and Ray silently "
+            "falls back to slower disk-backed storage instead of erroring when it doesn't fit."
+        ),
     )
     parser.add_argument("--log-format", choices=["text", "json"], help="Log format (env: MSHIP_LOG_FORMAT)")
     parser.add_argument(
@@ -199,6 +217,8 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_NODE_NUM_CPUS"] = str(args.node_num_cpus)
     if args.node_num_gpus is not None:
         os.environ["MSHIP_NODE_NUM_GPUS"] = str(args.node_num_gpus)
+    if args.node_memory is not None:
+        os.environ["MSHIP_NODE_MEMORY"] = str(args.node_memory)
     if args.no_metrics is True:
         os.environ["MSHIP_METRICS"] = "false"
     if args.no_preflight is True:
