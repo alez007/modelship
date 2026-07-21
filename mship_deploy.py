@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
     from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator
     from modelship.infer.replica_coordinator import get_or_create_replica_coordinator
     from modelship.metrics import DEPLOY_DURATION_SECONDS, DEPLOY_MODELS_CHANGED_TOTAL
+    from modelship.preflight import detect_gpus
     from modelship.state import MemoryStateStore, get_state_store
 
     # Captured before the unconditional os.environ["MSHIP_GATEWAY_NAME"] write
@@ -144,6 +145,20 @@ def main(argv: list[str] | None = None) -> None:
         available_resources.get("GPU", 0),
         available_resources.get("CPU", 0),
     )
+
+    # This node's own physical GPUs (index/name/UUID), independent of Ray's cluster-wide
+    # tally above. When co-locating multiple modelship node containers on one host — a
+    # head-farm box, or a GPU deliberately shared across separate clusters — this line is
+    # how an operator verifies each container was actually handed a distinct physical
+    # card (e.g. via `docker run --gpus device=N`), rather than the same one twice.
+    for gpu in detect_gpus():
+        logger.info(
+            "This node sees GPU %d: %s (uuid=%s, %s free)",
+            gpu.index,
+            gpu.name,
+            gpu.uuid or "unknown",
+            gpu.available_bytes,
+        )
 
     start_serve(serve_logging_config)
 

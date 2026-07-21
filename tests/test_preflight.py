@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -56,6 +58,76 @@ def _write_model_snapshot(
         json.dumps({"metadata": {"total_size": weight_bytes}, "weight_map": {}})
     )
     return snapshot
+
+
+class TestGpuDiscoveryUuid:
+    """GPUInfo.uuid, populated by the pynvml/torch probes (preflight/base.py) so an
+    operator co-locating node containers on one host can verify each was actually
+    handed a distinct physical GPU (see the multi-node-docker plan's item 5b)."""
+
+    def test_pynvml_probe_reads_uuid(self):
+        from modelship.preflight import base as preflight_base
+
+        mock_pynvml = MagicMock()
+        mock_pynvml.nvmlDeviceGetCount.return_value = 1
+        mock_pynvml.nvmlDeviceGetHandleByIndex.return_value = object()
+        mock_pynvml.nvmlDeviceGetMemoryInfo.return_value = SimpleNamespace(free=1024)
+        mock_pynvml.nvmlDeviceGetName.return_value = "Test GPU"
+        mock_pynvml.nvmlDeviceGetUUID.return_value = "GPU-abc123"
+
+        with patch.dict(sys.modules, {"pynvml": mock_pynvml}):
+            gpus = preflight_base._pynvml_node_discover()
+
+        assert gpus == [GPUInfo(index=0, available_bytes=1024, name="Test GPU", uuid="GPU-abc123")]
+
+    def test_pynvml_probe_decodes_bytes_uuid(self):
+        # Some pynvml builds return bytes for name/UUID rather than str.
+        from modelship.preflight import base as preflight_base
+
+        mock_pynvml = MagicMock()
+        mock_pynvml.nvmlDeviceGetCount.return_value = 1
+        mock_pynvml.nvmlDeviceGetHandleByIndex.return_value = object()
+        mock_pynvml.nvmlDeviceGetMemoryInfo.return_value = SimpleNamespace(free=1024)
+        mock_pynvml.nvmlDeviceGetName.return_value = b"Test GPU"
+        mock_pynvml.nvmlDeviceGetUUID.return_value = b"GPU-abc123"
+
+        with patch.dict(sys.modules, {"pynvml": mock_pynvml}):
+            gpus = preflight_base._pynvml_node_discover()
+
+        assert gpus == [GPUInfo(index=0, available_bytes=1024, name="Test GPU", uuid="GPU-abc123")]
+
+    def test_torch_probe_reads_uuid(self):
+        from modelship.preflight import base as preflight_base
+
+        mock_props = SimpleNamespace(name="Test GPU", total_memory=2048, uuid="abc123")
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = True
+        mock_torch.cuda.device_count.return_value = 1
+        mock_torch.cuda.get_device_properties.return_value = mock_props
+        mock_torch.cuda.mem_get_info.return_value = (1024, 2048)
+
+        with patch.dict(sys.modules, {"torch": mock_torch}):
+            gpus = preflight_base._torch_cuda_discover()
+
+        # torch's uuid has no "GPU-" prefix (unlike pynvml's); the probe adds it so both
+        # sources agree with nvidia-smi's own "GPU-<uuid>" format.
+        assert gpus == [GPUInfo(index=0, available_bytes=1024, name="Test GPU", uuid="GPU-abc123")]
+
+    def test_torch_probe_uuid_none_when_attr_missing(self):
+        # Older torch builds predate the `uuid` device-properties field.
+        from modelship.preflight import base as preflight_base
+
+        mock_props = SimpleNamespace(name="Test GPU", total_memory=2048)
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = True
+        mock_torch.cuda.device_count.return_value = 1
+        mock_torch.cuda.get_device_properties.return_value = mock_props
+        mock_torch.cuda.mem_get_info.return_value = (1024, 2048)
+
+        with patch.dict(sys.modules, {"torch": mock_torch}):
+            gpus = preflight_base._torch_cuda_discover()
+
+        assert gpus == [GPUInfo(index=0, available_bytes=1024, name="Test GPU", uuid=None)]
 
 
 class TestMergeWithUserOverrides:

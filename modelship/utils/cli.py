@@ -92,6 +92,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        help=(
+            "Port for Ray's dashboard, applied only when modelship starts its own head "
+            "(env: MSHIP_RAY_DASHBOARD_PORT, default: 8265, Ray's own default). Unlike "
+            "--ray-port/--openai-api-port, Ray gives this no per-node override otherwise — "
+            "set it when running multiple modelship heads on one host under --network=host, "
+            "so each head's dashboard gets a distinct port."
+        ),
+    )
+    parser.add_argument(
         "--node-num-cpus", type=int, help="CPUs this node reserves (env: MSHIP_NODE_NUM_CPUS, default: auto-detect)"
     )
     parser.add_argument(
@@ -213,6 +224,8 @@ def apply_args_to_env(args: argparse.Namespace) -> None:
         os.environ["MSHIP_RAY_AUTH"] = args.ray_auth
     if args.ray_port is not None:
         os.environ["MSHIP_RAY_PORT"] = str(args.ray_port)
+    if args.dashboard_port is not None:
+        os.environ["MSHIP_RAY_DASHBOARD_PORT"] = str(args.dashboard_port)
     if args.node_num_cpus is not None:
         os.environ["MSHIP_NODE_NUM_CPUS"] = str(args.node_num_cpus)
     if args.node_num_gpus is not None:

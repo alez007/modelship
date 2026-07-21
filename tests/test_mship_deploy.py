@@ -100,6 +100,12 @@ class TestParseArgs:
     def test_ray_port_defaults_to_none(self):
         assert parse_args([]).ray_port is None
 
+    def test_dashboard_port(self):
+        assert parse_args(["--dashboard-port", "8266"]).dashboard_port == 8266
+
+    def test_dashboard_port_defaults_to_none(self):
+        assert parse_args([]).dashboard_port is None
+
     def test_address(self):
         assert parse_args(["--address", "mship-head:6380"]).address == "mship-head:6380"
 
@@ -200,6 +206,19 @@ class TestApplyArgsToEnv:
         apply_args_to_env(parse_args([]))
         assert "MSHIP_RAY_PORT" not in os.environ
 
+    def test_dashboard_port_sets_env(self):
+        # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit —
+        # see test_node_num_gpus_sets_env's comment for why delenv alone doesn't do it.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_RAY_DASHBOARD_PORT", None)
+            apply_args_to_env(parse_args(["--dashboard-port", "8266"]))
+            assert os.environ["MSHIP_RAY_DASHBOARD_PORT"] == "8266"
+
+    def test_dashboard_port_absent_leaves_env_untouched(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_RAY_DASHBOARD_PORT", raising=False)
+        apply_args_to_env(parse_args([]))
+        assert "MSHIP_RAY_DASHBOARD_PORT" not in os.environ
+
     def test_address_sets_env(self):
         # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit
         # — MSHIP_ADDRESS actively changes connect_ray's branch, so a leak here
@@ -236,10 +255,16 @@ class TestApplyArgsToEnv:
         apply_args_to_env(parse_args([]))
         assert "MSHIP_NODE_NUM_CPUS" not in os.environ
 
-    def test_node_num_gpus_sets_env(self, monkeypatch):
-        monkeypatch.delenv("MSHIP_NODE_NUM_GPUS", raising=False)
-        apply_args_to_env(parse_args(["--node-num-gpus", "2"]))
-        assert os.environ["MSHIP_NODE_NUM_GPUS"] == "2"
+    def test_node_num_gpus_sets_env(self):
+        # patch.dict (not monkeypatch.delenv) so the env write is reverted on exit —
+        # monkeypatch.delenv on an already-absent var registers no cleanup, so a
+        # leaked "2" here would fail every later TestValidateNodeGpuReservation/
+        # TestConnectRay case that assumes no GPU reservation (same hazard
+        # test_address_sets_env's comment documents).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MSHIP_NODE_NUM_GPUS", None)
+            apply_args_to_env(parse_args(["--node-num-gpus", "2"]))
+            assert os.environ["MSHIP_NODE_NUM_GPUS"] == "2"
 
     def test_node_num_gpus_absent_leaves_env_untouched(self, monkeypatch):
         monkeypatch.delenv("MSHIP_NODE_NUM_GPUS", raising=False)
@@ -696,6 +721,89 @@ class TestResolvePluginWheel:
             resolve_plugin_wheel("myplugin")
 
 
+class TestValidateNodeGpuReservation:
+    """--node-num-gpus must not exceed what this container can actually see (item
+    5a of the multi-node-docker co-location plan) — an inflated value would make
+    Ray advertise phantom GPU capacity and fail much later, at a replica's model
+    load, instead of here at startup."""
+
+    def _fake_gpus(self, count):
+        from modelship.preflight import GPUInfo
+
+        return [GPUInfo(index=i, available_bytes=0, name="test", uuid=None) for i in range(count)]
+
+    def test_reservation_within_visible_count_passes(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_NODE_NUM_GPUS": "1"}, clear=False),
+            patch.object(serve_utils, "detect_gpus", return_value=self._fake_gpus(2)),
+        ):
+            serve_utils._validate_node_gpu_reservation()  # no raise
+
+    def test_reservation_equal_to_visible_count_passes(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_NODE_NUM_GPUS": "2"}, clear=False),
+            patch.object(serve_utils, "detect_gpus", return_value=self._fake_gpus(2)),
+        ):
+            serve_utils._validate_node_gpu_reservation()  # no raise
+
+    def test_reservation_exceeding_visible_count_raises(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {"MSHIP_NODE_NUM_GPUS": "2"}, clear=False),
+            patch.object(serve_utils, "detect_gpus", return_value=self._fake_gpus(1)),
+            pytest.raises(RuntimeError, match="exceeds the 1 GPU"),
+        ):
+            serve_utils._validate_node_gpu_reservation()
+
+    def test_reservation_unset_skips_check(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(serve_utils, "detect_gpus") as mock_detect,
+        ):
+            os.environ.pop("MSHIP_NODE_NUM_GPUS", None)
+            serve_utils._validate_node_gpu_reservation()
+        mock_detect.assert_not_called()
+
+    def test_own_cluster_connect_ray_raises_on_gpu_mismatch(self):
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(
+                os.environ,
+                {"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_NODE_NUM_GPUS": "2"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "detect_gpus", return_value=self._fake_gpus(1)),
+            patch.object(serve_utils.ray, "init") as mock_init,
+            pytest.raises(RuntimeError, match="exceeds the 1 GPU"),
+        ):
+            serve_utils.connect_ray(20)
+        mock_init.assert_not_called()
+
+    def test_existing_cluster_branch_skips_check(self):
+        # KubeRay sizes the pod itself; MSHIP_NODE_NUM_GPUS isn't read there at all.
+        from modelship.deploy import serve_utils
+
+        with (
+            patch.dict(
+                os.environ,
+                {"MSHIP_USE_EXISTING_RAY_CLUSTER": "true", "MSHIP_NODE_NUM_GPUS": "99"},
+                clear=False,
+            ),
+            patch.object(serve_utils, "detect_gpus") as mock_detect,
+            patch.object(serve_utils.ray, "init"),
+        ):
+            serve_utils.connect_ray(20)
+        mock_detect.assert_not_called()
+
+
 class TestConnectRay:
     def _init_call(self, env, pop=()):
         """Returns the kwargs connect_ray passed to ray.init(). `pop` clears
@@ -756,6 +864,20 @@ class TestConnectRay:
         # Still on — MSHIP_RAY_DASHBOARD only ever changes the bind host now, never on/off.
         assert kwargs["include_dashboard"] is True
         assert kwargs["dashboard_host"] == "0.0.0.0"
+
+    def test_own_cluster_dashboard_port_absent_when_unset(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false"}, pop=("MSHIP_RAY_DASHBOARD_PORT",))
+        assert "dashboard_port" not in kwargs
+
+    def test_own_cluster_dashboard_port_overridable(self):
+        # Lets multiple modelship heads share one host under --network=host, where
+        # Ray's own dashboard port (8265) would otherwise collide between them.
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "false", "MSHIP_RAY_DASHBOARD_PORT": "8266"})
+        assert kwargs["dashboard_port"] == 8266
+
+    def test_existing_cluster_never_sets_dashboard_port(self):
+        kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true", "MSHIP_RAY_DASHBOARD_PORT": "8266"})
+        assert "dashboard_port" not in kwargs
 
     def test_existing_cluster_never_sets_dashboard_kwargs(self):
         kwargs = self._init_call({"MSHIP_USE_EXISTING_RAY_CLUSTER": "true"})

@@ -21,6 +21,7 @@ from modelship.deploy.actor_options import build_passthrough_env_vars
 from modelship.infer.infer_config import ModelshipConfig
 from modelship.logging import get_logger
 from modelship.openai.api import ModelshipAPI
+from modelship.preflight import detect_gpus
 from modelship.utils import rand_suffix
 
 if TYPE_CHECKING:
@@ -120,11 +121,15 @@ def _resolve_node_memory_kwargs() -> dict[str, int]:
 def _own_cluster_init_kwargs() -> dict[str, object]:
     """ray.init kwargs to start our own head. Dashboard always starts;
     MSHIP_RAY_DASHBOARD sets its bind host (default 127.0.0.1), not on/off.
+    MSHIP_RAY_DASHBOARD_PORT overrides Ray's fixed 8265 default — needed to run
+    multiple modelship heads on one host under --network=host.
     Resources auto-detect when MSHIP_NODE_NUM_*/MSHIP_NODE_MEMORY are unset."""
     kwargs: dict[str, object] = {
         "include_dashboard": True,
         "dashboard_host": os.environ.get("MSHIP_RAY_DASHBOARD", "127.0.0.1"),
     }
+    if dashboard_port := os.environ.get("MSHIP_RAY_DASHBOARD_PORT"):
+        kwargs["dashboard_port"] = int(dashboard_port)
     if cpus := os.environ.get("MSHIP_NODE_NUM_CPUS"):
         kwargs["num_cpus"] = int(cpus)
     if gpus := os.environ.get("MSHIP_NODE_NUM_GPUS"):
@@ -309,6 +314,33 @@ def leave_ray_cluster() -> None:
             logger.exception("Failed to stop the joined Ray node")
 
 
+def _validate_node_gpu_reservation() -> None:
+    """Refuse to start (own-head or join) if MSHIP_NODE_NUM_GPUS reserves more GPUs
+    than this container can actually see. Ray takes the reservation on faith and
+    advertises it cluster-wide; an inflated value means a later actor gets handed a
+    CUDA_VISIBLE_DEVICES index that doesn't exist in this container — which crashes
+    at model load, far from this misconfiguration, on whatever node happens to draw
+    the actor. Catching it here (at node startup, before any Ray process forms)
+    turns that into an immediate, legible error instead.
+
+    Deliberately not a same-host/cross-node check — reserving FEWER GPUs than are
+    visible (fencing a subset for another co-located container) is a legitimate,
+    unrelated configuration and is left alone; only the reservation-vs-visible
+    relationship on THIS node is checked."""
+    reserved = os.environ.get("MSHIP_NODE_NUM_GPUS")
+    if not reserved:
+        return
+    visible = len(detect_gpus())
+    if int(reserved) > visible:
+        raise RuntimeError(
+            f"--node-num-gpus={reserved} (MSHIP_NODE_NUM_GPUS) exceeds the {visible} GPU(s) this "
+            "container can actually see. Ray would advertise phantom capacity, and a replica "
+            "scheduled against it would fail at model load with a CUDA device error, not here. "
+            "Check that `docker run --gpus ...` exposes at least this many devices to this "
+            "container."
+        )
+
+
 def connect_ray(lib_level: int) -> None:
     use_existing_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() == "true"
     join_address = os.environ.get("MSHIP_ADDRESS")
@@ -317,6 +349,10 @@ def connect_ray(lib_level: int) -> None:
             "--address/MSHIP_ADDRESS and --use-existing-ray-cluster/MSHIP_USE_EXISTING_RAY_CLUSTER "
             "are mutually exclusive — pick one."
         )
+    if not use_existing_cluster:
+        # KubeRay sizes the pod itself (rayStartParams/pod resources); MSHIP_NODE_NUM_GPUS
+        # isn't read on that branch at all, so there's nothing to validate against.
+        _validate_node_gpu_reservation()
     os.environ.setdefault("RAY_GCS_RPC_TIMEOUT_S", "30")
 
     if use_existing_cluster:
