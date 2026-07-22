@@ -2,7 +2,8 @@
 
 ## Requirements
 
-- **Docker** (or Python 3.12+ with `uv` for local development)
+- **Docker** (or Python 3.12.10 with `uv` for local development — `uv` fetches this
+  exact version automatically, matching the repo's pinned `requires-python`)
 - **NVIDIA GPU** (optional) — 16 GB+ VRAM recommended for a full stack (LLM +
   TTS + STT + embeddings) via vLLM; 8 GB is sufficient for lighter setups.
   Not required when using the vLLM or llama.cpp backends on CPU
@@ -19,7 +20,7 @@ Three images are published from a single `Dockerfile`, all under
 |---|---|---|---|
 | Thin | *(none)* — bare tag | amd64, arm64 | Control/coordinator image, no torch/vllm. Runs the driver/head role only — cannot serve models by itself |
 | CUDA | `-cuda` | amd64 | GPU node image (vLLM, Diffusers, llama.cpp GPU offload) |
-| CPU | `-cpu` | amd64, arm64 | CPU node image (vLLM CPU backend, llama.cpp, Diffusers CPU) |
+| CPU | `-cpu` | amd64, arm64 | CPU node image (vLLM CPU backend, llama.cpp, stable_diffusion_cpp) |
 
 Floating tags (`:latest`, `:latest-cuda`, `:latest-cpu`) are single-node
 only — multi-node deployments must pin every node to the same `X.Y.Z`
