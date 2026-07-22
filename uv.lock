@@ -1688,7 +1688,7 @@ wheels = [
 
 [[package]]
 name = "modelship"
-version = "0.6.5"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "argparse" },

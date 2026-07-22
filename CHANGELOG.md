@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-07-22
+
+### Added
+- log a ready-to-paste join command at own-head startup
+- wire Ray cluster token auth across head, workers, and RayJob submitter
+- make co-located Ray nodes easy and verifiable instead of refusing them
+- add --node-memory flag to fence per-container RAM under host co-location
+- let docker run pass mship_deploy.py flags directly
+- bootstrap an empty coordinator when no --config is present on own-head
+- join a Ray cluster as a compute node via --address/--token
+- add --ray-port to pin the own-head GCS server port
+- download model weights actor-side instead of on the deploy driver
+- split Docker images into thin/cuda/cpu variants, fix CI's drifted CUDA pin
+- always-on Ray dashboard, opt-in cluster auth, node-scoped resource flags
+
+### Fixed
+- fix unreadable tabs/links/buttons in dark mode
+- render Material icon shortcodes instead of literal text
+- pin docs workflow to exact Python 3.12.10
+- don't claim durable state when the default store is in-memory
+- diagram caption undersold gateway scaling, oversold state durability
+- expand ~ in parse_model_ref so local tilde paths resolve
+- never pin a joining node's Ray metrics export port
+- treat a pathy model ref as local even when it doesn't exist yet
+- stop permanently evicting fatally-failed models from effective config
+- bail loudly when --ray-auth=token can't be honored safely
+
+### Changed
+- link the hosted docs site from the README
+- fix installation.md Python version and CPU image contents
+- move docs site to docs.model-ship.ai, not the apex
+- build MkDocs Material site for GitHub Pages / model-ship.ai
+- reposition README around the self-hosted agent backend
+- trim mship_deploy.py comments to at most 2 lines
+- reframe production-readiness's Compose item as non-K8s docker run
+- add multi-node-without-Kubernetes guide, fix stale cross-node download docs
+- drop dead ray_auth_is_safe() guard, resolve auth env unconditionally
+- resolve HF repo listing and revision via a single model_info call
+
 ## [0.6.5] - 2026-07-16
 
 ### Added

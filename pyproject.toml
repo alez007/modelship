@@ -1,6 +1,6 @@
 [project]
 name = "modelship"
-version = "0.6.5"
+version = "0.7.0"
 description = "The production backend for self-hosted agents — the OpenAI Responses API with server-side conversation state (durable with Redis), universal tool calling, and reasoning, alongside embeddings, speech, and image generation, behind one OpenAI-compatible endpoint. Built on Ray Serve."
 authors = [
     { name = "Alex Margarit" }
