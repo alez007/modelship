@@ -7,13 +7,13 @@ Operational notes for agents working in this repo. Read before making changes.
 - Python is pinned exactly to `3.12.10` (`requires-python = "==3.12.10"`). Not `>=3.12`.
 - Dependency manager is **uv** with a workspace. Plugins under `plugins/*` are workspace members.
 - Never run `pip install`; always use `uv sync` / `uv run` / `uv lock`.
-- `gpu` and `cpu` extras are mutually exclusive (declared in `[tool.uv] conflicts`). `torch` / `torchvision` come from different indexes per extra (`pytorch-cu128` vs `pytorch-cpu`).
+- `cuda` and `cpu` extras are mutually exclusive (declared in `[tool.uv] conflicts`). `torch` / `torchvision` come from different indexes per extra (`pytorch-cu130` vs `pytorch-cpu`). A third extra, `thin`, is empty (base deps only) — no torch/vllm, used by the thin control/coordinator image.
 
 ## Commands you'd otherwise guess wrong
 
 ```bash
-# Install deps for development (choose gpu OR cpu, plus dev, plus any plugin extras)
-uv sync --extra dev --extra gpu                    # what CI uses
+# Install deps for development (choose cuda OR cpu, plus dev, plus any plugin extras)
+uv sync --extra dev --extra cuda                   # what CI uses
 uv sync --extra dev --extra cpu                    # CPU-only dev
 uv sync --extra dev --extra cpu --extra kokoroonnx # with a plugin
 
@@ -26,9 +26,9 @@ make test        # uv run pytest tests/ -v
 uv run pytest tests/test_config.py::TestLlamaServerConfig::test_defaults -v
 ```
 
-CI (`.github/workflows/ci.yml`) runs `uv sync --extra dev --extra gpu` on Linux, then `ruff check`, `ruff format --check`, `pyright`, and `pytest tests/ -v`. Match that locally before pushing.
+CI (`.github/workflows/ci.yml`) runs `uv sync --extra dev --extra cuda` on Linux, then `ruff check`, `ruff format --check`, `pyright`, and `pytest tests/ -v`. Match that locally before pushing.
 
-`make lint` requires `--extra gpu` to be installed. Pyright resolves imports against the active venv, and `gguf`, `diffusers`, and `psutil` only ship under the gpu extra, so lint on a cpu-only sync fails with `reportMissingImports`. (`vllm` is importable under both extras as of the Stage E0 CPU wheel wiring — it's no longer gpu-only, just not enough on its own to make lint pass cpu-only.) Tests run fine on either extra (the gpu extra is a superset).
+`make lint` requires `--extra cuda` to be installed. Pyright resolves imports against the active venv, and `gguf`, `diffusers`, and `psutil` only ship under the cuda extra, so lint on a cpu-only sync fails with `reportMissingImports`. (`vllm` is importable under both extras as of the Stage E0 CPU wheel wiring — it's no longer cuda-only, just not enough on its own to make lint pass cpu-only.) Tests run fine on either extra (the cuda extra is a superset).
 
 Agents: when running tests on your own initiative (sanity-checking a change, verifying a bump), skip the slow `integration`-marked suite by default — `uv run pytest tests/ -v -m "not integration"`. Only run the full `make test` (which includes integration) when explicitly requested.
 
@@ -57,11 +57,13 @@ When in doubt, check OpenAI's reference for the exact route. Existing deviations
 Entry point is `mship_deploy.py` (not a console script, not `python -m`). It:
 
 1. Reads `config/models.yaml` (gitignored — copy one from `config/examples/`).
-2. Starts its **own** Ray head by default (sized from `RAY_HEAD_CPU_NUM`/`RAY_HEAD_GPU_NUM`, auto-detected if unset; metrics on `RAY_METRICS_EXPORT_PORT`) and tears it down on exit. With `--use-existing-ray-cluster` it instead connects to a cluster you manage via `ray.init(address="auto")` and deploys-and-exits without teardown — the driver must run **on** a cluster node (Docker co-located / k8s RayJob / bare-metal node); it cannot attach from off-cluster.
+2. Starts its **own** Ray head by default (sized from `MSHIP_NODE_NUM_CPUS`/`MSHIP_NODE_NUM_GPUS`, auto-detected if unset; metrics on `RAY_METRICS_EXPORT_PORT`) and tears it down on exit. With `--use-existing-ray-cluster` it instead connects to a cluster you manage via `ray.init(address="auto")` and deploys-and-exits without teardown — the driver must run **on** a cluster node (Docker co-located / k8s RayJob / bare-metal node); it cannot attach from off-cluster.
 3. Deploys models **additively** by default (new deployments get a random suffix, e.g. `qwen-a3f9k`). Pass `--reconcile` to instead make the cluster match the config exactly (add/remove/replace) — it never tears the cluster down.
 4. Starts a FastAPI gateway Ray Serve app named `modelship api` (override with `--gateway-name`), listening on port `8000`.
 
-The Docker image's `CMD` is `uv run --no-sync mship_deploy.py` (against the venv baked at build time; extras selected by `--build-arg MSHIP_VARIANT=gpu|cpu`), which starts its own Ray head and runs the deploy loop. Plugin wheels under `MSHIP_PLUGIN_WHEEL_DIR` are injected per-deployment via Ray `runtime_env`, resolved automatically from `models.yaml`. The Dev Container overrides this `CMD`, so inside a Dev Container you run `mship_deploy.py` manually (see `docs/development.md`).
+The Docker image's `CMD` is `uv run --no-sync mship_deploy.py` (against the venv baked at build time; extras selected by `--build-arg MSHIP_VARIANT=thin|cpu|cuda`), which starts its own Ray head and runs the deploy loop. Plugin wheels under `MSHIP_PLUGIN_WHEEL_DIR` are injected per-deployment via Ray `runtime_env`, resolved automatically from `models.yaml`. The Dev Container overrides this `CMD`, so inside a Dev Container you run `mship_deploy.py` manually (see `docs/development.md`).
+
+Right after connecting to Ray, the driver logs the cluster's observed totals (`Connected to Ray: N node(s), X GPU / Y CPU total (Xa GPU / Ya CPU schedulable now)`) — useful for telling a legitimately-waiting head (0 schedulable resources, no workers joined yet) apart from a misconfigured one.
 
 ## Architecture quick map
 
@@ -104,10 +106,22 @@ Commit messages matter: use Conventional Commits prefixes so the changelog gener
 - vLLM version is pinned (`vllm==0.24.0`). Do not bump casually — the TP scheduling logic in `mship_deploy.py:build_deployment_options` defaults to the Ray V2 executor, and the loader imports vLLM-internal `entrypoints.*` module paths that upstream restructures between minors.
 - **GGUF is not supported on the `vllm` loader.** 0.24 moved GGUF out of tree; the only external `vllm-gguf-plugin` (`0.0.2`) has a stale `override_quantization_method` signature incompatible with 0.24's quantization API (it breaks *all* quantized models, not just GGUF), so it is deliberately not installed. `resolve_all_model_sources` rejects a `.gguf` on the vllm loader at driver preflight and points to `llama_server`. For GGUF use `loader: llama_server`; feed the vllm loader safetensors or an AWQ/GPTQ/FP8 quant.
 - `llama_server` loader (GGUF) launches a `llama-server` subprocess — found via `MSHIP_LLAMA_SERVER_BIN`, pinned in the Docker images at `/opt/llama.cpp/llama-server.sh` — and proxies its native OpenAI API instead of parsing output in-process. `num_gpus` must be `0` or a whole integer — fractional is rejected at config time (llama.cpp has no VRAM-fraction knob). `num_gpus >= 1` honors `n_gpu_layers`; `stable_diffusion_cpp` remains forced to `num_gpus: 0` in `mship_deploy.py:build_deployment_options`. `--parallel` slots give real request concurrency instead of serializing behind a single lock. Tool-call/reasoning parsing is llama-server's own, auto-detected per chat template: named-function `tool_choice` forcing is unsupported globally (silently falls back to `auto`), and `tool_choice: required` is grammar-enforced for harmony-style templates but a silent no-op for hermes-style ones (e.g. Qwen3); bare `response_format: {"type": "json_object"}` (no `schema` key) is also unenforced despite llama-server's own docs claiming support — `type: json_schema` requests (what modelship sends whenever a schema is given) are unaffected. No persistent on-disk prompt cache. See `docs/model-configuration.md`'s llama_server section for the full field table and examples.
+- **Ray sums per-node resource reports with zero cross-node hardware awareness** — not IP-based, not GPU-UUID-based, nothing. Every raylet self-reports (auto-detected or explicit `--node-num-cpus`/`--node-num-gpus`/`--node-memory`) and the cluster total is a blind sum. This only bites when 2+ modelship containers actually share physical hardware — separate hosts, and k8s pods with correctly-set `resources.requests/limits` (the NVIDIA device plugin hands out disjoint GPU UUIDs; kubelet enforces real cgroup CPU/memory quotas), are unaffected. Co-locating containers on one host requires manually fencing disjoint hardware *before* Ray starts: `--gpus device=0` / `device=1` (not `--gpus=all` on more than one container — CUDA_VISIBLE_DEVICES has no cross-container coordination either, so two `--node-num-gpus=1` containers both sharing `--gpus=all` will both land their actor on physical GPU 0, not split 0/1), and a real per-container memory limit (`docker run --memory=`) or `--node-memory` (splits into Ray's `object_store_memory`/30% + schedulable `memory`/70%, matching Ray's own auto-detect proportion) so each container's memory auto-detect doesn't independently claim the whole host. CPU has no such fencing flag beyond `--node-num-cpus` itself — pair it with `--cpuset-cpus` if you need real isolation, not just accounting.
 - Metrics are on by default on port **8079** (not 8000). Disable with `--no-metrics` or `MSHIP_METRICS=false`.
 - Preflight hardware auto-sizing is on by default. Disable with `--no-preflight` or `MSHIP_PREFLIGHT=false` to run models on loader/library defaults plus explicit `models.yaml` config only — useful for benchmarking across hardware.
 - Log level `TRACE` (below `DEBUG`) is a custom level and logs full request/response payloads.
-- Docker images are multi-arch (amd64 + arm64). The CPU image uses the unified `Dockerfile` with `--build-arg MSHIP_VARIANT=cpu` and has a different tag suffix (`:latest-cpu`).
+- Three images are published from the unified `Dockerfile` (`--build-arg MSHIP_VARIANT=thin|cpu|cuda`), all under `ghcr.io/alez007/modelship`:
+
+  | Variant | Tag | Platforms | Contains |
+  |---|---|---|---|
+  | thin (control/coordinator) | `:X.Y.Z`, `:latest` | amd64, arm64 | base only — no torch/vllm |
+  | cuda (GPU node) | `:X.Y.Z-cuda`, `:latest-cuda` | amd64 | torch cu130 + vllm + CUDA runtime |
+  | cpu (CPU node) | `:X.Y.Z-cpu`, `:latest-cpu` | amd64, arm64 | torch CPU + vllm CPU wheel |
+
+  Floating tags (`:latest*`) are single-node only — Ray refuses to form a cluster across mismatched
+  versions, so any multi-node deployment pins every node to the same `X.Y.Z` (or `-cuda`/`-cpu`) tag.
+  A thin container bakes `MSHIP_NODE_NUM_CPUS=0`/`MSHIP_NODE_NUM_GPUS=0` so it never advertises
+  capacity it can't serve — it's a driver/coordinator role, not a compute node.
 
 ## Further reading
 

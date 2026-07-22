@@ -16,6 +16,7 @@ class GPUInfo:
     index: int
     available_bytes: int  # free VRAM at preflight time, not the device's total capacity
     name: str
+    uuid: str | None = None  # e.g. "GPU-<uuid>"; None when the probe can't read it (see per-probe notes)
 
 
 @dataclass(frozen=True)
@@ -276,7 +277,10 @@ def _torch_cuda_discover() -> list[GPUInfo]:
                 # context yet and lazy init refuses), fall back to total —
                 # better than nothing, the runtime ValueError will catch it.
                 available = int(props.total_memory)
-            gpus.append(GPUInfo(index=i, available_bytes=available, name=props.name))
+            # `uuid` on device properties was added in a torch 2.x release; guard for
+            # older builds rather than raising out of a hardware-discovery probe.
+            uuid = f"GPU-{props.uuid}" if getattr(props, "uuid", None) is not None else None
+            gpus.append(GPUInfo(index=i, available_bytes=available, name=props.name, uuid=uuid))
         return gpus
     except Exception:
         logger.debug("preflight: torch.cuda probe failed", exc_info=True)
@@ -309,7 +313,10 @@ def _pynvml_node_discover() -> list[GPUInfo]:
             name = pynvml.nvmlDeviceGetName(handle)
             if isinstance(name, bytes):
                 name = name.decode("utf-8", errors="replace")
-            gpus.append(GPUInfo(index=i, available_bytes=int(mem.free), name=name))
+            uuid = pynvml.nvmlDeviceGetUUID(handle)
+            if isinstance(uuid, bytes):
+                uuid = uuid.decode("utf-8", errors="replace")
+            gpus.append(GPUInfo(index=i, available_bytes=int(mem.free), name=name, uuid=uuid))
         return gpus
     except Exception:
         logger.debug("preflight: pynvml node discovery failed", exc_info=True)

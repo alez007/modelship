@@ -34,7 +34,7 @@ Future development priorities for making Modelship production-ready, organized b
 
 - [x] **Kubernetes manifests** — KubeRay `RayCluster` + `RayJob`, gateway `Service`, models `ConfigMap`, cache `PVC`, secrets, optional `PodMonitor` (via the Helm chart in `helm/modelship`), with resource requests/limits, GPU scheduling, node affinity, and tolerations per worker group
 - [x] **Helm chart** — parameterized deployment in `helm/modelship` (see its README)
-- [ ] **Docker Compose** — for simpler non-K8s deployments
+- [x] **Simpler non-K8s deployment** — reframed from "Docker Compose": Compose orchestrates a single host and can't form a cluster across VMs, so it was never going to satisfy this literally. The supported path is own-head/join `docker run` (see [docs/multi-node-docker.md](multi-node-docker.md)) — a few VMs, no orchestrator, joined into one Ray cluster via `--address`/`--token`. Compose remains a possible single-host convenience wrapper around the existing single-container mode, not planned work.
 - [x] **Liveness/readiness probes in container spec** — KubeRay gates each Ray pod on a Serve proxy `/-/healthz` check (via the named `serve` port); `/readyz` returns 503 until all models load, suitable for an external LB/Ingress health check
 
 ### Alerting & Observability

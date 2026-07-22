@@ -1,16 +1,32 @@
 import logging
 import os
 import random
+import re
 import string
-import uuid
 from collections.abc import Iterable
 from typing import Any
 
 import requests
 
-from modelship.infer.infer_config import RawRequestProxy
+from modelship.utils.request_id import base_request_id as base_request_id
+from modelship.utils.request_id import random_uuid
 
 _RAND_CHARS = string.ascii_lowercase + string.digits
+
+_MEMORY_SIZE_RE = re.compile(r"(\d+)\s*(ki|mi|gi|ti)?", re.IGNORECASE)
+_MEMORY_UNIT_MULTIPLIERS = {"": 1, "ki": 1024, "mi": 1024**2, "gi": 1024**3, "ti": 1024**4}
+
+
+def parse_memory_bytes(value: str) -> int:
+    """Parse a memory size into bytes: a bare integer (bytes) or a binary-unit
+    suffix (Ki/Mi/Gi/Ti, case-insensitive) — matching the Helm chart's own
+    `memory: 8Gi` convention (helm/modelship/values.yaml) rather than introducing
+    a second SI/decimal convention alongside it."""
+    match = _MEMORY_SIZE_RE.fullmatch(value.strip())
+    if not match:
+        raise ValueError(f"Invalid memory size {value!r}; expected e.g. '8Gi', '512Mi', or a plain byte count")
+    num, unit = match.groups()
+    return int(num) * _MEMORY_UNIT_MULTIPLIERS[(unit or "").lower()]
 
 
 def drop_reserved_kwargs(
@@ -30,19 +46,8 @@ def drop_reserved_kwargs(
     return {k: v for k, v in kwargs.items() if k not in reserved}
 
 
-def random_uuid() -> str:
-    return str(uuid.uuid4().hex)
-
-
 def rand_suffix(length: int = 5) -> str:
     return "".join(random.choices(_RAND_CHARS, k=length))
-
-
-def base_request_id(raw_request: RawRequestProxy | None = None) -> str:
-    """Return the request ID from a RawRequestProxy, or generate a new one."""
-    if raw_request is not None and raw_request.request_id is not None:
-        return raw_request.request_id
-    return random_uuid()
 
 
 def download(url: str, file_path: str, overwrite: bool = False):

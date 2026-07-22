@@ -77,16 +77,6 @@ def deployment_names(raw_models: list[dict], gateway_name: str) -> set[str]:
     return {_deployment_name(d, gateway_name) for d in raw_models}
 
 
-def evict_failed(raw_models: list[dict], gateway_name: str, failed_deployment_names: set[str]) -> list[dict]:
-    """Drop models whose deployment fatally failed, so a re-assert doesn't loop
-    forever on a permanently-broken config. Only *fatal* (permanent init error)
-    deployments are passed here — transient/capacity failures keep retrying and
-    are never evicted."""
-    if not failed_deployment_names:
-        return list(raw_models)
-    return [d for d in raw_models if _deployment_name(d, gateway_name) not in failed_deployment_names]
-
-
 def to_config(raw_models: list[dict]) -> ModelshipConfig:
     """Validate raw model dicts into a ModelshipConfig for the deploy path."""
     return ModelshipConfig.model_validate({"models": raw_models})

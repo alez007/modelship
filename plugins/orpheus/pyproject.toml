@@ -19,4 +19,4 @@ module-name = "orpheus"
 module-root = ""
 
 [tool.modelship]
-supports = ["gpu"]
+supports = ["cuda"]

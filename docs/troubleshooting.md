@@ -28,9 +28,9 @@ Ray's object store needs shared memory. Always pass `--shm-size=8g` (or larger f
 
 ## arm64 vs amd64 image selection
 
-Both `ghcr.io/alez007/modelship:latest` and `:latest-cpu` are multi-arch since v0.1.25. Docker picks the right one automatically for your host. If you need to force an arch (e.g. cross-building), use `--platform linux/arm64` or `linux/amd64`.
+`ghcr.io/alez007/modelship:latest` (thin) and `:latest-cpu` are multi-arch (amd64 + arm64). Docker picks the right one automatically for your host. If you need to force an arch (e.g. cross-building), use `--platform linux/arm64` or `linux/amd64`.
 
-Note that the GPU (`latest`) image on arm64 will only be useful on arm64 hosts with NVIDIA GPUs (e.g. Jetson, GH200) — not Apple Silicon. For Apple Silicon, use `latest-cpu`.
+`:latest-cuda` is **amd64-only** — the Dockerfile hard-wires the x86_64 CUDA apt repo and torch's CUDA wheels aren't guaranteed for arm64 at this pin. arm64+CUDA hosts (Jetson, GH200) aren't supported by this image; use `:latest-cpu` there, or build a custom image. Apple Silicon should always use `:latest-cpu` (no CUDA path applies).
 
 ## Port 8000 already in use
 
@@ -56,4 +56,5 @@ The API binds to `0.0.0.0:8000` by default, but if you're on a remote machine, m
 
 - Set `MSHIP_LOG_LEVEL=DEBUG` for verbose logs.
 - Set `MSHIP_LOG_LEVEL=TRACE` to log full request/response payloads (and enable llama.cpp `verbose` mode).
-- The Ray dashboard is **disabled by default** to save host RAM. Start the container with `MSHIP_RAY_DASHBOARD=true` (and publish port `8265`) to get per-actor logs and resource usage in the UI. Prometheus metrics on `8079` are exported regardless.
+- The Ray dashboard is **always on**, publish port `8265` to reach it. It binds to `127.0.0.1` inside the container by default — set `MSHIP_RAY_DASHBOARD=0.0.0.0` (or a specific interface) to expose it beyond the container. This is the exposure vector behind ShadowRay/CVE-2023-48022, so only do this on a trusted/private network. Prometheus metrics on `8079` are exported regardless.
+- Ray cluster authentication is **off by default**. Pass `--ray-auth=token` when modelship starts its own head to require a bearer token for the dashboard and cluster-internal RPC — the dashboard UI will then ask for one on first load; retrieve it with `docker exec <container> cat /home/modelship/.ray/auth_token` and paste it in once. The OpenAI API on `8000` and Prometheus metrics on `8079` are never gated by this either way.

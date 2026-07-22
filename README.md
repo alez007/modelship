@@ -145,7 +145,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ### GPU (vLLM, Diffusers)
 
-For high-throughput GPU inference, use the standard image and add `--gpus all`. You'll also need the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and an `HF_TOKEN` for gated models. Example `models.yaml` entries for vLLM, Diffusers, and multi-GPU setups live in [docs/model-configuration.md](docs/model-configuration.md); ready-to-run configs are in [config/examples/](config/examples/).
+For high-throughput GPU inference, use the `-cuda` image and add `--gpus all`. You'll also need the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and an `HF_TOKEN` for gated models. Example `models.yaml` entries for vLLM, Diffusers, and multi-GPU setups live in [docs/model-configuration.md](docs/model-configuration.md); ready-to-run configs are in [config/examples/](config/examples/).
 
 ```bash
 docker run --rm --shm-size=8g --gpus all \
@@ -153,8 +153,11 @@ docker run --rm --shm-size=8g --gpus all \
   -v ./models.yaml:/modelship/config/models.yaml \
   -v ./models-cache:/.cache \
   -p 8000:8000 \
-  ghcr.io/alez007/modelship:latest
+  ghcr.io/alez007/modelship:latest-cuda
 ```
+
+> [!NOTE]
+> `ghcr.io/alez007/modelship:latest` (bare tag, no suffix) is the **thin** control/coordinator image — no torch/vllm, for a driver/head role only. It cannot serve models by itself; always use `-cuda` or `-cpu` to actually run inference. See [docs/development.md](docs/development.md) for the full three-image breakdown.
 
 > [!TIP]
 > Always set `--shm-size=8g` (or higher) when running the docker container to prevent PyTorch from hitting shared memory limits during multi-process operations.
@@ -186,6 +189,7 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 
 - [Development](docs/development.md) — dev environment setup, building, and running locally
 - [Model Configuration](docs/model-configuration.md) — full `models.yaml` reference, GPU pinning, environment variables
+- [Multi-node without Kubernetes](docs/multi-node-docker.md) — join VMs into one Ray cluster with plain `docker run`, no orchestrator
 - [Architecture](docs/architecture.md) — system design, request lifecycle, plugin loading
 - [Plugin Development](docs/plugins.md) — writing custom TTS/STT backends
 - [Monitoring & Logging](docs/monitoring.md) — Prometheus metrics, Grafana dashboard, structured logging, health checks

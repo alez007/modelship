@@ -43,9 +43,12 @@ def build_passthrough_env_vars() -> dict[str, str]:
 
 
 def build_cache_env_vars() -> dict[str, str]:
-    """Resolve HF / vLLM / FlashInfer cache dirs, all rooted at MSHIP_CACHE_DIR."""
+    """Resolve HF / vLLM / FlashInfer cache dirs, all rooted at MSHIP_CACHE_DIR.
+
+    Also forwards HF_TOKEN/HF_HUB_OFFLINE when set on the driver, so an actor
+    downloading a gated/offline model has the same auth."""
     base_cache = os.environ.get("MSHIP_CACHE_DIR", "/.cache")
-    return {
+    env_vars = {
         "HF_HOME": os.environ.get("HF_HOME", f"{base_cache}/huggingface"),
         "VLLM_CACHE_ROOT": os.environ.get("VLLM_CACHE_ROOT", f"{base_cache}/vllm"),
         "FLASHINFER_CACHE_DIR": os.environ.get("FLASHINFER_CACHE_DIR", f"{base_cache}/flashinfer"),
@@ -54,6 +57,10 @@ def build_cache_env_vars() -> dict[str, str]:
         # vLLM's usage-stats thread writes usage_stats.json/do_not_track here
         "VLLM_CONFIG_ROOT": os.environ.get("VLLM_CONFIG_ROOT", f"{base_cache}/vllm-config"),
     }
+    for var in ("HF_TOKEN", "HF_HUB_OFFLINE"):
+        if os.environ.get(var) is not None:
+            env_vars[var] = os.environ[var]
+    return env_vars
 
 
 def _plugin_wheel_dir() -> Path:

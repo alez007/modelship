@@ -58,7 +58,7 @@ BENCH_DIR="$REPO_ROOT/bench"
 # shellcheck source=bench/lib.sh
 source "$BENCH_DIR/lib.sh"
 
-# modelship's own CLAUDE.md/Dockerfile convention: gpu/cpu are separate image
+# modelship's own CLAUDE.md/Dockerfile convention: cuda/cpu are separate image
 # variants (mutually exclusive extras, different vllm wheel index), and the
 # published image tags a cpu build with a "-cpu" suffix.
 if [[ -z "$IMAGE" ]]; then

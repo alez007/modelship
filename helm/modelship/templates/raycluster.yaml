@@ -54,6 +54,9 @@ spec:
               - { name: metrics, containerPort: {{ .Values.metrics.port }} }
             env:
               {{- include "modelship.env" . | nindent 14 }}
+              {{- if .Values.rayAuth.enabled }}
+              {{- include "modelship.rayAuthEnv" . | nindent 14 }}
+              {{- end }}
             envFrom:
               {{- include "modelship.envFrom" . | nindent 14 }}
             resources:
@@ -118,8 +121,8 @@ spec:
           # Per-group image override: a worker group may set its own `image`
           # (repository/tag/variant/pullPolicy); any field left unset falls back to
           # the cluster-wide `image`. Lets a lean CPU image run cluster-wide while
-          # the GPU group pulls the full GPU image — set `variant: gpu` on that group
-          # (both built at the same Ray version).
+          # the GPU group pulls the full CUDA image — set `variant: cuda` on that
+          # group (both built at the same Ray version).
           {{- $img := .image | default dict }}
           containers:
             - name: ray-worker
@@ -135,6 +138,9 @@ spec:
                 - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
               env:
                 {{- include "modelship.env" $ | nindent 16 }}
+                {{- if $.Values.rayAuth.enabled }}
+                {{- include "modelship.rayAuthEnv" $ | nindent 16 }}
+                {{- end }}
               envFrom:
                 {{- include "modelship.envFrom" $ | nindent 16 }}
               resources:
