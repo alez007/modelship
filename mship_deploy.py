@@ -3,35 +3,23 @@ import signal
 import sys
 import time
 
-# Must be set BEFORE `import ray`: ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV
-# is a module-level constant, evaluated at ray's import time. Leaving it on
-# makes Ray auto-inject `py_executable="uv run --python X"` whenever the driver
-# runs under `uv run`, which overrides the per-job virtualenv that
-# runtime_env.pip creates for plugin wheels — breaking plugin imports in the
-# worker. Keep the uv hook off so runtime_env.pip's py_executable survives.
+# Must precede `import ray`: this constant latches at ray's import time. Off, so
+# runtime_env.pip's per-job py_executable isn't overridden by uv's auto-injection.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "false")
 
-# Set HF / vLLM / FlashInfer cache dirs BEFORE importing anything that
-# transitively pulls in `huggingface_hub` — its `HF_HOME` constant is latched
-# at import time, so setting the env later does nothing. Driver-side downloads
-# (the model resolver) and Ray workers must agree on the cache path; workers
-# get these via runtime_env.env_vars in actor_options.build_cache_env_vars.
+# Must precede any huggingface_hub import — HF_HOME latches at its import time.
+# Workers get these via runtime_env.env_vars (actor_options.build_cache_env_vars).
 _BASE_CACHE = os.environ.get("MSHIP_CACHE_DIR", "/.cache")
 os.environ.setdefault("HF_HOME", f"{_BASE_CACHE}/huggingface")
 os.environ.setdefault("VLLM_CACHE_ROOT", f"{_BASE_CACHE}/vllm")
 os.environ.setdefault("FLASHINFER_CACHE_DIR", f"{_BASE_CACHE}/flashinfer")
 
-# Set RAY_LOG_LEVEL/RAY_SERVE_LOG_LEVEL/VLLM_LOGGING_LEVEL/TRANSFORMERS_VERBOSITY
-# from MSHIP_LOG_LEVEL BEFORE `import ray` — Ray's loggers latch the env value
-# at import time, so configuring them later (in configure_logging) is too late
-# for the driver process. The level is env-var-only (no CLI flag) since argv
-# is parsed inside main(), well after `import ray`.
+# Sets RAY_LOG_LEVEL/etc. from MSHIP_LOG_LEVEL before `import ray`, which latches
+# them at import time — env-var only since argv parsing happens after this import.
 from modelship.logging import configure_logging, get_lib_log_config, get_logger, propagate_lib_log_env  # noqa: E402
 
-# These imports are ray-free by design (modelship.utils.cli pulls no ray, and
-# modelship.utils.ray_auth deliberately imports nothing under ray.*), so they can
-# run before `import ray` — which is the whole point: argv must be parsed and
-# Ray's auth env vars resolved BEFORE ray is imported (see main()).
+# Ray-free by design, so they can run before `import ray` — argv must be parsed
+# and auth env resolved (see main()) before Ray's auth singleton latches.
 from modelship.utils.cli import apply_args_to_env, parse_args  # noqa: E402
 from modelship.utils.ray_auth import resolve_ray_auth_env  # noqa: E402
 
@@ -45,8 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     apply_args_to_env(args)
     # Ray latches RAY_AUTH_MODE into a C++ singleton at `import ray`, so resolve
-    # the auth env vars from the now-applied MSHIP_* args and import ray only
-    # afterward. Everything below this point may import ray freely.
+    # auth env vars first; everything below this point may import ray freely.
     resolve_ray_auth_env()
 
     import ray
@@ -86,10 +73,8 @@ def main(argv: list[str] | None = None) -> None:
     from modelship.preflight import detect_gpus
     from modelship.state import MemoryStateStore, get_state_store
 
-    # Captured before the unconditional os.environ["MSHIP_GATEWAY_NAME"] write
-    # below clobbers it — True only when the operator named this gateway
-    # explicitly (--gateway-name or a pre-set env var), used by the join
-    # branch's gateway-name footgun guard further down.
+    # Captured before the unconditional env write below clobbers it — True only when
+    # named explicitly; used by the join branch's gateway-name footgun guard below.
     explicit_gateway = "MSHIP_GATEWAY_NAME" in os.environ
 
     configure_logging()
@@ -97,36 +82,23 @@ def main(argv: list[str] | None = None) -> None:
     # Export the resolved name so it rides along to each replica via runtime_env
     # passthrough — that's how metrics.py stamps every metric with its gateway.
     os.environ["MSHIP_GATEWAY_NAME"] = gateway_name
-    # apply_args_to_env (above) has folded --use-existing-ray-cluster/--address into
-    # these env vars, the same sources connect_ray uses. Three lifecycle states,
-    # not a boolean:
-    #  - own-head (neither set): this process forms the cluster and tears it down
-    #    on exit.
-    #  - --use-existing-ray-cluster (KubeRay): one-shot deployer against a cluster
-    #    this process doesn't own — exit after deploying, never tear anything down.
-    #  - --address (join): joins another cluster as an additional node and stays
-    #    resident contributing resources, but never owns/tears down the cluster.
+    # apply_args_to_env has folded --use-existing-ray-cluster/--address into these env
+    # vars: own-head owns teardown, existing-cluster is one-shot, join stays resident.
     joined_cluster = bool(os.environ.get("MSHIP_ADDRESS"))
     owns_cluster = os.environ.get("MSHIP_USE_EXISTING_RAY_CLUSTER", "false").lower() != "true" and not joined_cluster
-    # Library log level (one step above app level). Used to silence Ray Serve's
-    # system actors (controller/proxy/replica access logs) and Ray's driver
+    # One step above app level; silences Ray Serve's system actors and Ray's driver
     # logger, which both ignore Python-level setLevel from the parent process.
     lib_level, lib_level_name = get_lib_log_config()
     serve_logging_config = LoggingConfig(log_level=lib_level_name)
 
-    # Registered BEFORE connect_ray(), not just before the fuller _cleanup handler
-    # further down: the join branch brings up this node's raylet in-process and
-    # then blocks on ray.init(address="auto") for several real seconds, and a
-    # signal arriving during that window (confirmed reachable running the real
-    # join path end-to-end) would otherwise hit Python's default SIGTERM behavior
-    # (immediate termination, no cleanup) since no custom handler exists yet,
-    # leaving the just-started node's subprocesses running. leave_ray_cluster()
-    # is a safe no-op pre-join (ray.shutdown() on an unconnected driver, no
-    # _join_node to tear down). The real _cleanup handler registered later
-    # overwrites this one once main() reaches that point.
+    # Registered before connect_ray(): its own-head/join branches take real time to spawn
+    # processes, so a signal here must still branch like _cleanup does, not leave orphans.
     def _early_cleanup(sig, _frame) -> None:
         logger.info("Shutting down (signal %s) during connect...", sig)
-        leave_ray_cluster()
+        if joined_cluster:
+            leave_ray_cluster()
+        elif owns_cluster:
+            shutdown_ray()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _early_cleanup)
@@ -146,10 +118,8 @@ def main(argv: list[str] | None = None) -> None:
         available_resources.get("CPU", 0),
     )
 
-    # Ready-to-paste join command, own-head only (a join/existing-cluster node isn't
-    # itself something else can join). gcs_address is read from the live runtime
-    # context, not guessed from MSHIP_RAY_PORT/its default — it's always the address
-    # Ray actually bound, regardless of what determined it.
+    # Own-head only — a join/existing-cluster node isn't itself joinable. gcs_address
+    # comes from the live runtime context, not guessed from MSHIP_RAY_PORT/its default.
     if owns_cluster:
         gcs_address = ray.get_runtime_context().gcs_address
         intended_port = os.environ.get("RAY_GCS_SERVER_PORT")
@@ -174,11 +144,8 @@ def main(argv: list[str] | None = None) -> None:
             token_hint,
         )
 
-    # This node's own physical GPUs (index/name/UUID), independent of Ray's cluster-wide
-    # tally above. When co-locating multiple modelship node containers on one host — a
-    # head-farm box, or a GPU deliberately shared across separate clusters — this line is
-    # how an operator verifies each container was actually handed a distinct physical
-    # card (e.g. via `docker run --gpus device=N`), rather than the same one twice.
+    # This node's own physical GPUs, independent of Ray's cluster-wide tally above —
+    # lets an operator verify co-located containers got distinct physical cards.
     for gpu in detect_gpus():
         logger.info(
             "This node sees GPU %d: %s (uuid=%s, %s free)",
@@ -197,12 +164,8 @@ def main(argv: list[str] | None = None) -> None:
     if fresh_install:
         logger.info("No existing gateway found — treating as fresh install.")
 
-    # A joiner that defaults to _DEFAULT_GATEWAY_NAME while the cluster's real
-    # gateway runs under a different explicit name would otherwise see
-    # fresh_install=True and silently stand up a second, phantom gateway (plus
-    # seed coordinator state under that name). A join may only create a gateway
-    # it explicitly named; own-head/existing-cluster are unaffected (create_gateway
-    # is always True there).
+    # Without this, a joiner defaulting to _DEFAULT_GATEWAY_NAME could see fresh_install
+    # and silently stand up a second, phantom gateway. A join needs an explicit name.
     create_gateway = owns_cluster or explicit_gateway
     phantom_gateway = fresh_install and not create_gateway
     if phantom_gateway:
@@ -213,17 +176,13 @@ def main(argv: list[str] | None = None) -> None:
             gateway_name,
         )
 
-    # Fold the user's input into this gateway's durable effective config, then
-    # deploy by ALWAYS reconciling live -> effective. The mode only decides how the
-    # input merges (additive=union, reconcile=replace); the deploy itself
-    # is always a reconcile — that's what makes self-heal just "re-run the deploy"
-    # (it reads the persisted effective set and reconciles onto an empty cluster).
+    # mode only decides how input merges (additive=union, reconcile=replace); the
+    # deploy itself always reconciles live -> effective, which is what self-heal is.
     mode = resolve_mode(reconcile=args.reconcile)
     store = get_state_store()
     if isinstance(getattr(store, "inner", store), MemoryStateStore):
-        # Cluster-scoped (a detached actor), so effective config now survives
-        # across deploy invocations and coordinator restarts — but it dies with
-        # the cluster, unlike redis://.
+        # Cluster-scoped (a detached actor): survives deploy invocations and coordinator
+        # restarts, but dies with the cluster, unlike redis://.
         logger.warning(
             "Effective config is backed by a cluster-scoped (non-durable) memory state store; it "
             "survives deploys and coordinator restarts but NOT cluster loss. Set MSHIP_STATE_STORE "
@@ -231,20 +190,8 @@ def main(argv: list[str] | None = None) -> None:
         )
     effective_raw = read_effective(store, gateway_name)
 
-    # --reconcile with no --config is the self-heal path: there's no user input, so
-    # reconcile the live cluster to the persisted effective config as-is (restores
-    # the true model set after the cluster is recreated empty). A config-less join
-    # is the same self-heal merge: the joiner contributes no new model input, but
-    # deploy always reconciles live -> effective, so pending models get deployed now
-    # that this node's resources arrived. An own-head bootstrap with no --config and
-    # no default config/models.yaml present (e.g. a bare `docker run modelship:thin`)
-    # is the same no-op merge: nothing to contribute yet, so the coordinator comes up
-    # empty and waits (see the fresh_install/owns_cluster signal.pause() below) until
-    # a later --reconcile/--config redeploy or a join brings in models. An explicit
-    # --config still loads and folds the user input per the merge verb
-    # (additive=union, reconcile=replace) — on a joiner this keeps today's semantics
-    # unchanged, and an explicit --config that doesn't exist is still a hard error
-    # (load_raw_models -> resolve_config_path raises), not silently treated as absent.
+    # No --config: self-heal (reconcile) reconciles live->effective; a join or a bare
+    # bootstrap do the same no-op merge and wait for a later --config/--reconcile/join.
     config_absent = args.config is None and not default_config_path().exists()
     if args.config is None and (mode == "reconcile" or joined_cluster):
         desired_raw = effective_raw
@@ -268,13 +215,11 @@ def main(argv: list[str] | None = None) -> None:
     plugin_wheels = resolve_all_plugin_wheels(yml_conf)
 
     # The detached coordinator holds the cross-operator deploy lock; the detached
-    # replica coordinator holds the durable ownership registry (used for
-    # gateway-restart self-heal).
+    # replica coordinator holds the durable ownership registry (gateway self-heal).
     coordinator = get_or_create_coordinator()
     replica_coord = get_or_create_replica_coordinator()
-    # Scope reconcile-removal to deployments this gateway's effective set managed
-    # BEFORE this run, so a fresh/empty effective config (e.g. migration over
-    # pre-existing live models) removes nothing.
+    # Scope removal to deployments this gateway's effective set managed before this run,
+    # so a fresh/empty effective config (e.g. migrating over live models) removes nothing.
     plan = compute_deploy_plan(
         yml_conf,
         existing_apps,
@@ -291,11 +236,8 @@ def main(argv: list[str] | None = None) -> None:
 
     def _cleanup(sig, _frame) -> None:
         if joined_cluster:
-            # A joiner's deployments may be scheduled on OTHER nodes too — that's
-            # the point of joining capacity — and the effective config is
-            # cluster-owned state, not this process's to delete. Leave only:
-            # Serve reschedules any replicas that were on this departing node
-            # onto the cluster's remaining capacity.
+            # A joiner's deployments may live on OTHER nodes too, and effective config is
+            # cluster-owned — leave only; Serve reschedules this node's replicas elsewhere.
             logger.info("Shutting down (signal %s), leaving the joined Ray cluster...", sig)
             leave_ray_cluster()
         else:
@@ -309,27 +251,20 @@ def main(argv: list[str] | None = None) -> None:
     signal.signal(signal.SIGTERM, _cleanup)
 
     try:
-        # Start the gateway FIRST on fresh install so /health, /v1/models, and
-        # /readyz are reachable while models are still loading (or downloading).
-        # Models register with the gateway as they come up. Skipped for a
-        # phantom_gateway join (see the footgun guard above).
+        # Start the gateway first so /health/readyz are reachable while models load.
+        # Skipped for a phantom_gateway join (see the footgun guard above).
         if fresh_install and create_gateway:
             start_gateway(gateway_name, serve_logging_config)
 
-        # Pre-flight: download/validate every built-in-loader model on the driver
-        # before any model deployment spins up. Surfaces auth / missing-repo /
-        # missing-file errors here instead of inside an UNHEALTHY replica. Runs
-        # AFTER the gateway is up so /health and /readyz answer during downloads.
+        # Pre-flight download/validate on the driver before any deployment spins up —
+        # surfaces auth/missing-repo errors here, not as an UNHEALTHY replica later.
         resolve_all_model_sources(yml_conf)
 
         if not phantom_gateway:
             seed_expected_models(replica_coord, gateway_name, yml_conf)
 
-        # Purge registry entries for previously-effective deployments that are no
-        # longer desired and have no live Serve app (e.g. resurrected from the
-        # durable registry onto a fresh cluster). remove_apps handles the live ones
-        # below; these have nothing to serve.delete, so drop them from the registry
-        # directly or the gateway keeps trying (and failing) to route to a ghost.
+        # Deployments no longer desired with no live Serve app (e.g. resurrected onto a
+        # fresh cluster) have nothing to serve.delete — drop them from the registry directly.
         if plan.registry_only_drop:
             try:
                 ray.get(
@@ -338,9 +273,8 @@ def main(argv: list[str] | None = None) -> None:
             except Exception:
                 logger.exception("Failed to drop stale registry entries: %s", plan.registry_only_drop)
 
-        # stop_start: drop old deployments BEFORE deploying new ones, so the
-        # freed resources are available for the deploy loop. Used when the
-        # cluster can't fit old + new at the same time.
+        # stop_start: drop old deployments first so freed resources are available for the
+        # new ones — used when the cluster can't fit old + new at once.
         if args.replace_strategy == "stop_start":
             remove_apps(apps_to_remove, replica_coord, gateway_name)
             apps_to_remove = []
@@ -369,19 +303,13 @@ def main(argv: list[str] | None = None) -> None:
             pass_count,
         )
 
-        # blue_green: drop old deployments AFTER new ones are live and
-        # registered with the gateway. During the brief overlap the gateway
-        # round-robins across both old and new handles for the same model,
-        # so no requests are lost.
+        # blue_green: drop old deployments after new ones are live — during the brief
+        # overlap the gateway round-robins both, so no requests are lost.
         if apps_to_remove:
             remove_apps(apps_to_remove, replica_coord, gateway_name)
 
-        # Persist the full desired config, including fatally-failed models, so
-        # a re-assert after cluster loss keeps retrying them instead of
-        # evicting them. Written after the deploy settles so a crash mid-deploy
-        # keeps the last known-good effective config. Skipped for a
-        # phantom_gateway join — nothing should be persisted under a gateway
-        # name this process didn't actually create.
+        # Persists fatally-failed models too, so a re-assert keeps retrying instead of
+        # evicting them. Skipped for a phantom_gateway join (nothing to persist under).
         if not phantom_gateway:
             write_effective(store, gateway_name, desired_raw)
 
@@ -404,26 +332,16 @@ def main(argv: list[str] | None = None) -> None:
                 logger.error("  - %s: %s", cfg.name, reason)
 
         if fresh_install and owns_cluster:
-            # Standalone (we own Ray): stay alive as the operator process.
-            # _cleanup gracefully deletes each deployment (letting actors run
-            # __del__ and clean up child processes like vllm EngineCore) before
-            # tearing down Ray. With an external cluster we instead exit here,
-            # leaving the gateway + deployments running under KubeRay.
-            #
-            # Don't exit on fatal failures here — /readyz reports 503 while
-            # pending, and healthy models keep serving via /health.
+            # Standalone: stay alive as operator; _cleanup deletes deployments gracefully
+            # before tearing Ray down. Don't exit on fatal failures — /health still serves.
             signal.pause()
         elif joined_cluster:
-            # Stay resident, contributing resources. supervise_join_node blocks,
-            # watching this node's in-process raylet/agents: if a core process
-            # dies unexpectedly it kills the rest and exits nonzero, so Docker's
-            # restart policy revives the node instead of it lingering as a zombie
-            # that contributes nothing. A normal SIGTERM interrupts it and runs
-            # _cleanup (leave_ray_cluster) instead.
+            # Stay resident, contributing resources; supervise_join_node watches this node's
+            # processes and exits nonzero on an unexpected death so Docker restarts it.
             supervise_join_node()
         elif fatally_failed:
-            # Deploy-and-exit (KubeRay RayJob): no resident process to surface
-            # failures via /readyz, so fail the job loudly instead.
+            # Deploy-and-exit (KubeRay RayJob): no resident process to surface failures via
+            # /readyz, so fail the job loudly instead.
             logger.error("Exiting non-zero: %d model(s) fatally failed to deploy.", len(fatally_failed))
             sys.exit(1)
 
