@@ -189,6 +189,7 @@ For a full guide on writing your own plugin, see [Plugin Development](docs/plugi
 
 - [Development](docs/development.md) — dev environment setup, building, and running locally
 - [Model Configuration](docs/model-configuration.md) — full `models.yaml` reference, GPU pinning, environment variables
+- [Multi-node without Kubernetes](docs/multi-node-docker.md) — join VMs into one Ray cluster with plain `docker run`, no orchestrator
 - [Architecture](docs/architecture.md) — system design, request lifecycle, plugin loading
 - [Plugin Development](docs/plugins.md) — writing custom TTS/STT backends
 - [Monitoring & Logging](docs/monitoring.md) — Prometheus metrics, Grafana dashboard, structured logging, health checks
