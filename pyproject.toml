@@ -1,7 +1,7 @@
 [project]
 name = "modelship"
 version = "0.6.5"
-description = "Self-hosted, OpenAI-compatible multi-model inference for the agentic era — reasoning LLMs, tool calling, and the Responses API alongside embeddings, speech-to-text, text-to-speech, and image generation, all sharing your GPUs behind one gateway. Built on Ray Serve."
+description = "The production backend for self-hosted agents — the OpenAI Responses API with durable conversation state, universal tool calling, and reasoning, alongside embeddings, speech, and image generation, behind one OpenAI-compatible endpoint. Built on Ray Serve."
 authors = [
     { name = "Alex Margarit" }
 ]

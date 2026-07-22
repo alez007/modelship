@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 620" width="1180" height="620" role="img" aria-label="Modelship architecture diagram" font-family="Helvetica, Arial, sans-serif">
+  <title>Modelship architecture</title>
+  <desc>An agent app calls the Modelship gateway's OpenAI-compatible API. The gateway exposes chat, embeddings, audio, and image endpoints plus a highlighted Responses API with reasoning, tool calling, and streaming, backed by a shared conversation-state store and gateway/cluster auth. Requests are routed round-robin to Ray Serve deployments running across multiple cluster nodes on GPU or CPU.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#EAF0F7"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4FD3DE"/>
+    </marker>
+  </defs>
+
+  <!-- Client -->
+  <rect x="20" y="260" width="170" height="100" rx="10" fill="none" stroke="#EAF0F7" stroke-width="2"/>
+  <text x="105" y="302" text-anchor="middle" font-size="18" font-weight="700" fill="#EAF0F7">Agent App</text>
+  <text x="105" y="326" text-anchor="middle" font-size="12" fill="#9FB3C8">OpenAI SDK / curl</text>
+
+  <!-- Arrow client -> gateway -->
+  <line x1="190" y1="310" x2="250" y2="310" stroke="#EAF0F7" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="220" y="300" text-anchor="middle" font-size="11" fill="#9FB3C8">HTTP</text>
+
+  <!-- Gateway outer -->
+  <rect x="255" y="40" width="440" height="380" rx="14" fill="none" stroke="#EAF0F7" stroke-width="2"/>
+  <text x="475" y="72" text-anchor="middle" font-size="21" font-weight="700" fill="#EAF0F7">Modelship Gateway</text>
+  <text x="475" y="92" text-anchor="middle" font-size="12" fill="#9FB3C8">:8000 · OpenAI-compatible /v1</text>
+
+  <!-- Endpoint chips -->
+  <rect x="275" y="112" width="195" height="32" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="372" y="132" text-anchor="middle" font-size="12.5" fill="#EAF0F7">/v1/chat/completions</text>
+
+  <rect x="275" y="150" width="195" height="32" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="372" y="170" text-anchor="middle" font-size="12.5" fill="#EAF0F7">/v1/embeddings</text>
+
+  <rect x="275" y="188" width="195" height="32" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="372" y="208" text-anchor="middle" font-size="12.5" fill="#EAF0F7">/v1/audio/*</text>
+
+  <rect x="275" y="226" width="195" height="32" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="372" y="246" text-anchor="middle" font-size="12.5" fill="#EAF0F7">/v1/images/*</text>
+
+  <!-- Responses highlight -->
+  <rect x="480" y="112" width="195" height="146" rx="8" fill="#4FD3DE" fill-opacity="0.12" stroke="#4FD3DE" stroke-width="2.5"/>
+  <text x="577" y="136" text-anchor="middle" font-size="14.5" font-weight="700" fill="#4FD3DE">/v1/responses</text>
+  <text x="498" y="160" font-size="12.5" fill="#EAF0F7">• reasoning</text>
+  <text x="498" y="182" font-size="12.5" fill="#EAF0F7">• tool calling</text>
+  <text x="498" y="204" font-size="12.5" fill="#EAF0F7">• stored state</text>
+  <text x="498" y="226" font-size="12.5" fill="#EAF0F7">• streaming</text>
+
+  <!-- connector responses -> state -->
+  <line x1="577" y1="258" x2="577" y2="270" stroke="#4FD3DE" stroke-width="2" marker-end="url(#arrow-accent)"/>
+
+  <!-- Conversation state -->
+  <rect x="275" y="272" width="400" height="64" rx="8" fill="none" stroke="#EAF0F7" stroke-width="1.75" stroke-dasharray="5 4"/>
+  <text x="475" y="296" text-anchor="middle" font-size="14" font-weight="600" fill="#EAF0F7">Conversation State</text>
+  <text x="475" y="316" text-anchor="middle" font-size="10.5" fill="#9FB3C8">Ray actor or Redis — shared across replicas &amp; nodes</text>
+
+  <!-- Auth row -->
+  <rect x="275" y="352" width="195" height="34" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="372" y="373" text-anchor="middle" font-size="12" fill="#EAF0F7">API-key auth</text>
+
+  <rect x="480" y="352" width="195" height="34" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="577" y="373" text-anchor="middle" font-size="12" fill="#EAF0F7">Cluster token auth</text>
+
+  <!-- Arrows gateway -> nodes -->
+  <line x1="695" y1="170" x2="758" y2="140" stroke="#EAF0F7" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="695" y1="380" x2="758" y2="410" stroke="#EAF0F7" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="718" y="270" text-anchor="middle" font-size="11" fill="#9FB3C8">round-robin</text>
+
+  <!-- Node A -->
+  <rect x="760" y="40" width="380" height="230" rx="12" fill="none" stroke="#EAF0F7" stroke-width="2"/>
+  <text x="950" y="68" text-anchor="middle" font-size="16" font-weight="700" fill="#EAF0F7">Node · GPU</text>
+  <text x="950" y="86" text-anchor="middle" font-size="11" fill="#9FB3C8">Ray Serve deployments</text>
+
+  <rect x="780" y="100" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="862" y="124" text-anchor="middle" font-size="12.5" fill="#EAF0F7">LLM · vLLM</text>
+  <text x="862" y="144" text-anchor="middle" font-size="11" fill="#9FB3C8">70% GPU</text>
+
+  <rect x="955" y="100" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="1037" y="124" text-anchor="middle" font-size="12.5" fill="#EAF0F7">TTS</text>
+  <text x="1037" y="144" text-anchor="middle" font-size="11" fill="#9FB3C8">5% GPU</text>
+
+  <rect x="780" y="170" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="862" y="194" text-anchor="middle" font-size="12.5" fill="#EAF0F7">Embeddings</text>
+  <text x="862" y="214" text-anchor="middle" font-size="11" fill="#9FB3C8">vLLM</text>
+
+  <rect x="955" y="170" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="1037" y="194" text-anchor="middle" font-size="12.5" fill="#EAF0F7">STT</text>
+  <text x="1037" y="214" text-anchor="middle" font-size="11" fill="#9FB3C8">llama.cpp</text>
+
+  <!-- Node B -->
+  <rect x="760" y="300" width="380" height="230" rx="12" fill="none" stroke="#EAF0F7" stroke-width="2"/>
+  <text x="950" y="328" text-anchor="middle" font-size="16" font-weight="700" fill="#EAF0F7">Node · CPU (or GPU)</text>
+  <text x="950" y="346" text-anchor="middle" font-size="11" fill="#9FB3C8">Ray Serve deployments</text>
+
+  <rect x="780" y="360" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="862" y="384" text-anchor="middle" font-size="12.5" fill="#EAF0F7">LLM · llama.cpp</text>
+  <text x="862" y="404" text-anchor="middle" font-size="11" fill="#9FB3C8">CPU-only</text>
+
+  <rect x="955" y="360" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="1037" y="384" text-anchor="middle" font-size="12.5" fill="#EAF0F7">Image gen</text>
+  <text x="1037" y="404" text-anchor="middle" font-size="11" fill="#9FB3C8">Diffusers</text>
+
+  <rect x="780" y="430" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="862" y="454" text-anchor="middle" font-size="12.5" fill="#EAF0F7">Embeddings</text>
+  <text x="862" y="474" text-anchor="middle" font-size="11" fill="#9FB3C8">CPU</text>
+
+  <rect x="955" y="430" width="165" height="60" rx="6" fill="none" stroke="#9FB3C8" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="1037" y="464" text-anchor="middle" font-size="12" fill="#9FB3C8">+ more nodes…</text>
+
+  <!-- caption -->
+  <text x="600" y="580" text-anchor="middle" font-size="13" fill="#9FB3C8">One gateway. One state store. Any number of Ray Serve nodes — GPU or CPU.</text>
+</svg>
