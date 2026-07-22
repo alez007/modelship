@@ -3,7 +3,7 @@ site_description: >-
   The production backend for self-hosted agents — the OpenAI Responses API,
   universal tool calling, and reasoning, alongside embeddings, speech, and
   image generation, behind one OpenAI-compatible endpoint. Built on Ray Serve.
-site_url: https://model-ship.ai/
+site_url: https://docs.model-ship.ai/
 repo_url: https://github.com/alez007/modelship
 repo_name: alez007/modelship
 edit_uri: edit/main/docs/
