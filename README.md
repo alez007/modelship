@@ -11,6 +11,7 @@
 [![CI](https://github.com/alez007/modelship/actions/workflows/ci.yml/badge.svg)](https://github.com/alez007/modelship/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Docs](https://img.shields.io/badge/docs-docs.model--ship.ai-0E7C86.svg)](https://docs.model-ship.ai/)
 
 Modelship runs the AI stack your agents call — chat, the **Responses API** with server-side conversation state (durable with Redis), universal **tool calling**, and **reasoning**, alongside embeddings, speech, and image generation — behind one OpenAI-compatible endpoint on your own GPUs (or CPU). Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html): state is shared across gateway replicas, deploys are declarative, and everything is observable. Point the OpenAI SDK at it and your agent runs unchanged — private, with no per-token bill.
 
@@ -159,6 +160,8 @@ For deployment, plugins are automatically loaded from standalone Python wheels v
 For a full guide on writing your own plugin, see [Plugin Development](docs/plugins.md).
 
 ## Documentation
+
+Full docs are hosted at **[docs.model-ship.ai](https://docs.model-ship.ai/)**. The same source files are also browsable directly in this repo:
 
 - [Development](docs/development.md) — dev environment setup, building, and running locally
 - [Model Configuration](docs/model-configuration.md) — full `models.yaml` reference, GPU pinning, environment variables
