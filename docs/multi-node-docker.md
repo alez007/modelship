@@ -1,7 +1,7 @@
 # Multi-node without Kubernetes
 
 Modelship has two well-worn rungs: one container running its own Ray head, or full
-Kubernetes via the [Helm chart](../helm/modelship/README.md). This page covers the
+Kubernetes via the [Helm chart](https://github.com/alez007/modelship/blob/main/helm/modelship/README.md). This page covers the
 rung in between — a handful of plain `docker run` VMs, no cluster orchestrator,
 joined into one Ray cluster via `--address`/`--token`.
 
@@ -137,7 +137,7 @@ below are deliberate ways to pack more onto hardware you already have. What
 *is* still your responsibility: fencing which physical resources each container
 gets, so two containers on one box don't both believe they own the same
 hardware. See [AGENTS.md's co-location
-note](../AGENTS.md#gotchas) for the full fencing discipline
+note](https://github.com/alez007/modelship/blob/main/AGENTS.md#gotchas) for the full fencing discipline
 (`--gpus device=N`, `--node-memory` + `--shm-size`, `--cpuset-cpus` +
 `--node-num-cpus`) — this page only covers the two topologies it unlocks.
 Reserving more GPUs than a container can actually see is refused at startup
@@ -196,7 +196,7 @@ together on the card.
 
 ## See also
 
-- [helm/modelship/README.md](../helm/modelship/README.md) — the Kubernetes rung:
+- [helm/modelship/README.md](https://github.com/alez007/modelship/blob/main/helm/modelship/README.md) — the Kubernetes rung:
   same image variants and version-pinning rule, but autoscaling, self-healing
   pod scheduling, and (unlike this page's manual token setup) no Ray
   cluster-auth wiring yet.

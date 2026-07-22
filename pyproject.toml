@@ -71,6 +71,9 @@ otel = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
 ]
+docs = [
+    "mkdocs-material>=9.6.0",
+]
 dev = [
     "ruff>=0.11.0",
     "pyright>=1.1.400",
@@ -82,7 +85,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/alez007/modelship"
-Documentation = "https://github.com/alez007/modelship/tree/main/docs"
+Documentation = "https://model-ship.ai/"
 Issues = "https://github.com/alez007/modelship/issues"
 Changelog = "https://github.com/alez007/modelship/blob/main/CHANGELOG.md"
 
