@@ -146,6 +146,34 @@ def main(argv: list[str] | None = None) -> None:
         available_resources.get("CPU", 0),
     )
 
+    # Ready-to-paste join command, own-head only (a join/existing-cluster node isn't
+    # itself something else can join). gcs_address is read from the live runtime
+    # context, not guessed from MSHIP_RAY_PORT/its default — it's always the address
+    # Ray actually bound, regardless of what determined it.
+    if owns_cluster:
+        gcs_address = ray.get_runtime_context().gcs_address
+        intended_port = os.environ.get("RAY_GCS_SERVER_PORT")
+        actual_port = gcs_address.rsplit(":", 1)[-1]
+        if intended_port and actual_port != intended_port:
+            logger.warning(
+                "Ray's GCS bound port %s, not the intended %s (RAY_GCS_SERVER_PORT) — pin "
+                "--ray-port to a free port so a join address stays stable across head restarts.",
+                actual_port,
+                intended_port,
+            )
+        join_cmd = f"docker run ... --address={gcs_address}"
+        if os.environ.get("RAY_AUTH_MODE") == "token":
+            join_cmd += " --token=<token>"
+            token_hint = " Retrieve the token with: docker exec <this-container> cat ~/.ray/auth_token"
+        else:
+            token_hint = ""
+        logger.info(
+            "To join this cluster as an additional compute node from another machine: %s%s "
+            "(see docs/multi-node-docker.md).",
+            join_cmd,
+            token_hint,
+        )
+
     # This node's own physical GPUs (index/name/UUID), independent of Ray's cluster-wide
     # tally above. When co-locating multiple modelship node containers on one host — a
     # head-farm box, or a GPU deliberately shared across separate clusters — this line is
