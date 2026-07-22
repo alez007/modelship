@@ -12,11 +12,11 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-Modelship runs the AI stack your agents call — chat, the **Responses API** with durable server-side conversation state, universal **tool calling**, and **reasoning**, alongside embeddings, speech, and image generation — behind one OpenAI-compatible endpoint on your own GPUs (or CPU). Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html): state survives gateway replicas and cluster nodes, deploys are declarative, and everything is observable. Point the OpenAI SDK at it and your agent runs unchanged — private, with no per-token bill.
+Modelship runs the AI stack your agents call — chat, the **Responses API** with server-side conversation state (durable with Redis), universal **tool calling**, and **reasoning**, alongside embeddings, speech, and image generation — behind one OpenAI-compatible endpoint on your own GPUs (or CPU). Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html): state is shared across gateway replicas, deploys are declarative, and everything is observable. Point the OpenAI SDK at it and your agent runs unchanged — private, with no per-token bill.
 
 ## Why Modelship?
 
-- **Agent state that survives production** — the `/v1/responses` API with reasoning, universal tool/function calling, and server-side conversation state (`previous_response_id`) live in a pluggable store (in-memory by default, or Redis), shared across every gateway replica and cluster node — not just kept in-process. Works across both the vLLM and llama.cpp (`llama_server`) loaders.
+- **Agent state that isn't siloed per replica** — the `/v1/responses` API with reasoning, universal tool/function calling, and server-side conversation state (`previous_response_id`) live in one pluggable store shared by every gateway replica — in-memory by default, or Redis for durability across restarts and node failure. Works across both the vLLM and llama.cpp (`llama_server`) loaders.
 - **Everything an agent app calls, one endpoint** — chat, embeddings for RAG, speech-to-text, text-to-speech, and image generation, all behind a single OpenAI-compatible `/v1` surface. No juggling separate services for each modality.
 - **Drop-in OpenAI, on your hardware** — any OpenAI SDK client works out of the box. Point it at Modelship instead of the OpenAI API and your agent code doesn't change — it just runs privately, on infrastructure you control.
 - **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so a full stack fits on hardware you already own
