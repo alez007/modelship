@@ -1,4 +1,5 @@
 import fnmatch
+import os
 from pathlib import Path
 from typing import NamedTuple
 
@@ -28,6 +29,12 @@ def _is_pathy(s: str) -> bool:
     return s.startswith("/") or s.startswith("./") or s.startswith("~")
 
 
+def _expand(s: str) -> str:
+    """expanduser only for pathy strings — Path.resolve() never expands `~`,
+    so this must happen here or a valid `~/...` ref 404s downstream."""
+    return os.path.expanduser(s) if _is_pathy(s) else s
+
+
 def parse_model_ref(model: str) -> ResolvedSource:
     """Parses model string into (source, selector, is_local).
 
@@ -37,15 +44,16 @@ def parse_model_ref(model: str) -> ResolvedSource:
 
     A pathy source (starts with /, ./, or ~) is always local regardless of
     whether it exists, so a missing path fails clearly downstream instead of
-    being misread as an HF repo id."""
-    if _is_pathy(model) and Path(model).exists():
-        return ResolvedSource(source=model, selector=None, is_local=True)
+    being misread as an HF repo id. `~` is expanded in the returned source."""
+    expanded = _expand(model)
+    if _is_pathy(model) and Path(expanded).exists():
+        return ResolvedSource(source=expanded, selector=None, is_local=True)
 
     if ":" in model:
         source, selector = model.split(":", 1)
-        return ResolvedSource(source=source, selector=selector, is_local=_is_pathy(source))
+        return ResolvedSource(source=_expand(source), selector=selector, is_local=_is_pathy(source))
 
-    return ResolvedSource(source=model, selector=None, is_local=_is_pathy(model))
+    return ResolvedSource(source=expanded, selector=None, is_local=_is_pathy(model))
 
 
 def _select_patterns(repo_files: list[str], trust_remote_code: bool = False) -> list[str] | None:

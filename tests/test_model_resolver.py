@@ -81,6 +81,25 @@ class TestParseModelRef:
         result = parse_model_ref("definitely-not-a-real/repo-id")
         assert result.is_local is False
 
+    def test_tilde_path_is_expanded(self, monkeypatch, tmp_path: Path):
+        # Path.resolve() never expands `~`, so it must happen here or
+        # check_model_source's Path(source).resolve() 404s on a real ~/... ref.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        f = tmp_path / "model.gguf"
+        f.write_text("dummy")
+        result = parse_model_ref("~/model.gguf")
+        assert result.source == str(f)
+        assert result.is_local is True
+
+    def test_tilde_path_with_selector_is_expanded(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        d = tmp_path / "models"
+        d.mkdir()
+        result = parse_model_ref("~/models:*.gguf")
+        assert result.source == str(d)
+        assert result.selector == "*.gguf"
+        assert result.is_local is True
+
 
 class TestSelectPatterns:
     def test_safetensors_excludes_bin(self):
