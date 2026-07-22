@@ -12,52 +12,23 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-Self-hosted, OpenAI-compatible inference for the agentic era. Modelship runs your whole AI stack — reasoning LLMs with universal tool calling and the Responses API, plus embeddings, speech-to-text, text-to-speech, and image generation — as many models sharing your GPUs (or CPU) behind a single gateway. Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) with pluggable inference backends: [vLLM](https://github.com/vllm-project/vllm) for high-throughput GPU or CPU inference, [llama.cpp](https://github.com/ggml-org/llama.cpp) for high-efficiency GGUF models on CPU or GPU, [Diffusers](https://github.com/huggingface/diffusers) for image generation, and a plugin system for custom backends.
+Modelship runs the AI stack your agents call — chat, the **Responses API** with server-side conversation state (durable with Redis), universal **tool calling**, and **reasoning**, alongside embeddings, speech, and image generation — behind one OpenAI-compatible endpoint on your own GPUs (or CPU). Built on [Ray Serve](https://docs.ray.io/en/latest/serve/index.html): state is shared across gateway replicas, deploys are declarative, and everything is observable. Point the OpenAI SDK at it and your agent runs unchanged — private, with no per-token bill.
 
 ## Why Modelship?
 
-Most self-hosted inference tools focus on running a single model. Modelship is for when you need **multiple models running simultaneously** — an LLM, a TTS engine, a speech-to-text model, an embedding model, and an image generator — all behind a single OpenAI-compatible API, with fine-grained control over GPU memory allocation across them.
-
-- **One server, many models** — run a full AI stack (chat + TTS + STT + embeddings + image gen) on a single machine instead of juggling separate services
-- **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so everything fits on your hardware
-- **Mix and match backends** — use vLLM for high-throughput GPU inference, vLLM or llama.cpp for CPU-only workloads, Diffusers for images, and plugins for custom backends — in the same deployment
-- **Agentic-ready** — reasoning (`<think>` → `reasoning_content`), universal tool/function calling, and the `/v1/responses` API — including server-side conversation state (`previous_response_id`), shared across every gateway replica — work across the vLLM and llama.cpp (`llama_server`) loaders, the OpenAI-spec surface agents already target
-- **Drop-in OpenAI replacement** — any OpenAI SDK client works out of the box, making it easy to integrate with existing apps and tools
+- **Agent state that isn't siloed per replica** — the `/v1/responses` API with reasoning, universal tool/function calling, and server-side conversation state (`previous_response_id`) live in one pluggable store shared by every gateway replica — in-memory by default, or Redis for durability across restarts and node failure. Works across both the vLLM and llama.cpp (`llama_server`) loaders.
+- **Everything an agent app calls, one endpoint** — chat, embeddings for RAG, speech-to-text, text-to-speech, and image generation, all behind a single OpenAI-compatible `/v1` surface. No juggling separate services for each modality.
+- **Drop-in OpenAI, on your hardware** — any OpenAI SDK client works out of the box. Point it at Modelship instead of the OpenAI API and your agent code doesn't change — it just runs privately, on infrastructure you control.
+- **GPU memory control** — allocate exact GPU fractions per model (e.g. 70% for the LLM, 5% for TTS) so a full stack fits on hardware you already own
+- **Mix and match backends** — vLLM for high-throughput GPU or CPU inference, llama.cpp for efficient quantized GGUF models, Diffusers for images, and a plugin system for custom backends — in the same deployment
 
 ## Architecture
 
-```mermaid
-graph TD
-    Client["Client (OpenAI SDK / curl)"]
-    API["FastAPI Gateway<br/>OpenAI-compatible API<br/>:8000"]
-
-    Client -->|HTTP| API
-    API -->|round-robin| LLM_GPU
-    API -->|round-robin| LLM_CPU
-    API -->|round-robin| TTS
-    API -->|round-robin| STT
-    API -->|round-robin| EMB
-    API -->|round-robin| IMG
-
-    subgraph GPU0["GPU 0 — vLLM"]
-        LLM_GPU["LLM Deployment<br/>e.g. Llama 3.1 8B<br/>70% GPU"]
-        TTS["TTS Deployment<br/>e.g. Kokoro 82M<br/>5% GPU"]
-    end
-
-    subgraph GPU1["GPU 1 — Mixed backends"]
-        STT["STT Deployment (vLLM)<br/>e.g. Whisper Large<br/>50% GPU"]
-        EMB["Embedding Deployment<br/>e.g. Nomic Embed<br/>50% GPU"]
-    end
-
-    subgraph CPU["CPU — vLLM / llama-server"]
-        LLM_CPU["LLM Deployment<br/>e.g. Qwen3-0.6B<br/>CPU-only"]
-        STT_CPU["STT Deployment<br/>e.g. Whisper Small<br/>CPU-only"]
-    end
-
-    subgraph GPU2["GPU 2 — Diffusers"]
-        IMG["Image Generation<br/>e.g. SDXL Turbo<br/>35% GPU"]
-    end
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/architecture-light.svg">
+  <img alt="Modelship architecture: an agent app calls the Modelship gateway's OpenAI-compatible API, which exposes chat, embeddings, audio, and image endpoints plus a Responses API backed by a shared conversation-state store, routing round-robin to Ray Serve deployments across GPU and CPU cluster nodes." src="docs/assets/architecture-light.svg">
+</picture>
 
 Each model runs as an isolated [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) deployment with its own lifecycle, health checks, and resource budget. Four inference backends are available:
 
@@ -69,7 +40,6 @@ Each model runs as an isolated [Ray Serve](https://docs.ray.io/en/latest/serve/i
 | **Custom (plugins)** | TTS backends (Kokoro ONNX, Orpheus), STT backends (whisper.cpp) | No |
 
 Models can be deployed across multiple GPUs, run on CPU-only, or both — multiple deployments of the same model (e.g. one on GPU via vLLM, one on CPU via vLLM or llama.cpp) are load-balanced with round-robin routing. Each deployment can also scale horizontally with `num_replicas`.
-...
 
 ## Requirements
 
@@ -91,6 +61,7 @@ Models can be deployed across multiple GPUs, run on CPU-only, or both — multip
 - **Plugin system** — opt-in TTS and STT backends installed as isolated uv workspace packages
 - **Multi-GPU & hybrid routing** — assign models to specific GPUs or run them on CPU-only; deploy the same model on both GPU and CPU and requests are load-balanced via round-robin; full tensor parallelism support for large models spanning multiple GPUs
 - **Client disconnect detection** — cancels in-flight inference when the client disconnects, freeing GPU resources immediately
+- **Security** — gateway API-key authentication (`MSHIP_API_KEYS`), Ray cluster token auth (`--ray-auth=token`), and configurable request payload/concurrency limits
 - **Built-in observability** — Prometheus metrics, custom `modelship:*` metrics, vLLM engine stats, Ray cluster metrics, structured JSON logging, and OpenTelemetry log export; pre-built Grafana dashboard and alerting rules included
 
 ## Supported OpenAI Endpoints
@@ -132,16 +103,18 @@ docker run --rm --shm-size=8g \
 
 Images are multi-arch (amd64 + arm64), so this works on Apple Silicon and ARM Linux hosts too.
 
-Once the server is up (look for `Deployed app 'modelship api' successfully`), call it and watch the model think:
+Once the server is up (look for `Deployed app 'modelship api' successfully`), call the **Responses API** and watch the model think:
 
 ```bash
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:8000/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "reasoning-qwen",
-    "messages": [{"role": "user", "content": "Which is larger, 9.11 or 9.9?"}]
+    "input": "Which is larger, 9.11 or 9.9?"
   }'
 ```
+
+The response includes both `output_text` and a first-class `reasoning` output item — the same server-side conversation state (`previous_response_id`) and tool-calling support work here as they do on GPU-backed models. `/v1/chat/completions` remains available too, if that's what your client speaks.
 
 ### GPU (vLLM, Diffusers)
 
@@ -209,8 +182,8 @@ Modelship is actively used and designed for stability in multi-tenant setups. Ke
 
 - **Mutex-backed deployments:** A cluster-wide deploy coordinator prevents VRAM exhaustion by ensuring models are never loaded concurrently if resources are tight.
 - **Comprehensive HTTP-level tests:** The `tests/test_integration.py` suite validates chat, reasoning, tool-calling, and streaming across all loaders using real (small) models.
-- **Payload & concurrency limits:** Built-in safeguards against large payloads (`MSHIP_MAX_REQUEST_BODY_BYTES`) and configurable limits per backend.
-- **Observability:** Deep integration with Prometheus, OpenTelemetry, and structured logging.
+- **Security:** Gateway API-key auth, opt-in Ray cluster token auth, and payload/concurrency limits (`MSHIP_MAX_REQUEST_BODY_BYTES`) guard against unauthenticated or oversized requests.
+- **Observability:** Deep integration with Prometheus, OpenTelemetry, and structured logging, with a pre-built Grafana dashboard and Prometheus alerting rules included.
 
 We are currently hardening the Kubernetes/KubeRay path (a Helm chart ships in [`helm/`](helm/modelship/); GPU-aware probes and gateway-level rate-limiting are next). See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
 

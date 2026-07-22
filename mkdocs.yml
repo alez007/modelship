@@ -1,0 +1,79 @@
+site_name: Modelship
+site_description: >-
+  The production backend for self-hosted agents — the OpenAI Responses API,
+  universal tool calling, and reasoning, alongside embeddings, speech, and
+  image generation, behind one OpenAI-compatible endpoint. Built on Ray Serve.
+site_url: https://docs.model-ship.ai/
+repo_url: https://github.com/alez007/modelship
+repo_name: alez007/modelship
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  logo: assets/logo-dark.svg
+  favicon: assets/logo-dark.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - tables
+  - def_list
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.snippets
+
+nav:
+  - Overview: index.md
+  - Quickstart: quickstart.md
+  - Installation: installation.md
+  - Model Configuration: model-configuration.md
+  - Guides:
+      - Production Readiness: production-readiness.md
+      - Multi-node without Kubernetes: multi-node-docker.md
+      - Plugin Development: plugins.md
+      - Development Setup: development.md
+  - Integrations:
+      - Overview: integrations/index.md
+      - OpenAI SDK: integrations/openai-sdk.md
+      - Open WebUI: integrations/open-webui.md
+      - Dify: integrations/dify.md
+      - n8n: integrations/n8n.md
+      - Responses-speaking agents: integrations/responses-agents.md
+  - Architecture: architecture.md
+  - Monitoring: monitoring.md
+  - Troubleshooting: troubleshooting.md

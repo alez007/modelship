@@ -437,9 +437,9 @@ models:
 The `custom` loader delegates to a plugin module. The `plugin` field is required and must match an installed plugin package. Plugin-specific options are passed via `plugin_config`.
 
 See each plugin's README for configuration details:
-- [Kokoro ONNX TTS](../plugins/kokoroonnx/README.md)
-- [Orpheus TTS](../plugins/orpheus/README.md)
-- [whisper.cpp STT](../plugins/whispercpp/README.md)
+- [Kokoro ONNX TTS](https://github.com/alez007/modelship/blob/main/plugins/kokoroonnx/README.md)
+- [Orpheus TTS](https://github.com/alez007/modelship/blob/main/plugins/orpheus/README.md)
+- [whisper.cpp STT](https://github.com/alez007/modelship/blob/main/plugins/whispercpp/README.md)
 
 For writing your own plugin, see [Plugin Development](plugins.md).
 
