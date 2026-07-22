@@ -107,5 +107,5 @@
   <text x="1037" y="464" text-anchor="middle" font-size="12" fill="#9FB3C8">+ more nodes…</text>
 
   <!-- caption -->
-  <text x="600" y="580" text-anchor="middle" font-size="13" fill="#9FB3C8">One gateway. One state store. Any number of Ray Serve nodes — GPU or CPU.</text>
+  <text x="600" y="580" text-anchor="middle" font-size="13" fill="#9FB3C8">One API, horizontally scalable. Shared state, not siloed per replica. Any number of nodes — GPU or CPU.</text>
 </svg>
