@@ -54,6 +54,9 @@ spec:
               - { name: metrics, containerPort: {{ .Values.metrics.port }} }
             env:
               {{- include "modelship.env" . | nindent 14 }}
+              {{- if .Values.rayAuth.enabled }}
+              {{- include "modelship.rayAuthEnv" . | nindent 14 }}
+              {{- end }}
             envFrom:
               {{- include "modelship.envFrom" . | nindent 14 }}
             resources:
@@ -135,6 +138,9 @@ spec:
                 - { name: metrics, containerPort: {{ $.Values.metrics.port }} }
               env:
                 {{- include "modelship.env" $ | nindent 16 }}
+                {{- if $.Values.rayAuth.enabled }}
+                {{- include "modelship.rayAuthEnv" $ | nindent 16 }}
+                {{- end }}
               envFrom:
                 {{- include "modelship.envFrom" $ | nindent 16 }}
               resources:
