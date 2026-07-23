@@ -55,7 +55,6 @@ class CompactRequest(OpenAIBaseModel):
     input: str | list[ResponseInputItem] | None = None
     previous_response_id: str | None = None
     instructions: str | None = None
-    prompt_cache_key: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -682,7 +682,7 @@ class ModelshipAPI:
             )
 
             try:
-                chat_request = responses_utils.build_summarization_request(model, items)
+                chat_request = responses_utils.build_summarization_request(model, items, request.instructions)
             except UnsupportedResponsesFeatureError as e:
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "validation_error"})
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})

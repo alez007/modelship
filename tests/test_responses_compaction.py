@@ -168,6 +168,16 @@ class TestBuildSummarizationRequest:
         assert "summar" in chat.messages[0]["content"].lower()
         assert chat.messages[1] == {"role": "user", "content": "hi"}
 
+    def test_caller_instructions_are_inserted_as_additional_system_message(self):
+        chat = build_summarization_request("m", [{"role": "user", "content": "hi"}], "focus on pricing details")
+        assert chat.messages[0]["role"] == "system"
+        assert chat.messages[1] == {"role": "system", "content": "focus on pricing details"}
+        assert chat.messages[2] == {"role": "user", "content": "hi"}
+
+    def test_no_instructions_does_not_insert_extra_message(self):
+        chat = build_summarization_request("m", [{"role": "user", "content": "hi"}], None)
+        assert len(chat.messages) == 2
+
     def test_bad_item_shape_raises(self):
         from modelship.openai.protocol.responses import UnsupportedResponsesFeatureError
 
@@ -217,7 +227,10 @@ class TestCompactResponseRoute:
     @pytest.mark.asyncio
     async def test_dispatches_to_generate_and_returns_compact_resource(self, api):
         handle = _wire(api, _chat_response_gen(text="the gist"))
-        request = CompactRequest(model="m", input="hi", prompt_cache_key="k")
+        # prompt_cache_key isn't a CompactRequest field (nothing in modelship hooks a
+        # cache key in) — OpenAIBaseModel's extra="allow" means an OpenAI-SDK client
+        # that still sends it is silently tolerated rather than rejected.
+        request = CompactRequest.model_validate({"model": "m", "input": "hi", "prompt_cache_key": "k"})
 
         result = await api.compact_response(request, _raw_request())
 
@@ -230,6 +243,16 @@ class TestCompactResponseRoute:
         decoded = compaction_crypto.decrypt_items(item["encrypted_content"])
         assert decoded == [{"type": "message", "role": "assistant", "content": "the gist"}]
         assert body["usage"]["input_tokens"] == 7
+
+    @pytest.mark.asyncio
+    async def test_instructions_reach_the_dispatched_summarization_request(self, api):
+        handle = _wire(api, _chat_response_gen())
+        request = CompactRequest(model="m", input="hi", instructions="focus on pricing details")
+
+        await api.compact_response(request, _raw_request())
+
+        sent_chat_request = handle.generate.options.return_value.remote.call_args.args[0]
+        assert {"role": "system", "content": "focus on pricing details"} in sent_chat_request.messages
 
     @pytest.mark.asyncio
     async def test_empty_conversation_is_400(self, api):

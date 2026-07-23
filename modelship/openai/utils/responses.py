@@ -133,15 +133,19 @@ _COMPACTION_SYSTEM_PROMPT = (
 )
 
 
-def build_summarization_request(model: str, items: list[Any]) -> ChatCompletionRequest:
+def build_summarization_request(model: str, items: list[Any], instructions: str | None = None) -> ChatCompletionRequest:
     """The internal chat request ``/v1/responses/compact`` issues to summarize *items*.
 
     Reuses ``messages_from_input`` so a compaction item nested in *items* (a chain
     that was already compacted once) decodes the same way it would on ``/v1/responses``.
     May raise ``UnsupportedResponsesFeatureError`` for an item shape it can't translate.
+    *instructions*, if given, is inserted as an additional system message alongside
+    the fixed compaction prompt, so a caller can steer what the summary preserves.
     """
     messages = messages_from_input(items, None)
     messages.insert(0, {"role": "system", "content": _COMPACTION_SYSTEM_PROMPT})
+    if instructions:
+        messages.insert(1, {"role": "system", "content": instructions})
     return ChatCompletionRequest(model=model, messages=messages, stream=False)
 
 
