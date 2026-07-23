@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] - 2026-07-23
+
+### Changed
+- scope GHA build cache per image variant and make export failures non-fatal
+
 ## [0.7.0] - 2026-07-22
 
 ### Added
