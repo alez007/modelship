@@ -164,8 +164,12 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
             continue
         elif itype == "compaction":
             # Round-trip half of /v1/responses/compact: the blob is opaque to the
-            # client, decrypted back into the items it was built from. Recursion is
-            # bounded — a compaction blob never contains another compaction item.
+            # client, decrypted back into the items it was built from. A blob we mint
+            # ourselves (build_compaction) never nests another compaction item — but
+            # that's an invariant of our own code, not something the crypto layer
+            # enforces, so a forged or future-buggy blob must not be able to recurse
+            # unboundedly. Reject a nested compaction item explicitly instead of
+            # trusting the invariant.
             encrypted_content = item.get("encrypted_content")
             if not encrypted_content:
                 raise UnsupportedResponsesFeatureError("compaction input items require 'encrypted_content'.")
@@ -173,6 +177,8 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
                 decoded_items = compaction_crypto.decrypt_items(encrypted_content)
             except InvalidToken:
                 raise UnsupportedResponsesFeatureError("compaction item could not be decoded.") from None
+            if any(isinstance(d, dict) and d.get("type") == "compaction" for d in decoded_items):
+                raise UnsupportedResponsesFeatureError("compaction items cannot nest another compaction item.")
             messages.extend(messages_from_input(decoded_items, None))
         elif itype == "message" or "role" in item:
             messages.append(

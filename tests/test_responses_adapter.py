@@ -153,6 +153,19 @@ class TestCompactionInputDecode:
             {"role": "user", "content": "what's my name?"},
         ]
 
+    def test_nested_compaction_item_is_rejected(self):
+        # A blob we mint ourselves never nests another compaction item — but the
+        # decode path must not simply trust that. Simulates a forged blob (or a
+        # future bug in build_compaction) that decrypts to one anyway: recursing
+        # into it unbounded would be a DoS vector, so it must be a clean rejection.
+        nested_blob = compaction_crypto.encrypt_items(
+            [{"type": "compaction", "id": "cmp_inner", "encrypted_content": "irrelevant"}]
+        )
+        with pytest.raises(UnsupportedResponsesFeatureError, match="nest"):
+            responses_request_to_chat(
+                _req(input=[{"type": "compaction", "id": "cmp_1", "encrypted_content": nested_blob}])
+            )
+
     def test_missing_encrypted_content_rejected(self):
         with pytest.raises(UnsupportedResponsesFeatureError, match="encrypted_content"):
             responses_request_to_chat(_req(input=[{"type": "compaction", "id": "cmp_1"}]))
