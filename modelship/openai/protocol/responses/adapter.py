@@ -163,7 +163,7 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
             messages.append(
                 {
                     "role": item.get("role", "user"),
-                    "content": _text_of(item.get("content")),
+                    "content": _content_to_chat(item.get("content")),
                 }
             )
         else:
@@ -173,13 +173,53 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
 
 
 def _text_of(content: Any) -> str | None:
-    """Reduce a Responses content value to plain text (Phase A is text-only)."""
+    """Reduce a Responses content value to plain text (used for tool-result content,
+    which is always text)."""
     if content is None or isinstance(content, str):
         return content
     if isinstance(content, list):
         parts = [p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str)]
         return "".join(parts) if parts else None
     return str(content)
+
+
+_CONTENT_TEXT_TYPES = frozenset({"input_text", "output_text", "text"})
+_CONTENT_IMAGE_TYPES = frozenset({"input_image", "image_url"})
+
+
+def _content_to_chat(content: Any) -> str | list[dict[str, Any]] | None:
+    """Translate a Responses message ``content`` value into chat message content.
+
+    Unlike ``_text_of`` (tool-result text), a message's content can carry images —
+    dropping them here was silently discarding vision input. Text parts become chat's
+    ``{"type": "text", ...}`` shape; ``input_image`` becomes chat's ``image_url`` shape,
+    which ``normalize_chat_messages``/``_validate_part`` already fully validates
+    (``modelship.openai.utils.chat``). Unknown part types are rejected rather than
+    silently dropped.
+    """
+    if content is None or isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    parts: list[dict[str, Any]] = []
+    for p in content:
+        if not isinstance(p, dict):
+            raise UnsupportedResponsesFeatureError(f"unsupported content part {p!r}.")
+        ptype = p.get("type")
+        if ptype in _CONTENT_TEXT_TYPES:
+            parts.append({"type": "text", "text": p.get("text")})
+        elif ptype in _CONTENT_IMAGE_TYPES:
+            # Both the Responses `input_image` and chat's own `image_url` part types
+            # carry the URL/data-URI under an `image_url` key (string or {"url": ...}).
+            url = p.get("image_url")
+            parts.append({"type": "image_url", "image_url": {"url": url} if isinstance(url, str) else url})
+        else:
+            raise UnsupportedResponsesFeatureError(f"unsupported content part type {ptype!r}.")
+
+    if all(part["type"] == "text" for part in parts):
+        return "".join(part["text"] or "" for part in parts)
+    return parts
 
 
 def _tools_to_chat(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
@@ -243,6 +283,7 @@ def build_response_object(
     model: str | None = None,
     response_id: str | None = None,
     created_at: int | None = None,
+    completed_at: int | None = None,
     error: Any | None = None,
 ) -> ResponseObject:
     """Build a ``ResponseObject``, echoing the request settings OpenAI returns.
@@ -251,8 +292,10 @@ def build_response_object(
     ``response.created`` / ``response.completed`` envelopes and the
     non-streaming body carry an identical shape. ``response_id`` / ``created_at``
     let the streaming translator keep one stable id across all of its events.
-    ``error`` is set only for a ``status="failed"`` terminal event (see
-    ``ResponsesStreamTranslator.fail``); every other caller leaves it ``None``.
+    ``completed_at`` is only meaningful on a terminal (``completed``) envelope;
+    every other caller leaves it ``None``. ``error`` is set only for a
+    ``status="failed"`` terminal event (see ``ResponsesStreamTranslator.fail``);
+    every other caller leaves it ``None``.
     """
     kwargs: dict[str, Any] = {
         "model": model or request.model or "",
@@ -262,12 +305,14 @@ def build_response_object(
         "incomplete_details": incomplete,
         "instructions": request.instructions,
         "max_output_tokens": request.max_output_tokens,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-        "tools": request.tools or [],
+        # OpenAI reports the *effective* sampling values used, not a bare echo —
+        # these are its own defaults when the request left them unset.
+        "temperature": request.temperature if request.temperature is not None else 1.0,
+        "top_p": request.top_p if request.top_p is not None else 1.0,
+        "tools": _echo_tools(request.tools),
         "tool_choice": request.tool_choice if request.tool_choice is not None else "auto",
         "parallel_tool_calls": request.parallel_tool_calls if request.parallel_tool_calls is not None else True,
-        "text": request.text,
+        "text": request.text if request.text else {"format": {"type": "text"}},
         "reasoning": request.reasoning,
         "metadata": request.metadata or {},
         # OpenAI stores by default; only an explicit `store: false` opts out. The
@@ -280,9 +325,38 @@ def build_response_object(
         kwargs["id"] = response_id
     if created_at is not None:
         kwargs["created_at"] = created_at
+    if completed_at is not None:
+        kwargs["completed_at"] = completed_at
     if error is not None:
         kwargs["error"] = error
     return ResponseObject(**kwargs)
+
+
+def _echo_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Backfill echoed ``tools[]`` so every ``FunctionTool`` carries all five spec keys.
+
+    Clients routinely omit optional keys (``description``/``parameters``/``strict``)
+    on the request; the spec requires them present (nullable) on the echo. Non-function
+    tool shapes are passed through untouched — the request side already rejects them
+    before a response is ever built, so this only defends against an unexpected shape.
+    """
+    if not tools:
+        return []
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            out.append(tool)
+            continue
+        out.append(
+            {
+                "type": "function",
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": tool.get("parameters"),
+                "strict": tool.get("strict"),
+            }
+        )
+    return out
 
 
 def _usage_from_chat(usage: UsageInfo) -> ResponseUsage:

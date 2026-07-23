@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from http import HTTPStatus
 from typing import Any
 
@@ -91,6 +92,8 @@ def build_response_from_parsed(
         usage=_usage_from_chat(usage),
         incomplete=incomplete,
         model=model,
+        # Only a `completed` response is actually done; `incomplete`/`failed` aren't.
+        completed_at=int(time.time()) if status == "completed" else None,
     )
 
 
