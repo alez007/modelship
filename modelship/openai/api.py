@@ -36,6 +36,7 @@ from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, resolve_identi
 from modelship.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    CompactRequest,
     EmbeddingRequest,
     EmbeddingResponse,
     ErrorResponse,
@@ -53,6 +54,7 @@ from modelship.openai.protocol import (
     TranslationResponse,
     create_error_response,
 )
+from modelship.openai.protocol.responses.adapter import UnsupportedResponsesFeatureError
 from modelship.openai.utils import responses as responses_utils
 from modelship.state import get_state_store
 from modelship.utils import random_uuid
@@ -383,6 +385,34 @@ class ModelshipAPI:
         self._round_robin[model_name] += 1
         return handles[idx]
 
+    async def _await_first(self, response_gen, model: str, endpoint: str):
+        """Await *response_gen*'s first item, translating a Ray-boundary failure into
+        a clean 4xx/5xx ``JSONResponse``. Shared by ``_handle_response`` and
+        ``compact_response`` — a caller must check ``isinstance(result, JSONResponse)``
+        before treating the result as a payload item."""
+        try:
+            return await response_gen.__anext__()
+        except RayTaskError as e:
+            # Loader code raised across the Ray boundary. Treat ValueError-family
+            # causes (e.g. vLLM's VLLMValidationError on context overflow) as
+            # OpenAI-style 400s rather than masking them as 500s.
+            cause = e.cause if isinstance(e.cause, BaseException) else None
+            if isinstance(cause, ValueError | TypeError | OverflowError):
+                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "validation_error"})
+                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+                logger.info("Validation error for model=%s: %s", model, cause)
+                return _error_response(_validation_error_from_cause(cause))
+            REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
+            REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+            logger.exception("Initial response generation failed for model=%s", model)
+            return JSONResponse(status_code=500, content={"detail": str(e)})
+        except Exception as e:
+            # Catch failures during initial generator creation or the very first yield
+            REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
+            REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+            logger.exception("Initial response generation failed for model=%s", model)
+            return JSONResponse(status_code=500, content={"detail": str(e)})
+
     async def _handle_response(
         self,
         response_gen,
@@ -395,30 +425,9 @@ class ModelshipAPI:
         streaming = False
         REQUEST_IN_PROGRESS.set(1, tags={"model": model, "endpoint": endpoint})
         try:
-            try:
-                first = await response_gen.__anext__()
-            except RayTaskError as e:
-                # Loader code raised across the Ray boundary. Treat ValueError-family
-                # causes (e.g. vLLM's VLLMValidationError on context overflow) as
-                # OpenAI-style 400s rather than masking them as 500s.
-                cause = e.cause if isinstance(e.cause, BaseException) else None
-                if isinstance(cause, ValueError | TypeError | OverflowError):
-                    REQUEST_ERRORS_TOTAL.inc(
-                        tags={"model": model, "endpoint": endpoint, "error_type": "validation_error"}
-                    )
-                    REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
-                    logger.info("Validation error for model=%s: %s", model, cause)
-                    return _error_response(_validation_error_from_cause(cause))
-                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
-                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
-                logger.exception("Initial response generation failed for model=%s", model)
-                return JSONResponse(status_code=500, content={"detail": str(e)})
-            except Exception as e:
-                # Catch failures during initial generator creation or the very first yield
-                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "unhandled"})
-                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
-                logger.exception("Initial response generation failed for model=%s", model)
-                return JSONResponse(status_code=500, content={"detail": str(e)})
+            first = await self._await_first(response_gen, model, endpoint)
+            if isinstance(first, JSONResponse):
+                return first
 
             if isinstance(first, ErrorResponse):
                 REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "inference_error"})
@@ -639,6 +648,67 @@ class ModelshipAPI:
                 "has_more": False,
             }
         )
+
+    @app.post("/v1/responses/compact")
+    async def compact_response(self, request: CompactRequest, raw_request: Request):
+        req_id = random_uuid()
+        self._set_request_id(req_id)
+        identity = self._set_identity(raw_request)
+        model = request.model
+        endpoint = "compact_response"
+        handle = self._get_handle(model)
+        watcher = RequestWatcher(raw_request, req_id, model=model, endpoint=endpoint)
+        headers = dict(raw_request.headers)
+
+        start = time.monotonic()
+        REQUEST_IN_PROGRESS.set(1, tags={"model": model, "endpoint": endpoint})
+        try:
+            items = await responses_utils.resolve_history_items(
+                self._state_store,
+                identity,
+                previous_response_id=request.previous_response_id,
+                input_=request.input,
+            )
+            if not items:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST.value, detail="cannot compact an empty conversation."
+                )
+
+            logger.info(
+                "compact_response model=%s previous_response_id=%s items=%d",
+                model,
+                request.previous_response_id,
+                len(items),
+            )
+
+            try:
+                chat_request = responses_utils.build_summarization_request(model, items, request.instructions)
+            except UnsupportedResponsesFeatureError as e:
+                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "validation_error"})
+                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+                return _error_response(create_error_response(str(e), err_type="invalid_request_error"))
+
+            response_gen = handle.generate.options(stream=True).remote(
+                chat_request, headers, watcher.registry, req_id, identity
+            )
+            first = await self._await_first(response_gen, model, endpoint)
+            if isinstance(first, JSONResponse):
+                return first
+            if isinstance(first, ErrorResponse):
+                REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "inference_error"})
+                REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+                return _error_response(first)
+
+            assert isinstance(first, ChatCompletionResponse)
+            summary_text = first.choices[0].message.content or ""
+            summary_items = [{"type": "message", "role": "assistant", "content": summary_text}]
+            resource = responses_utils.build_compaction(summary_items=summary_items, usage=first.usage)
+            REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})
+            return JSONResponse(content=resource.model_dump(mode="json"))
+        finally:
+            REQUEST_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": model, "endpoint": endpoint})
+            REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
+            watcher.stop()
 
     @app.post("/v1/embeddings")
     async def create_embeddings(self, request: EmbeddingRequest, raw_request: Request):

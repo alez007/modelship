@@ -21,6 +21,9 @@ from modelship.openai.protocol.responses.adapter import (
     responses_request_to_chat,
 )
 from modelship.openai.protocol.responses.schemas import (
+    CompactionItem,
+    CompactRequest,
+    CompactResource,
     ResponseFunctionToolCall,
     ResponseInputItem,
     ResponseInputTokensDetails,
@@ -43,6 +46,9 @@ from modelship.openai.protocol.responses.streaming import (
 
 __all__ = [
     "TERMINAL_EVENT_TYPES",
+    "CompactRequest",
+    "CompactResource",
+    "CompactionItem",
     "ResponseFunctionToolCall",
     "ResponseInputItem",
     "ResponseInputTokensDetails",

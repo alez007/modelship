@@ -1,30 +1,18 @@
-"""Translation between the Responses API and chat completions.
+"""Translation between the Responses API and chat completions: request-side shaping
+(``responses_request_to_chat``) plus the response-envelope helpers every loader's
+native ``create_response`` and the streaming translator share.
 
-:func:`responses_request_to_chat` — ``ResponsesRequest`` → ``ChatCompletionRequest``.
-Translates the structurally different bits (``input``/``instructions`` →
-``messages``, flattened tools → nested, ``text.format`` → ``response_format``,
-``max_output_tokens`` → ``max_completion_tokens``) and rejects features not yet
-supported (``background``, hosted built-in tools) with an explicit error rather
-than dropping them silently. Every loader's
-``create_response`` calls into this for the request side; ``vllm``/``llama_server``
-then shape the response natively from their own parsed output rather than going
-back through a chat-completion object (see ``utils.responses.build_responses_items_from_parsed``)
-— ``build_response_object``/``_usage_from_chat``/``_status_for`` below are the shared
-envelope helpers both that native path and the streaming translator build on.
-
-``store`` and ``previous_response_id`` are acted on by the gateway (it persists the
-snapshot and resolves the history); here they are echoed onto the response object
-only. Image/audio input parts are reduced to their text for now.
-
-Imports come from the sibling ``schemas`` submodule and the ``chat`` submodule,
-never from the top-level ``modelship.openai.protocol`` package — that package
-imports this one, so reaching back into it would create an import cycle.
+Never import from the top-level ``modelship.openai.protocol`` package here — it
+imports this module, so that would be a cycle.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
+from cryptography.fernet import InvalidToken
+
+from modelship.openai import compaction_crypto
 from modelship.openai.protocol.chat import ChatCompletionRequest, StreamOptions
 from modelship.openai.protocol.responses.schemas import (
     ResponseInputTokensDetails,
@@ -37,11 +25,7 @@ from modelship.openai.protocol.usage import UsageInfo
 
 
 class UnsupportedResponsesFeatureError(ValueError):
-    """A Responses request used a feature that is not supported.
-
-    Subclasses ``ValueError`` so ``create_error_response`` maps it to an
-    OpenAI-style 400 ``invalid_request_error``.
-    """
+    """Unsupported Responses feature; subclasses ``ValueError`` so ``create_error_response`` maps it to a 400."""
 
 
 # ---------------------------------------------------------------------------
@@ -52,19 +36,14 @@ class UnsupportedResponsesFeatureError(ValueError):
 def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionRequest:
     """Translate a ``ResponsesRequest`` into a ``ChatCompletionRequest``.
 
-    ``previous_response_id`` is **already resolved** by the time this runs: the
-    gateway looks the prior snapshot up and prepends its items to ``input`` before
-    the Ray hop, so the field survives here only to be echoed on the response. This
-    contract can't be checked from inside the loader — it holds because
-    ``ModelDeployment`` is reachable only via the gateway, never over HTTP.
-
-    Raises :class:`UnsupportedResponsesFeatureError` for background/hosted-tool
-    features the adapter cannot fulfill.
+    ``previous_response_id`` is already resolved into ``input`` by the gateway before
+    the Ray hop; it survives here only to be echoed back. Raises
+    :class:`UnsupportedResponsesFeatureError` for features the adapter can't fulfill.
     """
     if request.background:
         raise UnsupportedResponsesFeatureError("background mode is not supported on /v1/responses.")
 
-    messages = _messages_from_input(request.input, request.instructions)
+    messages = messages_from_input(request.input, request.instructions)
 
     kwargs: dict[str, Any] = {
         "model": request.model,
@@ -72,10 +51,8 @@ def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionReques
         "stream": bool(request.stream),
     }
     if request.stream:
-        # Responses always reports usage on the final event; the streaming
-        # translator only gets a usage-bearing chunk out of the chat pipeline
-        # when this is set (see engine_ops.stream_chat_completion). ChatCompletionRequest
-        # rejects stream_options when stream=False, so this must stay conditional.
+        # Needed for the streaming translator to get a usage-bearing final chunk; only
+        # legal when stream=True, so this must stay conditional.
         kwargs["stream_options"] = StreamOptions(include_usage=True)
     if request.max_output_tokens is not None:
         kwargs["max_completion_tokens"] = request.max_output_tokens
@@ -106,7 +83,7 @@ def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionReques
     return ChatCompletionRequest(**kwargs)
 
 
-def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str | None) -> list[dict[str, Any]]:
+def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | None) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     if instructions:
         messages.append({"role": "system", "content": instructions})
@@ -118,9 +95,7 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
     for item in input_:
         itype = item.get("type")
         if itype == "function_call":
-            # A prior assistant tool call being replayed as context. call_id and
-            # name identify the call; without them the loader's chat-template /
-            # tool-call handling fails downstream, so reject up front with a 400.
+            # call_id and name identify the call; both required or downstream tool-call handling breaks.
             call_id = item.get("call_id") or item.get("id")
             name = item.get("name")
             if not call_id or not name:
@@ -144,8 +119,7 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
                 }
             )
         elif itype == "function_call_output":
-            # call_id ties the result back to its call; a missing one can't be
-            # associated, so reject rather than emit a tool message with no id.
+            # call_id ties the result back to its call; required.
             call_id = item.get("call_id")
             if not call_id:
                 raise UnsupportedResponsesFeatureError("function_call_output input items require 'call_id'.")
@@ -159,6 +133,20 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
         elif itype == "reasoning":
             # Don't replay raw chain-of-thought back into the prompt.
             continue
+        elif itype == "compaction":
+            # Round-trip half of /v1/responses/compact: decrypt the opaque blob back
+            # into the items it was built from. Nesting is rejected below rather than
+            # trusted, since the crypto layer can't tell a forged blob from a real one.
+            encrypted_content = item.get("encrypted_content")
+            if not encrypted_content:
+                raise UnsupportedResponsesFeatureError("compaction input items require 'encrypted_content'.")
+            try:
+                decoded_items = compaction_crypto.decrypt_items(encrypted_content)
+            except InvalidToken:
+                raise UnsupportedResponsesFeatureError("compaction item could not be decoded.") from None
+            if any(isinstance(d, dict) and d.get("type") == "compaction" for d in decoded_items):
+                raise UnsupportedResponsesFeatureError("compaction items cannot nest another compaction item.")
+            messages.extend(messages_from_input(decoded_items, None))
         elif itype == "message" or "role" in item:
             messages.append(
                 {
@@ -173,8 +161,7 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
 
 
 def _text_of(content: Any) -> str | None:
-    """Reduce a Responses content value to plain text (used for tool-result content,
-    which is always text)."""
+    """Reduce a Responses content value to plain text (tool-result content, always text)."""
     if content is None or isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -190,12 +177,8 @@ _CONTENT_IMAGE_TYPES = frozenset({"input_image", "image_url"})
 def _content_to_chat(content: Any) -> str | list[dict[str, Any]] | None:
     """Translate a Responses message ``content`` value into chat message content.
 
-    Unlike ``_text_of`` (tool-result text), a message's content can carry images —
-    dropping them here was silently discarding vision input. Text parts become chat's
-    ``{"type": "text", ...}`` shape; ``input_image`` becomes chat's ``image_url`` shape,
-    which ``normalize_chat_messages``/``_validate_part`` already fully validates
-    (``modelship.openai.utils.chat``). Unknown part types are rejected rather than
-    silently dropped.
+    Unlike ``_text_of``, this preserves images: ``input_image`` becomes chat's
+    ``image_url`` shape. Unknown part types are rejected rather than dropped.
     """
     if content is None or isinstance(content, str):
         return content
@@ -210,8 +193,7 @@ def _content_to_chat(content: Any) -> str | list[dict[str, Any]] | None:
         if ptype in _CONTENT_TEXT_TYPES:
             parts.append({"type": "text", "text": p.get("text")})
         elif ptype in _CONTENT_IMAGE_TYPES:
-            # Both the Responses `input_image` and chat's own `image_url` part types
-            # carry the URL/data-URI under an `image_url` key (string or {"url": ...}).
+            # Both part types carry the URL/data-URI under `image_url` (string or {"url": ...}).
             url = p.get("image_url")
             parts.append({"type": "image_url", "image_url": {"url": url} if isinstance(url, str) else url})
         else:
@@ -288,14 +270,9 @@ def build_response_object(
 ) -> ResponseObject:
     """Build a ``ResponseObject``, echoing the request settings OpenAI returns.
 
-    Shared by the non-streaming adapter and the streaming translator so the
-    ``response.created`` / ``response.completed`` envelopes and the
-    non-streaming body carry an identical shape. ``response_id`` / ``created_at``
-    let the streaming translator keep one stable id across all of its events.
-    ``completed_at`` is only meaningful on a terminal (``completed``) envelope;
-    every other caller leaves it ``None``. ``error`` is set only for a
-    ``status="failed"`` terminal event (see ``ResponsesStreamTranslator.fail``);
-    every other caller leaves it ``None``.
+    Shared by the non-streaming adapter and the streaming translator so both produce
+    an identical envelope shape. ``response_id``/``created_at`` let streaming keep one
+    stable id across events; ``completed_at``/``error`` apply only to terminal events.
     """
     kwargs: dict[str, Any] = {
         "model": model or request.model or "",
@@ -305,8 +282,7 @@ def build_response_object(
         "incomplete_details": incomplete,
         "instructions": request.instructions,
         "max_output_tokens": request.max_output_tokens,
-        # OpenAI reports the *effective* sampling values used, not a bare echo —
-        # these are its own defaults when the request left them unset.
+        # Effective values, not a bare echo: OpenAI's own defaults when unset.
         "temperature": request.temperature if request.temperature is not None else 1.0,
         "top_p": request.top_p if request.top_p is not None else 1.0,
         "tools": _echo_tools(request.tools),
@@ -315,9 +291,7 @@ def build_response_object(
         "text": request.text if request.text else {"format": {"type": "text"}},
         "reasoning": request.reasoning,
         "metadata": request.metadata or {},
-        # OpenAI stores by default; only an explicit `store: false` opts out. The
-        # gateway reads the same field to decide whether to persist, so what the
-        # response claims and what was actually stored cannot drift.
+        # OpenAI stores by default; only an explicit `store: false` opts out.
         "store": request.store is not False,
         "previous_response_id": request.previous_response_id,
     }
@@ -333,13 +307,8 @@ def build_response_object(
 
 
 def _echo_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Backfill echoed ``tools[]`` so every ``FunctionTool`` carries all five spec keys.
-
-    Clients routinely omit optional keys (``description``/``parameters``/``strict``)
-    on the request; the spec requires them present (nullable) on the echo. Non-function
-    tool shapes are passed through untouched — the request side already rejects them
-    before a response is ever built, so this only defends against an unexpected shape.
-    """
+    """Backfill echoed ``tools[]`` so every ``FunctionTool`` carries all five spec keys
+    (the request may omit optional ones, but the echo requires them present, nullable)."""
     if not tools:
         return []
     out: list[dict[str, Any]] = []
@@ -360,14 +329,9 @@ def _echo_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
 
 
 def _usage_from_chat(usage: UsageInfo) -> ResponseUsage:
-    """Remap chat usage to Responses usage, preserving token details.
-
-    ``cached_tokens`` / ``reasoning_tokens`` are surfaced by vLLM (prefix
-    caching / reasoning models) under the OpenAI-standard ``prompt_tokens_details``
-    / ``completion_tokens_details``. Responses uses the same sub-field names, so
-    this is a direct field-to-field copy; loaders that report no details
-    (llama_server/transformers) leave them at the zero default.
-    """
+    """Remap chat usage to Responses usage; a direct field copy since both use the same
+    ``cached_tokens``/``reasoning_tokens`` sub-field names. Loaders reporting no details
+    leave them at the zero default."""
     prompt_details = usage.prompt_tokens_details
     completion_details = usage.completion_tokens_details
     return ResponseUsage(
@@ -387,8 +351,6 @@ def _status_for(
     finish_reason: str | None,
 ) -> tuple[Literal["completed", "incomplete"], dict[str, Any] | None]:
     # chat finish_reason -> Responses status + incomplete_details.reason.
-    # The Responses spec's incomplete_details.reason enum is
-    # {max_output_tokens, content_filter}.
     if finish_reason == "length":
         return "incomplete", {"reason": "max_output_tokens"}
     if finish_reason == "content_filter":

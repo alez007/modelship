@@ -3,6 +3,7 @@ response envelope."""
 
 import pytest
 
+from modelship.openai import compaction_crypto
 from modelship.openai.protocol import ResponsesRequest
 from modelship.openai.protocol.responses import (
     UnsupportedResponsesFeatureError,
@@ -10,6 +11,13 @@ from modelship.openai.protocol.responses import (
 )
 from modelship.openai.protocol.responses.adapter import _content_to_chat, build_response_object
 from modelship.openai.protocol.responses.schemas import ResponseReasoningItem
+
+
+@pytest.fixture(autouse=True)
+def _reset_ephemeral_compaction_key():
+    compaction_crypto._ephemeral_key = None
+    yield
+    compaction_crypto._ephemeral_key = None
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -122,6 +130,63 @@ class TestRequestInputTranslation:
     def test_unknown_input_item_type_rejected(self):
         with pytest.raises(UnsupportedResponsesFeatureError):
             responses_request_to_chat(_req(input=[{"type": "image_generation_call"}]))
+
+
+class TestCompactionInputDecode:
+    """Round-trip half of ``/v1/responses/compact``: a ``compaction`` input item is
+    decrypted back into the items it was built from and spliced into the message list,
+    exactly as ``websocket-compact-new-chain`` requires."""
+
+    def test_compaction_item_decodes_into_messages(self):
+        summary_items = [{"role": "assistant", "content": "previously: the user is named Alex"}]
+        blob = compaction_crypto.encrypt_items(summary_items)
+        chat = responses_request_to_chat(
+            _req(
+                input=[
+                    {"type": "compaction", "id": "cmp_1", "encrypted_content": blob},
+                    {"role": "user", "content": "what's my name?"},
+                ]
+            )
+        )
+        assert chat.messages == [
+            {"role": "assistant", "content": "previously: the user is named Alex"},
+            {"role": "user", "content": "what's my name?"},
+        ]
+
+    def test_nested_compaction_item_is_rejected(self):
+        # A blob we mint ourselves never nests another compaction item — but the
+        # decode path must not simply trust that. Simulates a forged blob (or a
+        # future bug in build_compaction) that decrypts to one anyway: recursing
+        # into it unbounded would be a DoS vector, so it must be a clean rejection.
+        nested_blob = compaction_crypto.encrypt_items(
+            [{"type": "compaction", "id": "cmp_inner", "encrypted_content": "irrelevant"}]
+        )
+        with pytest.raises(UnsupportedResponsesFeatureError, match="nest"):
+            responses_request_to_chat(
+                _req(input=[{"type": "compaction", "id": "cmp_1", "encrypted_content": nested_blob}])
+            )
+
+    def test_missing_encrypted_content_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="encrypted_content"):
+            responses_request_to_chat(_req(input=[{"type": "compaction", "id": "cmp_1"}]))
+
+    def test_tampered_encrypted_content_is_a_clean_rejection(self):
+        blob = compaction_crypto.encrypt_items([{"role": "assistant", "content": "x"}])
+        tampered = blob[:-4] + ("AAAA" if blob[-4:] != "AAAA" else "BBBB")
+        with pytest.raises(UnsupportedResponsesFeatureError, match="could not be decoded"):
+            responses_request_to_chat(
+                _req(input=[{"type": "compaction", "id": "cmp_1", "encrypted_content": tampered}])
+            )
+
+    def test_wrong_key_is_the_same_clean_rejection_as_tampering(self, monkeypatch):
+        # Both a tampered blob and one encrypted under a different key must produce
+        # the identical error — the message must never reveal which case it was.
+        from cryptography.fernet import Fernet
+
+        blob = compaction_crypto.encrypt_items([{"role": "assistant", "content": "x"}])
+        monkeypatch.setenv("MSHIP_COMPACTION_KEY", Fernet.generate_key().decode("ascii"))
+        with pytest.raises(UnsupportedResponsesFeatureError, match="could not be decoded"):
+            responses_request_to_chat(_req(input=[{"type": "compaction", "id": "cmp_1", "encrypted_content": blob}]))
 
 
 class TestRequestFieldTranslation:
