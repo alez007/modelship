@@ -13,7 +13,7 @@ site_dir: site
 theme:
   name: material
   logo: assets/logo-dark.svg
-  favicon: assets/logo-dark.svg
+  favicon: assets/favicon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
