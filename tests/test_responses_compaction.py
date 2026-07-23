@@ -63,6 +63,17 @@ class TestCompactionCrypto:
         with pytest.raises(InvalidToken):
             compaction_crypto.decrypt_items(tampered)
 
+    def test_non_ascii_blob_raises_invalid_token(self, compaction_key):
+        # blob.encode("ascii") would otherwise raise UnicodeEncodeError, a plain
+        # ValueError that callers wouldn't catch alongside a tampered/wrong-key blob.
+        with pytest.raises(InvalidToken):
+            compaction_crypto.decrypt_items("not-ascii-🔥")
+
+    def test_invalid_configured_key_fails_fast_with_clear_error(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_COMPACTION_KEY", "not-a-valid-fernet-key")
+        with pytest.raises(ValueError, match="MSHIP_COMPACTION_KEY is not a valid Fernet key"):
+            compaction_crypto.encrypt_items([{"a": 1}])
+
     def test_ephemeral_key_used_and_warns_when_unset(self, monkeypatch, caplog):
         monkeypatch.delenv("MSHIP_COMPACTION_KEY", raising=False)
         # Attach caplog's handler directly to this logger: some other test module's

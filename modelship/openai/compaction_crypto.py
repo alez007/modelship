@@ -37,7 +37,12 @@ __all__ = ["InvalidToken", "decrypt_items", "encrypt_items"]
 def _resolve_key() -> bytes:
     configured = os.environ.get(_KEY_ENV)
     if configured:
-        return configured.encode("ascii")
+        key = configured.encode("ascii")
+        try:
+            Fernet(key)  # validate eagerly so a bad key fails fast, not mid-request
+        except ValueError as e:
+            raise ValueError(f"{_KEY_ENV} is not a valid Fernet key: {e}") from e
+        return key
 
     global _ephemeral_key
     if _ephemeral_key is None:
@@ -63,11 +68,15 @@ def decrypt_items(blob: str) -> list[Any]:
     """Inverse of :func:`encrypt_items`.
 
     Raises :class:`InvalidToken` for a tampered blob, a blob encrypted under a
-    different key, or malformed JSON — callers must map all three to the same
-    clean 400 without revealing which it was.
+    different key, non-ASCII content, or malformed JSON — callers must map all of
+    these to the same clean 400 without revealing which it was.
     """
     fernet = Fernet(_resolve_key())
-    plaintext = fernet.decrypt(blob.encode("ascii"))
+    try:
+        raw = blob.encode("ascii")
+    except UnicodeEncodeError:
+        raise InvalidToken from None
+    plaintext = fernet.decrypt(raw)
     try:
         items = json.loads(plaintext)
     except json.JSONDecodeError:
