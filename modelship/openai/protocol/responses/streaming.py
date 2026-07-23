@@ -32,6 +32,7 @@ cycle (that package imports this one).
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -128,7 +129,14 @@ class ResponsesStreamTranslator:
         return oi
 
     def _envelope(
-        self, event_type: str, status: str, output: list[Any], usage, incomplete, error: Any | None = None
+        self,
+        event_type: str,
+        status: str,
+        output: list[Any],
+        usage,
+        incomplete,
+        error: Any | None = None,
+        completed_at: int | None = None,
     ) -> str:
         response = build_response_object(
             self.request,
@@ -139,6 +147,7 @@ class ResponsesStreamTranslator:
             model=self.model,
             response_id=self.response_id,
             created_at=self.created_at,
+            completed_at=completed_at,
             error=error,
         )
         # Pin created_at after the first build so every envelope is identical.
@@ -190,7 +199,8 @@ class ResponsesStreamTranslator:
         status, incomplete = _status_for(self.finish_reason)
         usage = _usage_from_chat(self.usage) if self.usage is not None else None
         terminal = "response.incomplete" if status == "incomplete" else "response.completed"
-        yield self._envelope(terminal, status, output, usage, incomplete)
+        completed_at = int(time.time()) if status == "completed" else None
+        yield self._envelope(terminal, status, output, usage, incomplete, completed_at=completed_at)
 
     def fail(self, message: str) -> Iterator[str]:
         """Terminal ``response.failed`` event for a mid-stream error (a loader

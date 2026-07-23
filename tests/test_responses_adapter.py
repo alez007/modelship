@@ -8,7 +8,8 @@ from modelship.openai.protocol.responses import (
     UnsupportedResponsesFeatureError,
     responses_request_to_chat,
 )
-from modelship.openai.protocol.responses.adapter import build_response_object
+from modelship.openai.protocol.responses.adapter import _content_to_chat, build_response_object
+from modelship.openai.protocol.responses.schemas import ResponseReasoningItem
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -43,6 +44,33 @@ class TestRequestInputTranslation:
         )
         assert chat.messages == [{"role": "user", "content": "ab"}]
 
+    def test_message_with_image_part_reaches_chat_as_image_url(self):
+        chat = responses_request_to_chat(
+            _req(
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "what is this?"},
+                            {"type": "input_image", "image_url": "https://example.com/cat.png"},
+                        ],
+                    },
+                ]
+            )
+        )
+        content = chat.messages[0]["content"]
+        assert content == [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        ]
+
+    def test_unknown_content_part_type_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content part"):
+            responses_request_to_chat(
+                _req(input=[{"role": "user", "content": [{"type": "input_audio", "input_audio": {}}]}])
+            )
+
     def test_role_shorthand_without_type_is_a_message(self):
         chat = responses_request_to_chat(_req(input=[{"role": "user", "content": "yo"}]))
         assert chat.messages == [{"role": "user", "content": "yo"}]
@@ -73,6 +101,12 @@ class TestRequestInputTranslation:
     def test_function_call_output_missing_call_id_rejected(self):
         with pytest.raises(UnsupportedResponsesFeatureError, match="function_call_output"):
             responses_request_to_chat(_req(input=[{"type": "function_call_output", "output": "sunny"}]))
+
+    def test_function_call_output_with_non_text_output_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content shape"):
+            responses_request_to_chat(
+                _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": {"bad": "shape"}}])
+            )
 
     def test_reasoning_input_item_is_dropped(self):
         chat = responses_request_to_chat(
@@ -126,8 +160,8 @@ class TestResponseEnvelopeEcho:
     the same `store` field to decide whether to persist, so the response can't claim
     one thing while the store did another."""
 
-    def _build(self, request):
-        return build_response_object(request, status="completed", output=[], usage=None, incomplete=None)
+    def _build(self, request, **kwargs):
+        return build_response_object(request, status="completed", output=[], usage=None, incomplete=None, **kwargs)
 
     def test_store_defaults_to_true_when_unset(self):
         # OpenAI stores by default; a client that never sends the field still expects
@@ -145,6 +179,113 @@ class TestResponseEnvelopeEcho:
 
     def test_previous_response_id_absent_is_none(self):
         assert self._build(_req()).previous_response_id is None
+
+
+class TestResponseResourceRequiredFields:
+    """The Open Responses conformance suite validates against `ResponseResource`'s
+    required-field list; these were previously missing or sent as `null`."""
+
+    def _build(self, request, **kwargs):
+        return build_response_object(request, status="completed", output=[], usage=None, incomplete=None, **kwargs)
+
+    def test_static_defaults_for_previously_missing_fields(self):
+        dumped = self._build(_req()).model_dump(mode="json")
+        assert dumped["truncation"] == "disabled"
+        assert dumped["presence_penalty"] == 0.0
+        assert dumped["frequency_penalty"] == 0.0
+        assert dumped["top_logprobs"] == 0
+        assert dumped["max_tool_calls"] is None
+        assert dumped["background"] is False
+        assert dumped["service_tier"] == "default"
+        assert dumped["safety_identifier"] is None
+        assert dumped["prompt_cache_key"] is None
+
+    def test_temperature_and_top_p_resolve_to_openai_defaults_when_unset(self):
+        resp = self._build(_req())
+        assert resp.temperature == 1.0
+        assert resp.top_p == 1.0
+
+    def test_explicit_temperature_and_top_p_are_preserved(self):
+        resp = self._build(_req(temperature=0.2, top_p=0.5))
+        assert resp.temperature == 0.2
+        assert resp.top_p == 0.5
+
+    def test_text_defaults_to_plain_text_format_when_unset(self):
+        resp = self._build(_req())
+        assert resp.text == {"format": {"type": "text"}}
+
+    def test_explicit_text_is_preserved(self):
+        resp = self._build(_req(text={"format": {"type": "json_object"}}))
+        assert resp.text == {"format": {"type": "json_object"}}
+
+    def test_completed_at_absent_by_default(self):
+        assert self._build(_req()).completed_at is None
+
+    def test_completed_at_set_when_passed(self):
+        resp = self._build(_req(), completed_at=1234)
+        assert resp.completed_at == 1234
+
+
+class TestEchoedTools:
+    def _tools_on(self, request):
+        return build_response_object(request, status="completed", output=[], usage=None, incomplete=None).tools
+
+    def test_partial_tool_backfilled_with_all_five_keys(self):
+        tools = self._tools_on(_req(tools=[{"type": "function", "name": "f"}]))
+        assert tools == [{"type": "function", "name": "f", "description": None, "parameters": None, "strict": None}]
+
+    def test_fully_specified_tool_unchanged(self):
+        tool = {"type": "function", "name": "f", "description": "d", "parameters": {"type": "object"}, "strict": True}
+        assert self._tools_on(_req(tools=[tool])) == [tool]
+
+    def test_no_tools_echoes_empty_list(self):
+        assert self._tools_on(_req()) == []
+
+
+class TestReasoningItemSerialization:
+    def test_encrypted_content_omitted_when_unset(self):
+        dumped = ResponseReasoningItem().model_dump(mode="json")
+        assert "encrypted_content" not in dumped
+
+    def test_encrypted_content_present_when_set(self):
+        dumped = ResponseReasoningItem(encrypted_content="abc").model_dump(mode="json")
+        assert dumped["encrypted_content"] == "abc"
+
+
+class TestContentToChat:
+    def test_plain_string_passes_through(self):
+        assert _content_to_chat("hi") == "hi"
+
+    def test_none_passes_through(self):
+        assert _content_to_chat(None) is None
+
+    def test_text_only_parts_collapse_to_string(self):
+        assert _content_to_chat([{"type": "input_text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
+
+    def test_image_part_produces_parts_list(self):
+        result = _content_to_chat([{"type": "input_image", "image_url": "https://x/y.png"}])
+        assert result == [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+
+    def test_mixed_text_and_image_produces_parts_list(self):
+        result = _content_to_chat(
+            [{"type": "input_text", "text": "look"}, {"type": "input_image", "image_url": "https://x/y.png"}]
+        )
+        assert result == [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+        ]
+
+    def test_unknown_part_type_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content part type"):
+            _content_to_chat([{"type": "input_audio", "input_audio": {}}])
+
+    def test_non_dict_part_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content part"):
+            _content_to_chat(["oops"])
+
+    def test_non_list_non_string_content_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content shape"):
+            _content_to_chat({"type": "input_text", "text": "not wrapped in a list"})
 
 
 class TestRequestRejections:

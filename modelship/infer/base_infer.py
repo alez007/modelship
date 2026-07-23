@@ -275,6 +275,7 @@ class BaseInfer[Prepared](ABC):
                 return
             for event in translator.finish():
                 yield event
+            yield "data: [DONE]\n\n"
         finally:
             await chunks.aclose()
 

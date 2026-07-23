@@ -125,6 +125,17 @@ class TestTextStream:
         assert resp["usage"]["input_tokens"] == 4
         assert resp["usage"]["output_tokens"] == 6
 
+    def test_completed_response_has_completed_at(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events(translator, [_chunk(DeltaMessage(content="x"), finish_reason="stop")])
+        assert isinstance(events[-1]["response"]["completed_at"], int)
+
+    def test_created_and_in_progress_envelopes_have_no_completed_at(self):
+        translator = ResponsesStreamTranslator(_req())
+        events = _events(translator, [_chunk(DeltaMessage(content="x"), finish_reason="stop")])
+        assert events[0]["response"]["completed_at"] is None
+        assert events[1]["response"]["completed_at"] is None
+
     def test_item_id_is_stable_across_events(self):
         translator = ResponsesStreamTranslator(_req())
         events = _events(translator, [_chunk(DeltaMessage(content="x"), finish_reason="stop")])
@@ -227,6 +238,8 @@ class TestTerminalStatus:
         assert events[-1]["type"] == "response.incomplete"
         assert events[-1]["response"]["status"] == "incomplete"
         assert events[-1]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}
+        # incomplete isn't "done" — completed_at stays unset.
+        assert events[-1]["response"]["completed_at"] is None
 
     def test_content_filter_finish_reason_is_incomplete(self):
         translator = ResponsesStreamTranslator(_req())

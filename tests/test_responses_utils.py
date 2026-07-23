@@ -1,8 +1,8 @@
 """Tests for modelship.openai.utils.responses's parsed-output shaping."""
 
-from modelship.openai.protocol import FunctionCall, ToolCall
+from modelship.openai.protocol import FunctionCall, ResponsesRequest, ToolCall, UsageInfo
 from modelship.openai.utils.chat import ParsedChatOutput
-from modelship.openai.utils.responses import build_responses_items_from_parsed
+from modelship.openai.utils.responses import build_response_from_parsed, build_responses_items_from_parsed
 
 
 def test_build_responses_items_from_parsed_orders_reasoning_message_tools():
@@ -26,3 +26,27 @@ def test_build_responses_items_from_parsed_skips_empty_fields():
     parsed = ParsedChatOutput(content=None, reasoning=None, tool_calls=[])
 
     assert build_responses_items_from_parsed(parsed) == []
+
+
+def _usage() -> UsageInfo:
+    return UsageInfo(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+
+
+def test_build_response_from_parsed_sets_completed_at_when_completed():
+    request = ResponsesRequest(model="m", input="hi")
+    parsed = ParsedChatOutput(content="hi", reasoning=None, tool_calls=[])
+
+    resp = build_response_from_parsed(parsed, request, usage=_usage(), finish_reason="stop", model="m")
+
+    assert resp.status == "completed"
+    assert isinstance(resp.completed_at, int)
+
+
+def test_build_response_from_parsed_leaves_completed_at_none_when_incomplete():
+    request = ResponsesRequest(model="m", input="hi")
+    parsed = ParsedChatOutput(content="hi", reasoning=None, tool_calls=[])
+
+    resp = build_response_from_parsed(parsed, request, usage=_usage(), finish_reason="length", model="m")
+
+    assert resp.status == "incomplete"
+    assert resp.completed_at is None

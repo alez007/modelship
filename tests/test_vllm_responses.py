@@ -127,6 +127,7 @@ async def test_stream_success_produces_native_responses_events():
     assert "event: response.created" in body
     assert "event: response.output_text.delta" in body
     assert "event: response.completed" in body
+    assert body.endswith("data: [DONE]\n\n")
 
 
 @pytest.mark.asyncio
@@ -149,3 +150,6 @@ async def test_stream_mid_stream_exception_emits_failed_event():
 
     assert "event: response.failed" in body
     assert "event: response.completed" not in body
+    # A failed stream still terminates the SSE connection on its own; no [DONE]
+    # sentinel follows (that's only emitted on the clean-finish path).
+    assert "[DONE]" not in body

@@ -14,7 +14,7 @@ so the adapter, not pydantic, owns the role/content/typed-item translation.
 import time
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_serializer
 
 from modelship.openai.protocol.base import OpenAIBaseModel, random_uuid
 
@@ -86,6 +86,15 @@ class ResponseReasoningItem(OpenAIBaseModel):
     content: list[ResponseReasoningText] = Field(default_factory=list)
     encrypted_content: str | None = None
 
+    @model_serializer(mode="wrap")
+    def _omit_unset_encrypted_content(self, handler: Any) -> dict[str, Any]:
+        # Spec types encrypted_content as a plain (non-nullable) string that's not
+        # required — the key must be absent, not null, when there's no value.
+        dumped = handler(self)
+        if dumped.get("encrypted_content") is None:
+            dumped.pop("encrypted_content", None)
+        return dumped
+
 
 class ResponseFunctionToolCall(OpenAIBaseModel):
     type: Literal["function_call"] = "function_call"
@@ -131,6 +140,7 @@ class ResponseObject(OpenAIBaseModel):
     id: str = Field(default_factory=lambda: f"resp_{random_uuid()}")
     object: Literal["response"] = "response"
     created_at: int = Field(default_factory=lambda: int(time.time()))
+    completed_at: int | None = None
     status: Literal["completed", "failed", "incomplete", "in_progress"] = "completed"
     model: str
     output: list[ResponseOutputItem] = Field(default_factory=list)
@@ -138,13 +148,22 @@ class ResponseObject(OpenAIBaseModel):
     # Echoed request settings (OpenAI returns these on the response object).
     instructions: str | None = None
     max_output_tokens: int | None = None
+    max_tool_calls: int | None = None
     temperature: float | None = None
     top_p: float | None = None
+    top_logprobs: int = 0
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
     tools: list[dict[str, Any]] = Field(default_factory=list)
     tool_choice: str | dict[str, Any] = "auto"
     parallel_tool_calls: bool = True
     text: dict[str, Any] | None = None
     reasoning: dict[str, Any] | None = None
+    truncation: str = "disabled"
+    background: bool = False
+    service_tier: str = "default"
+    safety_identifier: str | None = None
+    prompt_cache_key: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     previous_response_id: str | None = None
     store: bool = False
