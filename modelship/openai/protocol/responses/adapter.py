@@ -180,7 +180,7 @@ def _text_of(content: Any) -> str | None:
     if isinstance(content, list):
         parts = [p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str)]
         return "".join(parts) if parts else None
-    return str(content)
+    raise UnsupportedResponsesFeatureError(f"unsupported content shape {content!r}.")
 
 
 _CONTENT_TEXT_TYPES = frozenset({"input_text", "output_text", "text"})
@@ -200,7 +200,7 @@ def _content_to_chat(content: Any) -> str | list[dict[str, Any]] | None:
     if content is None or isinstance(content, str):
         return content
     if not isinstance(content, list):
-        return str(content)
+        raise UnsupportedResponsesFeatureError(f"unsupported content shape {content!r}.")
 
     parts: list[dict[str, Any]] = []
     for p in content:

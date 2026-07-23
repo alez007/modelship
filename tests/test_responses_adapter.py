@@ -102,6 +102,12 @@ class TestRequestInputTranslation:
         with pytest.raises(UnsupportedResponsesFeatureError, match="function_call_output"):
             responses_request_to_chat(_req(input=[{"type": "function_call_output", "output": "sunny"}]))
 
+    def test_function_call_output_with_non_text_output_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content shape"):
+            responses_request_to_chat(
+                _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": {"bad": "shape"}}])
+            )
+
     def test_reasoning_input_item_is_dropped(self):
         chat = responses_request_to_chat(
             _req(
@@ -276,6 +282,10 @@ class TestContentToChat:
     def test_non_dict_part_rejected(self):
         with pytest.raises(UnsupportedResponsesFeatureError, match="content part"):
             _content_to_chat(["oops"])
+
+    def test_non_list_non_string_content_rejected(self):
+        with pytest.raises(UnsupportedResponsesFeatureError, match="content shape"):
+            _content_to_chat({"type": "input_text", "text": "not wrapped in a list"})
 
 
 class TestRequestRejections:
