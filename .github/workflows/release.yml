@@ -75,8 +75,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}${{ matrix.tag_suffix }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }},ignore-error=true
 
   helm:
     runs-on: ubuntu-latest
