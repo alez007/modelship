@@ -19,6 +19,7 @@ requires-python = "==3.12.10"
 dependencies = [
     "argparse>=1.4.0",
     "asyncio>=4.0.0",
+    "cryptography>=43.0.0",
     "fastapi>=0.116.1",
     "httpx>=0.28.1",
     "huggingface-hub>=1.12.0",

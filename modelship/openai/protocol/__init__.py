@@ -72,6 +72,9 @@ from modelship.openai.protocol.raw import (
     RawTranslation,
 )
 from modelship.openai.protocol.responses import (
+    CompactionItem,
+    CompactRequest,
+    CompactResource,
     ResponseFunctionToolCall,
     ResponseInputItem,
     ResponseInputTokensDetails,
@@ -100,6 +103,9 @@ __all__ = [
     "ChatCompletionResponseStreamChoice",
     "ChatCompletionStreamResponse",
     "ChatMessage",
+    "CompactRequest",
+    "CompactResource",
+    "CompactionItem",
     "CompletionTokenUsageInfo",
     "DeltaFunctionCall",
     "DeltaMessage",

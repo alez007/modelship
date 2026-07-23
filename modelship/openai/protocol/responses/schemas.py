@@ -50,6 +50,14 @@ class ResponsesRequest(OpenAIBaseModel):
     background: bool | None = None
 
 
+class CompactRequest(OpenAIBaseModel):
+    model: str
+    input: str | list[ResponseInputItem] | None = None
+    previous_response_id: str | None = None
+    instructions: str | None = None
+    prompt_cache_key: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Output items
 # ---------------------------------------------------------------------------
@@ -132,6 +140,35 @@ class ResponseUsage(OpenAIBaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Compaction (``/v1/responses/compact``)
+# ---------------------------------------------------------------------------
+
+
+class CompactionItem(OpenAIBaseModel):
+    type: Literal["compaction"] = "compaction"
+    id: str = Field(default_factory=lambda: f"cmp_{random_uuid()}")
+    encrypted_content: str
+    created_by: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_created_by(self, handler: Any) -> dict[str, Any]:
+        # Spec types created_by as a plain (non-nullable) string that's not
+        # required — the key must be absent, not null, when there's no value.
+        dumped = handler(self)
+        if dumped.get("created_by") is None:
+            dumped.pop("created_by", None)
+        return dumped
+
+
+class CompactResource(OpenAIBaseModel):
+    id: str = Field(default_factory=lambda: f"resp_{random_uuid()}")
+    object: Literal["response.compaction"] = "response.compaction"
+    output: list[CompactionItem]
+    created_at: int = Field(default_factory=lambda: int(time.time()))
+    usage: ResponseUsage
+
+
+# ---------------------------------------------------------------------------
 # Response object
 # ---------------------------------------------------------------------------
 
@@ -172,6 +209,9 @@ class ResponseObject(OpenAIBaseModel):
 
 
 __all__ = [
+    "CompactRequest",
+    "CompactResource",
+    "CompactionItem",
     "ResponseFunctionToolCall",
     "ResponseInputItem",
     "ResponseInputTokensDetails",

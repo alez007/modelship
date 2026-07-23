@@ -25,6 +25,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from cryptography.fernet import InvalidToken
+
+from modelship.openai import compaction_crypto
 from modelship.openai.protocol.chat import ChatCompletionRequest, StreamOptions
 from modelship.openai.protocol.responses.schemas import (
     ResponseInputTokensDetails,
@@ -64,7 +67,7 @@ def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionReques
     if request.background:
         raise UnsupportedResponsesFeatureError("background mode is not supported on /v1/responses.")
 
-    messages = _messages_from_input(request.input, request.instructions)
+    messages = messages_from_input(request.input, request.instructions)
 
     kwargs: dict[str, Any] = {
         "model": request.model,
@@ -106,7 +109,7 @@ def responses_request_to_chat(request: ResponsesRequest) -> ChatCompletionReques
     return ChatCompletionRequest(**kwargs)
 
 
-def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str | None) -> list[dict[str, Any]]:
+def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | None) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     if instructions:
         messages.append({"role": "system", "content": instructions})
@@ -159,6 +162,18 @@ def _messages_from_input(input_: str | list[dict[str, Any]], instructions: str |
         elif itype == "reasoning":
             # Don't replay raw chain-of-thought back into the prompt.
             continue
+        elif itype == "compaction":
+            # Round-trip half of /v1/responses/compact: the blob is opaque to the
+            # client, decrypted back into the items it was built from. Recursion is
+            # bounded — a compaction blob never contains another compaction item.
+            encrypted_content = item.get("encrypted_content")
+            if not encrypted_content:
+                raise UnsupportedResponsesFeatureError("compaction input items require 'encrypted_content'.")
+            try:
+                decoded_items = compaction_crypto.decrypt_items(encrypted_content)
+            except InvalidToken:
+                raise UnsupportedResponsesFeatureError("compaction item could not be decoded.") from None
+            messages.extend(messages_from_input(decoded_items, None))
         elif itype == "message" or "role" in item:
             messages.append(
                 {

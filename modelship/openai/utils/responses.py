@@ -20,9 +20,24 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from modelship.logging import get_logger
-from modelship.openai.protocol import ErrorResponse, ResponseObject, ResponsesRequest, UsageInfo, create_error_response
-from modelship.openai.protocol.responses.adapter import _status_for, _usage_from_chat, build_response_object
+from modelship.openai import compaction_crypto
+from modelship.openai.protocol import (
+    ChatCompletionRequest,
+    ErrorResponse,
+    ResponseObject,
+    ResponsesRequest,
+    UsageInfo,
+    create_error_response,
+)
+from modelship.openai.protocol.responses.adapter import (
+    _status_for,
+    _usage_from_chat,
+    build_response_object,
+    messages_from_input,
+)
 from modelship.openai.protocol.responses.schemas import (
+    CompactionItem,
+    CompactResource,
     ResponseFunctionToolCall,
     ResponseOutputItem,
     ResponseOutputMessage,
@@ -97,6 +112,50 @@ def build_response_from_parsed(
     )
 
 
+# Structured rather than a bare "summarize this" — a flat prose summary loses the
+# details a continuation actually needs. Preserve, in this order: the user's
+# explicit intent; key facts, decisions, names, and identifiers; specific file
+# paths, code, and command output already produced; errors hit and how they were
+# resolved (including any correction the user gave); work still pending; and
+# exactly what was in progress, so the next turn picks up without re-deriving it.
+_COMPACTION_SYSTEM_PROMPT = (
+    "Summarize this conversation so it can be continued from a fresh context window "
+    "with nothing essential lost. Structure the summary with these sections, in order: "
+    "(1) the user's explicit requests and intent, verbatim where it matters; "
+    "(2) key facts, decisions, names, and identifiers established so far; "
+    "(3) specific file paths, code, or command output already produced, in enough "
+    "detail to avoid re-deriving them; "
+    "(4) errors encountered and how they were fixed, including any correction the "
+    "user gave about how to approach the task; "
+    "(5) work explicitly still pending; "
+    "(6) exactly what was being worked on immediately before this summary, so the "
+    "next turn picks up from there rather than guessing."
+)
+
+
+def build_summarization_request(model: str, items: list[Any]) -> ChatCompletionRequest:
+    """The internal chat request ``/v1/responses/compact`` issues to summarize *items*.
+
+    Reuses ``messages_from_input`` so a compaction item nested in *items* (a chain
+    that was already compacted once) decodes the same way it would on ``/v1/responses``.
+    May raise ``UnsupportedResponsesFeatureError`` for an item shape it can't translate.
+    """
+    messages = messages_from_input(items, None)
+    messages.insert(0, {"role": "system", "content": _COMPACTION_SYSTEM_PROMPT})
+    return ChatCompletionRequest(model=model, messages=messages, stream=False)
+
+
+def build_compaction(*, summary_items: list[Any], usage: UsageInfo) -> CompactResource:
+    """Build a ``CompactResource`` from a ``/v1/responses/compact`` summarization call.
+
+    ``id``/``created_at`` are freshly minted rather than echoing the request: a
+    compaction result is never persisted under its own id, so there's nothing to key
+    a future GET on (out of scope, see the compaction plan).
+    """
+    encrypted_content = compaction_crypto.encrypt_items(summary_items)
+    return CompactResource(output=[CompactionItem(encrypted_content=encrypted_content)], usage=_usage_from_chat(usage))
+
+
 def responses_validation_error(exc: ValidationError) -> ErrorResponse:
     """400 for a pydantic ``ValidationError`` surfaced by ``responses_request_to_chat``
     (e.g. a bad ``reasoning.effort`` value) — same shape as every other rejection.
@@ -138,20 +197,28 @@ def _terminal_event_payload(chunk: Any) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-async def resolve_history(store: StateStore, identity: str, request: ResponsesRequest) -> list[Any]:
-    """Prepend the conversation stored under ``previous_response_id`` to this
-    turn's input. 404 if unknown, 503 if the store is unreachable — an outage must
-    never masquerade as a legitimately unknown id."""
-    prev_id = request.previous_response_id or ""
-    if not RESPONSE_ID_RE.match(prev_id):
+async def resolve_history_items(
+    store: StateStore, identity: str, *, previous_response_id: str | None, input_: str | list[Any] | None
+) -> list[Any]:
+    """Prepend the conversation stored under ``previous_response_id`` to this turn's
+    input. 404 if unknown, 503 if the store is unreachable — an outage must never
+    masquerade as a legitimately unknown id.
+
+    Field-based (rather than taking a ``ResponsesRequest``) so ``/v1/responses`` and
+    ``/v1/responses/compact`` share this without either faking the other's request type.
+    """
+    this_turn = as_input_items(input_) if input_ is not None else []
+    if previous_response_id is None:
+        return this_turn
+    if not RESPONSE_ID_RE.match(previous_response_id):
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{prev_id}' not found.",
+            detail=f"Previous response with id '{previous_response_id}' not found.",
         )
     try:
-        snapshot = await responses_state.read_async(store, identity, prev_id)
+        snapshot = await responses_state.read_async(store, identity, previous_response_id)
     except StateStoreUnavailableError:
-        logger.exception("State store unavailable resolving previous_response_id=%s", prev_id)
+        logger.exception("State store unavailable resolving previous_response_id=%s", previous_response_id)
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
             detail="Conversation state store is unavailable; retry shortly.",
@@ -159,9 +226,16 @@ async def resolve_history(store: StateStore, identity: str, request: ResponsesRe
     if snapshot is None:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{prev_id}' not found.",
+            detail=f"Previous response with id '{previous_response_id}' not found.",
         )
-    return [*responses_state.history_items(snapshot), *as_input_items(request.input)]
+    return [*responses_state.history_items(snapshot), *this_turn]
+
+
+async def resolve_history(store: StateStore, identity: str, request: ResponsesRequest) -> list[Any]:
+    """``resolve_history_items`` for a ``ResponsesRequest``."""
+    return await resolve_history_items(
+        store, identity, previous_response_id=request.previous_response_id, input_=request.input
+    )
 
 
 async def persist_response(gen, store: StateStore, *, identity: str, input_items: list[Any]):
