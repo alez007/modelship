@@ -190,6 +190,34 @@ Modelship is actively used and designed for stability in multi-tenant setups. Ke
 
 We are currently hardening the Kubernetes/KubeRay path (a Helm chart ships in [`helm/`](helm/modelship/); GPU-aware probes and gateway-level rate-limiting are next). See the full [Production Readiness Plan](docs/production-readiness.md) for the scorecard and roadmap.
 
+## Open Responses Conformance
+
+`/v1/responses` is also tested against the independent [Open Responses](https://github.com/openresponses/openresponses) compliance suite (`bun run test:compliance`), which exercises the endpoint over real HTTP against a live deployment rather than mocks.
+
+**Latest result: 10/17** (`Qwen3-VL-8B-Instruct` AWQ, vLLM, 2026-07-23):
+
+| Test | Category | Status |
+|---|---|---|
+| Basic Text Response | Core | ✅ Pass |
+| Assistant Message Phase | Core | ✅ Pass |
+| Response Output Phase Schema | Core | ✅ Pass |
+| Streaming Response | Core | ✅ Pass |
+| System Prompt | Core | ✅ Pass |
+| Multi-turn Conversation | Core | ✅ Pass |
+| Tool Calling | Core | ✅ Pass |
+| Compaction Endpoint | `/v1/responses/compact` | ✅ Pass |
+| Compaction Missing Required Model | `/v1/responses/compact` | ✅ Pass |
+| Image Input | Vision | ✅ Pass |
+| WebSocket Response | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Sequential Responses | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Continuation | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Store False Reconnect Recovery | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Missing Previous Response | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Failed Continuation Evicts Cache | WebSocket | ❌ Fail — transport not implemented |
+| WebSocket Compact New Chain | WebSocket | ❌ Fail — transport not implemented |
+
+Both vision-dependent rows were verified semantically, not just schema-wise: Image Input correctly described the test fixture ("A solid red heart symbol is shown."), and Tool Calling produced a real `function_call` item (`get_weather` with parsed `location` argument), not a text fallback. The only remaining gap is WebSocket transport (7 tests) — an alternative to the HTTP/SSE `/v1/responses` API already supported today, and not yet implemented.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on setting up the dev environment, code style, and submitting pull requests.
