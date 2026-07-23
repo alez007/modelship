@@ -37,11 +37,8 @@ with no per-token bill.
 
 ## Architecture
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/architecture-light.svg">
-  <img alt="Modelship architecture: an agent app calls the Modelship gateway's OpenAI-compatible API, which exposes chat, embeddings, audio, and image endpoints plus a Responses API backed by a shared conversation-state store, routing round-robin to Ray Serve deployments across GPU and CPU cluster nodes." src="assets/architecture-light.svg">
-</picture>
+![Modelship architecture: an agent app calls the Modelship gateway's OpenAI-compatible API, which exposes chat, embeddings, audio, and image endpoints plus a Responses API backed by a shared conversation-state store, routing round-robin to Ray Serve deployments across GPU and CPU cluster nodes.](assets/architecture-light.svg#only-light)
+![Modelship architecture: an agent app calls the Modelship gateway's OpenAI-compatible API, which exposes chat, embeddings, audio, and image endpoints plus a Responses API backed by a shared conversation-state store, routing round-robin to Ray Serve deployments across GPU and CPU cluster nodes.](assets/architecture-dark.svg#only-dark)
 
 Each model runs as an isolated [Ray Serve](https://docs.ray.io/en/latest/serve/index.html)
 deployment with its own lifecycle, health checks, and resource budget.
