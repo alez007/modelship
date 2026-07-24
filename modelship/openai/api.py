@@ -606,6 +606,11 @@ class ModelshipAPI:
                 # yet, so nothing else will cancel its polling task.
                 watcher.stop()
                 raise
+            # Already item-list-shaped (resolve_history's return type) — avoid
+            # re-normalizing what's already normalized.
+            input_items_for_turn = request.input
+        else:
+            input_items_for_turn = responses_utils.as_input_items(request.input)
 
         logger.info(
             "responses model=%s input_items=%s max_output_tokens=%s stream=%s store=%s previous_response_id=%s",
@@ -628,7 +633,7 @@ class ModelshipAPI:
                 response_gen,
                 self._state_store,
                 identity=identity,
-                input_items=responses_utils.as_input_items(request.input),
+                input_items=input_items_for_turn,
             )
         # HTTP transport framing: SSE-frame event dicts (streaming) and append
         # `[DONE]`; a non-streaming ResponseObject or a pre-generation ErrorResponse
