@@ -855,15 +855,16 @@ class TestResponsesProjection:
 
         infer = _infer_with_client(handler)
         result = await infer.create_response(_responses_request(stream=True), RawRequestProxy(None, {}))
-        body = "".join([chunk async for chunk in result])
+        events = [chunk async for chunk in result]
+        types = [e["type"] for e in events]
 
         # responses_request_to_chat hardcodes stream=False; create_response must
         # flip it back to True before this reaches the wire, or llama-server
         # would answer with a single JSON object instead of an SSE stream.
         assert captured["payload"]["stream"] is True
-        assert "event: response.created" in body
-        assert "event: response.output_text.delta" in body
-        assert "event: response.completed" in body
+        assert "response.created" in types
+        assert "response.output_text.delta" in types
+        assert types[-1] == "response.completed"
 
     @pytest.mark.asyncio
     async def test_stream_mid_stream_error_emits_failed_event(self):
@@ -877,11 +878,12 @@ class TestResponsesProjection:
 
         infer = _infer_with_client(handler)
         result = await infer.create_response(_responses_request(stream=True), RawRequestProxy(None, {}))
-        body = "".join([chunk async for chunk in result])
+        events = [chunk async for chunk in result]
+        types = [e["type"] for e in events]
 
-        assert "event: response.failed" in body
-        assert "inline mid-stream error detail" in body
-        assert "event: response.completed" not in body
+        assert types[-1] == "response.failed"
+        assert events[-1]["response"]["error"]["message"] == "inline mid-stream error detail"
+        assert "response.completed" not in types
 
     @pytest.mark.asyncio
     async def test_stream_disconnect_ends_without_hanging(self):
@@ -898,7 +900,8 @@ class TestResponsesProjection:
             # translator.start()'s two events are synchronous and yield immediately;
             # the disconnect only bites once the generator would block on the (never
             # answered) HTTP call — no response.completed/failed ever follows.
-            body = "".join([chunk async for chunk in result])
-        assert "event: response.created" in body
-        assert "event: response.completed" not in body
-        assert "event: response.failed" not in body
+            events = [chunk async for chunk in result]
+        types = [e["type"] for e in events]
+        assert "response.created" in types
+        assert "response.completed" not in types
+        assert "response.failed" not in types

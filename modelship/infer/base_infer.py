@@ -232,27 +232,15 @@ class BaseInfer[Prepared](ABC):
         *,
         request_id: str,
         client_error: Callable[[Exception], str | None] = lambda _exc: None,
-    ) -> AsyncGenerator[str, None]:
-        """Drive a Responses SSE event stream from a loader's typed chat chunks.
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Drive a Responses event stream: start() -> process() per chunk ->
+        finish()/fail(). Yields plain event dicts; SSE/WS framing happens at the
+        transport edge, not here.
 
-        Shared by every loader's `create_response`: each supplies its own native
-        chunk source (already wrapped in `run_cancellable_stream`) and this owns
-        the `ResponsesStreamTranslator` lifecycle — start, one `process()` per
-        chunk, then `finish()` on a clean end or `fail()` on an error.
-        `ClientDisconnectedError` (raised by `run_cancellable_stream` once the
-        client is gone) ends the stream silently, matching every other endpoint.
-        Any other exception is passed to `client_error`, which returns a
-        client-safe message to report via `fail()`, or `None` to log a full
-        stack trace and report a generic "Internal error during generation".
-
-        The `finally` block's `chunks.aclose()` is what guarantees `chunks` (and
-        transitively the native engine/subprocess stream it wraps) is torn down
-        even when neither of the `except` branches runs — e.g. the consumer
-        (Starlette/Ray Serve) closes *this* generator early while it's suspended
-        at one of the `yield`s below. `async for` does not propagate that closure
-        into the generator being iterated the way `yield from` would for a
-        synchronous generator, so without this `chunks` would otherwise be left
-        suspended forever, leaking its disconnect-poll task and underlying stream.
+        `client_error(exc)` returns a client-safe message for `fail()`, or None to
+        log the full trace and use a generic message. `chunks.aclose()` in `finally`
+        is required: closing this generator early doesn't propagate into `chunks`
+        via `async for` the way `yield from` would for a sync generator.
         """
         translator = ResponsesStreamTranslator(request)
         try:
@@ -275,7 +263,6 @@ class BaseInfer[Prepared](ABC):
                 return
             for event in translator.finish():
                 yield event
-            yield "data: [DONE]\n\n"
         finally:
             await chunks.aclose()
 
@@ -392,7 +379,7 @@ class BaseInfer[Prepared](ABC):
 
     async def create_response(
         self, request: ResponsesRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[dict[str, Any], None]:
         """Responses counterpart of `create_chat_completion` — see its docstring."""
         prepared = await self._prepare_responses(request, raw_request)
         if isinstance(prepared, ErrorResponse):
@@ -432,7 +419,7 @@ class BaseInfer[Prepared](ABC):
 
     def _create_response_stream(
         self, request: ResponsesRequest, prepared: Prepared, raw_request: RawRequestProxy
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Streaming Responses seam. See `_create_chat_completion_stream`."""
         raise NotImplementedError
 

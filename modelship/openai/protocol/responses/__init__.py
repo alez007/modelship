@@ -41,6 +41,8 @@ from modelship.openai.protocol.responses.schemas import (
 from modelship.openai.protocol.responses.streaming import (
     TERMINAL_EVENT_TYPES,
     ResponsesStreamTranslator,
+    error_ws_frame,
+    frame_sse,
     store_failure_event,
 )
 
@@ -64,6 +66,8 @@ __all__ = [
     "ResponsesRequest",
     "ResponsesStreamTranslator",
     "UnsupportedResponsesFeatureError",
+    "error_ws_frame",
+    "frame_sse",
     "responses_request_to_chat",
     "store_failure_event",
 ]

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from http import HTTPStatus
@@ -173,32 +172,54 @@ def responses_validation_error(exc: ValidationError) -> ErrorResponse:
 # --- Gateway-side conversation-state plumbing ---
 
 
+class ResponsesApiError(HTTPException):
+    """An ``HTTPException`` that also carries a full OpenAI-shaped ``ErrorResponse``,
+    so one raise renders correctly for both the HTTP route and the WS turn-runner.
+    Subclasses ``HTTPException`` so existing ``status_code``/``pytest.raises`` checks still work.
+    """
+
+    def __init__(self, err: ErrorResponse):
+        self.err = err
+        super().__init__(status_code=err._http_status, detail=err.error.message)
+
+
+def _not_found_error(response_id: str, *, previous: bool = False) -> ResponsesApiError:
+    if previous:
+        # "previous_response_not_found" is OpenAI's actual code for this failure.
+        return ResponsesApiError(
+            create_error_response(
+                f"Previous response with id '{response_id}' not found.",
+                err_type="invalid_request_error",
+                status_code=HTTPStatus.NOT_FOUND,
+                param="previous_response_id",
+                code="previous_response_not_found",
+            )
+        )
+    return ResponsesApiError(
+        create_error_response(
+            f"Response with id '{response_id}' not found.",
+            err_type="invalid_request_error",
+            status_code=HTTPStatus.NOT_FOUND,
+        )
+    )
+
+
+def _store_unavailable_error() -> ResponsesApiError:
+    return ResponsesApiError(
+        create_error_response(
+            "Conversation state store is unavailable; retry shortly.",
+            err_type="api_error",
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    )
+
+
 def as_input_items(input_: str | list[Any]) -> list[Any]:
     """Normalize a Responses ``input`` to item form, so stored history and this turn's
     input concatenate."""
     if isinstance(input_, str):
         return [{"type": "message", "role": "user", "content": input_}]
     return list(input_)
-
-
-def _terminal_event_payload(chunk: Any) -> dict[str, Any] | None:
-    """The decoded event of *chunk* if it is a terminal Responses SSE event carrying a
-    complete response, else ``None``.
-
-    Recovers the response the gateway just forwarded so it can be stored. Re-parsing
-    our own output is the cost of keeping state in the gateway; it is safe because
-    `streaming._sse` is the only writer of this format. The cheap `event:` line check
-    runs first so ordinary deltas never reach `json.loads`.
-    """
-    if not isinstance(chunk, str) or not any(chunk.startswith(f"event: {t}\n") for t in TERMINAL_EVENT_TYPES):
-        return None
-    _, _, data = chunk.partition("\ndata: ")
-    try:
-        payload = json.loads(data.strip())
-    except json.JSONDecodeError:
-        logger.exception("Could not decode terminal Responses event; not storing this response.")
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 async def resolve_history_items(
@@ -215,23 +236,14 @@ async def resolve_history_items(
     if previous_response_id is None:
         return this_turn
     if not RESPONSE_ID_RE.match(previous_response_id):
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{previous_response_id}' not found.",
-        )
+        raise _not_found_error(previous_response_id, previous=True)
     try:
         snapshot = await responses_state.read_async(store, identity, previous_response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable resolving previous_response_id=%s", previous_response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None
     if snapshot is None:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{previous_response_id}' not found.",
-        )
+        raise _not_found_error(previous_response_id, previous=True)
     return [*responses_state.history_items(snapshot), *this_turn]
 
 
@@ -245,15 +257,11 @@ async def resolve_history(store: StateStore, identity: str, request: ResponsesRe
 async def persist_response(gen, store: StateStore, *, identity: str, input_items: list[Any]):
     """Tee `respond`'s output, storing the snapshot as it passes.
 
-    Wraps the generator ahead of `_handle_response` so that stays generic. The
-    response id is read back off the output rather than minted here — the loader
-    already owns it, on both paths.
-
-    Both modes are covered by one wrapper because `_handle_response` dispatches on
-    the first item's type either way: a `ResponseObject` is the whole non-streaming
-    body, while a stream arrives as SSE strings whose terminal event carries the
-    same object. Persisting *before* yielding the terminal item is what lets a
-    store failure still change what the client is told.
+    Covers both streaming and non-streaming: a `ResponseObject` is the whole
+    body, while a stream's terminal event dict carries the same object. Persists
+    *before* yielding the terminal item so a store failure can still change what
+    the client is told. Operates on plain event dicts — `gen` is upstream of any
+    transport framing.
     """
     async for item in gen:
         if isinstance(item, ResponseObject):
@@ -272,12 +280,11 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
             yield item
             continue
 
-        payload = _terminal_event_payload(item)
-        if payload is None:
+        if not isinstance(item, dict) or item.get("type") not in TERMINAL_EVENT_TYPES:
             yield item
             continue
 
-        response = payload.get("response")
+        response = item.get("response")
         response_id = response.get("id") if isinstance(response, dict) else None
         if not isinstance(response, dict) or not response_id:
             logger.warning("Terminal Responses event has no usable response id; not storing.")
@@ -289,7 +296,7 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
         except StateStoreUnavailableError:
             logger.exception("State store unavailable persisting streamed response %s", response.get("id"))
             yield store_failure_event(
-                payload, "Conversation state store is unavailable; the response was generated but not stored."
+                item, "Conversation state store is unavailable; the response was generated but not stored."
             )
             return
         yield item
@@ -302,21 +309,14 @@ async def load_snapshot(store: StateStore, identity: str, response_id: str) -> d
     key, so it simply misses and 404s.
     """
     if not RESPONSE_ID_RE.match(response_id):
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
-        )
+        raise _not_found_error(response_id)
     try:
         snapshot = await responses_state.read_async(store, identity, response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable reading response %s", response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None
     if snapshot is None:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
-        )
+        raise _not_found_error(response_id)
     return snapshot
 
 
@@ -330,7 +330,4 @@ async def delete_snapshot(store: StateStore, identity: str, response_id: str) ->
         await responses_state.delete_async(store, identity, response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable deleting response %s", response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None

@@ -768,7 +768,7 @@ class VllmInfer(BaseInfer[_VllmPrepared]):
         request: ResponsesRequest,
         prepared: _VllmPrepared,
         raw_request: RawRequestProxy,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `engine_ops.stream_chat_completion`'s typed chunks — no chat SSE text
         round trip. Rendering already succeeded in `_prepare_responses`."""

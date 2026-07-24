@@ -1,24 +1,26 @@
 import asyncio
+import contextlib
+import json
 import os
 import time
 from http import HTTPStatus
 from typing import Annotated, Any, cast
 
 import ray
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from ray import serve
-from ray.exceptions import RayTaskError
+from ray.exceptions import RayActorError, RayTaskError
 from ray.serve.handle import DeploymentHandle, DeploymentResponseGenerator
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from modelship.infer import replica_coordinator
-from modelship.infer.infer_config import RequestWatcher
+from modelship.infer.infer_config import RequestWatcher, get_disconnect_registry
 from modelship.logging import configure_logging, get_logger
 from modelship.metrics import (
     GATEWAY_RECONCILES_TOTAL,
@@ -32,8 +34,9 @@ from modelship.metrics import (
     STREAM_CHUNKS_TOTAL,
     stamp_gateway,
 )
-from modelship.openai.auth import ApiKeyMiddleware, get_api_keys, resolve_identity
+from modelship.openai.auth import ApiKeyMiddleware, check_ws_auth, get_api_keys, resolve_identity
 from modelship.openai.protocol import (
+    TERMINAL_EVENT_TYPES,
     ChatCompletionRequest,
     ChatCompletionResponse,
     CompactRequest,
@@ -53,8 +56,11 @@ from modelship.openai.protocol import (
     TranslationRequest,
     TranslationResponse,
     create_error_response,
+    error_ws_frame,
+    frame_sse,
 )
 from modelship.openai.protocol.responses.adapter import UnsupportedResponsesFeatureError
+from modelship.openai.state import responses as responses_state
 from modelship.openai.utils import responses as responses_utils
 from modelship.state import get_state_store
 from modelship.utils import random_uuid
@@ -64,6 +70,8 @@ logger = get_logger("api")
 _DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
 # Backoff before retrying the gateway watch loop after a transient coordinator error.
 _WATCH_RETRY_S = 5.0
+# Cap on a WS connection's local store:false continuation cache; oldest entry evicted first.
+_WS_CONN_CACHE_MAX = 16
 
 
 class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -106,6 +114,13 @@ def build_app():
     async def log_validation_error(request: Request, exc: RequestValidationError):
         logger.warning("%s %s -> 422 validation error: %s", request.method, request.url.path, exc.errors())
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+    @app.exception_handler(responses_utils.ResponsesApiError)
+    async def log_responses_api_error(request: Request, exc: responses_utils.ResponsesApiError):
+        # MRO-based lookup means this wins over the plain-HTTPException handler
+        # below, rendering the full OpenAI error envelope instead of {"detail": ...}.
+        logger.warning("%s %s -> %s: %s", request.method, request.url.path, exc.err._http_status, exc.err.error.message)
+        return _error_response(exc.err)
 
     @app.exception_handler(HTTPException)
     async def log_http_exception(request: Request, exc: HTTPException):
@@ -368,7 +383,7 @@ class ModelshipAPI:
         request_id_var.set(request_id)
 
     @staticmethod
-    def _set_identity(raw_request: Request) -> str:
+    def _set_identity(raw_request: Request | WebSocket) -> str:
         from modelship.logging import identity_tier_var, identity_var
 
         identity, tier = resolve_identity(raw_request)
@@ -588,6 +603,10 @@ class ModelshipAPI:
                 # yet, so nothing else will cancel its polling task.
                 watcher.stop()
                 raise
+            # Already item-list-shaped (resolve_history's return type) — avoid re-normalizing.
+            input_items_for_turn = request.input
+        else:
+            input_items_for_turn = responses_utils.as_input_items(request.input)
 
         logger.info(
             "responses model=%s input_items=%s max_output_tokens=%s stream=%s store=%s previous_response_id=%s",
@@ -610,9 +629,212 @@ class ModelshipAPI:
                 response_gen,
                 self._state_store,
                 identity=identity,
-                input_items=responses_utils.as_input_items(request.input),
+                input_items=input_items_for_turn,
             )
+        # SSE-frame + [DONE] happen here, after persistence, so persist_response still sees plain event dicts.
+        response_gen = frame_sse(response_gen)
         return await self._handle_response(response_gen, watcher, model, "create_response")
+
+    @app.websocket("/v1/responses")
+    async def responses_ws(self, websocket: WebSocket):
+        """WebSocket transport for ``/v1/responses``: one socket, many sequential
+        turns. Each frame in is a `{"type": "response.create", ...}` body; each
+        frame out is one raw event dict (`json.dumps`d, no SSE framing, no `[DONE]`).
+        """
+        # BaseHTTPMiddleware skips websocket connections, so auth runs here, before accept().
+        if not await check_ws_auth(websocket):
+            return
+        await websocket.accept()
+        identity = self._set_identity(websocket)
+        headers = dict(websocket.headers)
+        conn_cache: dict[str, dict] = {}
+        registry = get_disconnect_registry()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        current_req_id: str | None = None
+
+        async def _reader() -> None:
+            # Only one coroutine may call websocket.receive() at a time, so a single
+            # reader task queues frames — this also lets it catch a mid-turn disconnect.
+            nonlocal current_req_id
+            try:
+                while True:
+                    raw = await websocket.receive_text()
+                    await queue.put(raw)
+            except WebSocketDisconnect:
+                if current_req_id is not None:
+                    try:
+                        await registry.set.remote(current_req_id)
+                    except RayActorError:
+                        logger.warning("Disconnect registry unavailable; lost WS disconnect for %s", current_req_id)
+                await queue.put(None)
+
+        reader_task = asyncio.ensure_future(_reader())
+        try:
+            while True:
+                raw = await queue.get()
+                if raw is None:
+                    return
+                current_req_id = random_uuid()
+                try:
+                    await self._run_ws_turn(websocket, identity, headers, raw, conn_cache, registry, current_req_id)
+                finally:
+                    current_req_id = None
+        finally:
+            reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader_task
+
+    async def _run_ws_turn(
+        self,
+        websocket: WebSocket,
+        identity: str,
+        headers: dict[str, str],
+        raw: str,
+        conn_cache: dict[str, dict],
+        registry: Any,
+        req_id: str,
+    ) -> None:
+        """Run one `response.create` turn to completion. Never raises back into the
+        socket loop — any failure is sent as an error frame instead, so one bad turn
+        never kills the connection."""
+        self._set_request_id(req_id)
+
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await websocket.send_text(
+                error_ws_frame(
+                    create_error_response("WebSocket frame is not valid JSON.", err_type="invalid_request_error")
+                )
+            )
+            return
+        if not isinstance(msg, dict) or msg.get("type") != "response.create":
+            await websocket.send_text(
+                error_ws_frame(
+                    create_error_response(
+                        'WebSocket frame must be a JSON object with "type": "response.create".',
+                        err_type="invalid_request_error",
+                    )
+                )
+            )
+            return
+
+        body = {k: v for k, v in msg.items() if k != "type"}
+        # Not meaningful on an always-streaming transport; drop them so extra="allow" doesn't pass them through.
+        for unsupported in ("stream", "stream_options", "background"):
+            body.pop(unsupported, None)
+        try:
+            request = ResponsesRequest(**body)
+        except ValidationError as exc:
+            await websocket.send_text(error_ws_frame(responses_utils.responses_validation_error(exc)))
+            return
+        request.stream = True
+        model = request.model or ""
+        endpoint = "create_response_ws"
+
+        prev_id = request.previous_response_id
+        try:
+            if prev_id is not None and prev_id in conn_cache:
+                # A continuation this socket itself produced with store:false.
+                this_turn = responses_utils.as_input_items(request.input) if request.input is not None else []
+                request.input = [*responses_state.history_items(conn_cache[prev_id]), *this_turn]
+                input_items_for_turn = request.input
+            elif prev_id is not None:
+                request.input = await responses_utils.resolve_history(self._state_store, identity, request)
+                input_items_for_turn = request.input
+            else:
+                # request.input is left untouched here; only the persist/cache bookkeeping below needs item-list form.
+                input_items_for_turn = responses_utils.as_input_items(request.input)
+        except responses_utils.ResponsesApiError as exc:
+            await websocket.send_text(error_ws_frame(exc.err))
+            return
+
+        try:
+            handle = self._get_handle(request.model)
+        except HTTPException as exc:
+            err = (
+                exc.err
+                if isinstance(exc, responses_utils.ResponsesApiError)
+                else create_error_response(
+                    str(exc.detail), err_type="invalid_request_error", status_code=exc.status_code
+                )
+            )
+            await websocket.send_text(error_ws_frame(err))
+            return
+
+        start = time.monotonic()
+        REQUEST_IN_PROGRESS.set(1, tags={"model": model, "endpoint": endpoint})
+        failed = False
+        terminal_response: dict[str, Any] | None = None
+        try:
+            response_gen = cast(
+                "DeploymentResponseGenerator[Any]",
+                handle.respond.options(stream=True).remote(request, headers, registry, req_id, identity),
+            )
+            if request.store is not False:
+                # Same helper HTTP uses — persists before yielding, so a store
+                # failure can still flip the terminal event to response.failed.
+                response_gen = responses_utils.persist_response(
+                    response_gen, self._state_store, identity=identity, input_items=input_items_for_turn
+                )
+            async for item in response_gen:
+                STREAM_CHUNKS_TOTAL.inc(tags={"model": model})
+                if isinstance(item, ErrorResponse):
+                    await websocket.send_text(error_ws_frame(item))
+                    failed = True
+                    continue
+                if not isinstance(item, dict):
+                    continue  # pragma: no cover - ResponseObject is unreachable; WS always forces stream=True
+                await websocket.send_text(json.dumps(item))
+                event_type = item.get("type")
+                if event_type == "response.failed":
+                    failed = True
+                elif event_type in TERMINAL_EVENT_TYPES:
+                    terminal_response = item.get("response")
+        except RayTaskError as exc:
+            cause = exc.cause if isinstance(exc.cause, BaseException) else None
+            if isinstance(cause, ValueError | TypeError | OverflowError):
+                err = _validation_error_from_cause(cause)
+            else:
+                logger.exception("responses request %s failed over websocket", req_id)
+                err = create_error_response(
+                    "Internal error during generation",
+                    err_type="api_error",
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+            await websocket.send_text(error_ws_frame(err))
+            failed = True
+        except Exception:
+            logger.exception("responses request %s failed over websocket", req_id)
+            await websocket.send_text(
+                error_ws_frame(
+                    create_error_response(
+                        "Internal error during generation",
+                        err_type="api_error",
+                        status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                )
+            )
+            failed = True
+        finally:
+            REQUEST_DURATION_SECONDS.observe(time.monotonic() - start, tags={"model": model, "endpoint": endpoint})
+            REQUEST_IN_PROGRESS.set(0, tags={"model": model, "endpoint": endpoint})
+
+        if failed:
+            REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "inference_error"})
+            REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
+            # Evict so a retry of the same previous_response_id gets a clean 404, not a replay of what broke it.
+            if prev_id is not None:
+                conn_cache.pop(prev_id, None)
+            return
+
+        REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})
+        if request.store is False and terminal_response is not None:
+            response_id = terminal_response.get("id")
+            if response_id:
+                conn_cache[response_id] = {"input_items": input_items_for_turn, "response": terminal_response}
+                while len(conn_cache) > _WS_CONN_CACHE_MAX:
+                    conn_cache.pop(next(iter(conn_cache)))
 
     @app.get("/v1/responses/{response_id}")
     async def get_response(self, response_id: str, raw_request: Request):

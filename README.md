@@ -194,7 +194,7 @@ We are currently hardening the Kubernetes/KubeRay path (a Helm chart ships in [`
 
 `/v1/responses` is also tested against the independent [Open Responses](https://github.com/openresponses/openresponses) compliance suite (`bun run test:compliance`), which exercises the endpoint over real HTTP against a live deployment rather than mocks.
 
-**Latest result: 10/17** (`Qwen3-VL-8B-Instruct` AWQ, vLLM, 2026-07-23):
+**Latest result: 17/17** (`Qwen3-VL-8B-Instruct` AWQ, vLLM, 2026-07-24), including the full WebSocket transport suite:
 
 | Test | Category | Status |
 |---|---|---|
@@ -208,15 +208,13 @@ We are currently hardening the Kubernetes/KubeRay path (a Helm chart ships in [`
 | Compaction Endpoint | `/v1/responses/compact` | ✅ Pass |
 | Compaction Missing Required Model | `/v1/responses/compact` | ✅ Pass |
 | Image Input | Vision | ✅ Pass |
-| WebSocket Response | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Sequential Responses | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Continuation | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Store False Reconnect Recovery | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Missing Previous Response | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Failed Continuation Evicts Cache | WebSocket | ❌ Fail — transport not implemented |
-| WebSocket Compact New Chain | WebSocket | ❌ Fail — transport not implemented |
-
-Both vision-dependent rows were verified semantically, not just schema-wise: Image Input correctly described the test fixture ("A solid red heart symbol is shown."), and Tool Calling produced a real `function_call` item (`get_weather` with parsed `location` argument), not a text fallback. The only remaining gap is WebSocket transport (7 tests) — an alternative to the HTTP/SSE `/v1/responses` API already supported today, and not yet implemented.
+| WebSocket Response | WebSocket | ✅ Pass |
+| WebSocket Sequential Responses | WebSocket | ✅ Pass |
+| WebSocket Continuation | WebSocket | ✅ Pass |
+| WebSocket Store False Reconnect Recovery | WebSocket | ✅ Pass |
+| WebSocket Missing Previous Response | WebSocket | ✅ Pass |
+| WebSocket Failed Continuation Evicts Cache | WebSocket | ✅ Pass |
+| WebSocket Compact New Chain | WebSocket | ✅ Pass |
 
 ## Contributing
 

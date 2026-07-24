@@ -4,14 +4,17 @@ import hashlib
 import os
 from unittest.mock import patch
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.websockets import WebSocketDisconnect
 
 from modelship.openai.auth import (
     UNSCOPED_IDENTITY,
     ApiKeyMiddleware,
+    check_ws_auth,
     get_api_keys,
     get_trusted_identity_header,
     identity_key,
@@ -115,6 +118,63 @@ class TestApiKeyMiddleware:
         assert "error" in body
         assert body["error"]["type"] == "auth_error"
         assert body["error"]["code"] == 401
+
+
+def _make_ws_app() -> FastAPI:
+    """A minimal app whose one websocket route enforces auth itself via
+    check_ws_auth — BaseHTTPMiddleware (ApiKeyMiddleware included) never runs for
+    websocket connections, so there's no middleware to add here. check_ws_auth reads
+    keys via get_api_keys() (env-backed), same as ApiKeyMiddleware — tests patch that
+    directly rather than threading a parameter through the route."""
+    app = FastAPI()
+
+    @app.websocket("/ws")
+    async def ws(websocket: WebSocket):
+        if not await check_ws_auth(websocket):
+            return
+        await websocket.accept()
+        await websocket.send_text("ok")
+        await websocket.close()
+
+    return app
+
+
+class TestCheckWsAuth:
+    def test_valid_key_allows_connection(self):
+        client = TestClient(_make_ws_app())
+        with (
+            patch("modelship.openai.auth.get_api_keys", return_value=KEYS),
+            client.websocket_connect("/ws", headers={"Authorization": f"Bearer {VALID_KEY}"}) as ws,
+        ):
+            assert ws.receive_text() == "ok"
+
+    def test_missing_key_rejected_before_accept(self):
+        # Rejection surfaces on entering the context manager, not on first receive.
+        client = TestClient(_make_ws_app())
+        with (
+            patch("modelship.openai.auth.get_api_keys", return_value=KEYS),
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/ws"),
+        ):
+            pass
+
+    def test_invalid_key_rejected_before_accept(self):
+        client = TestClient(_make_ws_app())
+        with (
+            patch("modelship.openai.auth.get_api_keys", return_value=KEYS),
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/ws", headers={"Authorization": "Bearer wrong-key"}),
+        ):
+            pass
+
+    def test_no_keys_configured_allows_unauthenticated_connection(self):
+        # An empty key set means auth is disabled, not "reject everyone".
+        client = TestClient(_make_ws_app())
+        with (
+            patch("modelship.openai.auth.get_api_keys", return_value=set()),
+            client.websocket_connect("/ws") as ws,
+        ):
+            assert ws.receive_text() == "ok"
 
 
 class TestGetApiKeys:

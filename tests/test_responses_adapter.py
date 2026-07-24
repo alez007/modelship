@@ -11,13 +11,22 @@ from modelship.openai.protocol.responses import (
 )
 from modelship.openai.protocol.responses.adapter import _content_to_chat, build_response_object
 from modelship.openai.protocol.responses.schemas import ResponseReasoningItem
+from modelship.state import MemoryStoreActor
+
+_MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 
 @pytest.fixture(autouse=True)
-def _reset_ephemeral_compaction_key():
-    compaction_crypto._ephemeral_key = None
+def _compaction_key(monkeypatch):
+    """A Ray-free stand-in for the cluster-wide store, pre-seeded the same way the
+    deploy driver seeds it before any actor starts — encrypt_items/decrypt_items
+    fail hard against an unseeded store (see test_responses_compaction.py)."""
+    compaction_crypto._cached_key = None
+    store = _MemoryStore()
+    monkeypatch.setattr("modelship.state.get_state_store", lambda: store)
+    compaction_crypto.ensure_key_seeded(store)
     yield
-    compaction_crypto._ephemeral_key = None
+    compaction_crypto._cached_key = None
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -116,6 +125,25 @@ class TestRequestInputTranslation:
                 _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": {"bad": "shape"}}])
             )
 
+    def test_function_call_output_with_no_matching_call_is_rejected(self):
+        # No preceding function_call for call_id "call_1" — an orphaned tool result.
+        with pytest.raises(UnsupportedResponsesFeatureError, match="unknown call_id"):
+            responses_request_to_chat(
+                _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": "sunny"}])
+            )
+
+    def test_function_call_output_matching_an_earlier_call_in_the_same_input_is_accepted(self):
+        # Pins that the orphan check doesn't regress the happy path.
+        chat = responses_request_to_chat(
+            _req(
+                input=[
+                    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+                ]
+            )
+        )
+        assert chat.messages[-1] == {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+
     def test_reasoning_input_item_is_dropped(self):
         chat = responses_request_to_chat(
             _req(
@@ -183,8 +211,13 @@ class TestCompactionInputDecode:
         # the identical error — the message must never reveal which case it was.
         from cryptography.fernet import Fernet
 
+        from modelship.state import get_state_store
+
         blob = compaction_crypto.encrypt_items([{"role": "assistant", "content": "x"}])
-        monkeypatch.setenv("MSHIP_COMPACTION_KEY", Fernet.generate_key().decode("ascii"))
+        # Simulate a different process decrypting after the shared store's key
+        # changed: clear this process's cache and overwrite what the store holds.
+        compaction_crypto._cached_key = None
+        get_state_store().set("compaction/key", {"key": Fernet.generate_key().decode("ascii")})
         with pytest.raises(UnsupportedResponsesFeatureError, match="could not be decoded"):
             responses_request_to_chat(_req(input=[{"type": "compaction", "id": "cmp_1", "encrypted_content": blob}]))
 

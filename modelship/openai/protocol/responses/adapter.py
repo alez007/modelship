@@ -92,6 +92,9 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
         messages.append({"role": "user", "content": input_})
         return messages
 
+    # call_ids seen from a function_call earlier in this list; an unmatched
+    # function_call_output is orphaned. Reset per call, not shared across recursion.
+    seen_call_ids: set[str] = set()
     for item in input_:
         itype = item.get("type")
         if itype == "function_call":
@@ -102,6 +105,7 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
                 raise UnsupportedResponsesFeatureError(
                     "function_call input items require both 'call_id' (or 'id') and 'name'."
                 )
+            seen_call_ids.add(call_id)
             messages.append(
                 {
                     "role": "assistant",
@@ -119,17 +123,16 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
                 }
             )
         elif itype == "function_call_output":
-            # call_id ties the result back to its call; required.
+            # call_id must reference a function_call seen earlier — an orphaned tool result should 400, not silently pass through.
             call_id = item.get("call_id")
             if not call_id:
                 raise UnsupportedResponsesFeatureError("function_call_output input items require 'call_id'.")
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": _text_of(item.get("output")),
-                }
-            )
+            content = _text_of(item.get("output"))
+            if call_id not in seen_call_ids:
+                raise UnsupportedResponsesFeatureError(
+                    f"function_call_output references unknown call_id {call_id!r} (no matching function_call)."
+                )
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": content})
         elif itype == "reasoning":
             # Don't replay raw chain-of-thought back into the prompt.
             continue
