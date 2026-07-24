@@ -108,6 +108,15 @@ def build_app():
         logger.warning("%s %s -> 422 validation error: %s", request.method, request.url.path, exc.errors())
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
+    @app.exception_handler(responses_utils.ResponsesApiError)
+    async def log_responses_api_error(request: Request, exc: responses_utils.ResponsesApiError):
+        # More specific than the plain-HTTPException handler below — Starlette's
+        # exception-handler lookup walks the MRO, so this wins for ResponsesApiError
+        # even though it *is* an HTTPException. Renders the full OpenAI error
+        # envelope instead of the generic {"detail": ...} body.
+        logger.warning("%s %s -> %s: %s", request.method, request.url.path, exc.err._http_status, exc.err.error.message)
+        return _error_response(exc.err)
+
     @app.exception_handler(HTTPException)
     async def log_http_exception(request: Request, exc: HTTPException):
         logger.warning("%s %s -> %s: %s", request.method, request.url.path, exc.status_code, exc.detail)

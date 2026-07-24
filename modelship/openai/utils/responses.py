@@ -172,6 +172,47 @@ def responses_validation_error(exc: ValidationError) -> ErrorResponse:
 # --- Gateway-side conversation-state plumbing ---
 
 
+class ResponsesApiError(HTTPException):
+    """An ``HTTPException`` that also carries a full OpenAI-shaped ``ErrorResponse``.
+
+    Lets a shared helper (this module) serve both the HTTP route (rendered via
+    ``_error_response``) and the WS turn-runner (rendered via ``error_ws_frame``)
+    with the *same* raise, instead of each transport needing its own error type.
+    Subclasses ``HTTPException`` rather than a bare exception so existing
+    ``pytest.raises(HTTPException)`` / ``.status_code`` assertions keep working, and
+    so FastAPI still renders something sane if a route ever forgets to catch it.
+    """
+
+    def __init__(self, err: ErrorResponse):
+        self.err = err
+        super().__init__(status_code=err._http_status, detail=err.error.message)
+
+
+def _not_found_error(previous_response_id: str) -> ResponsesApiError:
+    # "previous_response_not_found" is OpenAI's actual code for this failure —
+    # reused verbatim by load_snapshot's GET/DELETE 404s too, which fail for the
+    # same underlying reason (no such response id under this identity).
+    return ResponsesApiError(
+        create_error_response(
+            f"Previous response with id '{previous_response_id}' not found.",
+            err_type="invalid_request_error",
+            status_code=HTTPStatus.NOT_FOUND,
+            param="previous_response_id",
+            code="previous_response_not_found",
+        )
+    )
+
+
+def _store_unavailable_error() -> ResponsesApiError:
+    return ResponsesApiError(
+        create_error_response(
+            "Conversation state store is unavailable; retry shortly.",
+            err_type="api_error",
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    )
+
+
 def as_input_items(input_: str | list[Any]) -> list[Any]:
     """Normalize a Responses ``input`` to item form, so stored history and this turn's
     input concatenate."""
@@ -194,23 +235,14 @@ async def resolve_history_items(
     if previous_response_id is None:
         return this_turn
     if not RESPONSE_ID_RE.match(previous_response_id):
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{previous_response_id}' not found.",
-        )
+        raise _not_found_error(previous_response_id)
     try:
         snapshot = await responses_state.read_async(store, identity, previous_response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable resolving previous_response_id=%s", previous_response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None
     if snapshot is None:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value,
-            detail=f"Previous response with id '{previous_response_id}' not found.",
-        )
+        raise _not_found_error(previous_response_id)
     return [*responses_state.history_items(snapshot), *this_turn]
 
 
@@ -281,21 +313,14 @@ async def load_snapshot(store: StateStore, identity: str, response_id: str) -> d
     key, so it simply misses and 404s.
     """
     if not RESPONSE_ID_RE.match(response_id):
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
-        )
+        raise _not_found_error(response_id)
     try:
         snapshot = await responses_state.read_async(store, identity, response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable reading response %s", response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None
     if snapshot is None:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND.value, detail=f"Response with id '{response_id}' not found."
-        )
+        raise _not_found_error(response_id)
     return snapshot
 
 
@@ -309,7 +334,4 @@ async def delete_snapshot(store: StateStore, identity: str, response_id: str) ->
         await responses_state.delete_async(store, identity, response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable deleting response %s", response_id)
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-            detail="Conversation state store is unavailable; retry shortly.",
-        ) from None
+        raise _store_unavailable_error() from None

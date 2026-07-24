@@ -19,9 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modelship.openai.api import ModelshipAPI
+from modelship.openai.api import ModelshipAPI, _error_response
 from modelship.openai.protocol import ResponsesRequest, create_error_response
 from modelship.openai.protocol.responses import ResponseObject, ResponseOutputMessage, ResponseOutputText, ResponseUsage
+from modelship.openai.utils.responses import ResponsesApiError
 from modelship.state import MemoryStoreActor, StateStoreUnavailableError
 
 _ModelshipAPI = ModelshipAPI.func_or_class
@@ -213,6 +214,14 @@ class TestPreviousResponseIdResolution:
         with pytest.raises(HTTPException) as exc:
             await api.create_response(request, _raw_request())
         assert exc.value.status_code == 404
+        # ResponsesApiError (a real behavior change over a bare HTTPException): a
+        # machine-readable code, and _error_response renders the OpenAI envelope
+        # instead of FastAPI's default {"detail": ...} body.
+        assert isinstance(exc.value, ResponsesApiError)
+        assert exc.value.err.error.code == "previous_response_not_found"
+        assert exc.value.err.error.param == "previous_response_id"
+        body = json.loads(bytes(_error_response(exc.value.err).body))
+        assert body["error"]["code"] == "previous_response_not_found"
 
     @pytest.mark.asyncio
     async def test_malformed_previous_response_id_is_404(self, api):
