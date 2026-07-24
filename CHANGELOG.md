@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.2] - 2026-07-24
+
+### Added
+- add WebSocket transport for /v1/responses
+- add /v1/responses/compact endpoint
+
+### Fixed
+- share the compaction key across processes via the state store
+- wire compact instructions through, drop unused prompt_cache_key
+- harden compaction_crypto against misconfigured keys and non-ASCII blobs
+- reject nested compaction items instead of recursing unbounded
+- correct dark-mode diagram switching and drop redundant nav tabs
+- use theme-adaptive favicon instead of near-white logo variant
+- reject non-list/non-string content instead of silently stringifying it
+- close Open Responses conformance gaps in schema, vision input, and SSE termination
+
+### Changed
+- trim oversized comments/docstrings and fix WS error-message leaks
+- update Open Responses conformance results to 17/17
+- avoid re-normalizing already-resolved input on HTTP too
+- unify HTTP/WS error handling behind ResponsesApiError
+- make the streaming translator transport-neutral
+- add Open Responses conformance results to README
+- consolidate verbose comments in the responses adapter
+
 ## [0.7.1] - 2026-07-23
 
 ### Changed
