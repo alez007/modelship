@@ -116,6 +116,28 @@ class TestRequestInputTranslation:
                 _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": {"bad": "shape"}}])
             )
 
+    def test_function_call_output_with_no_matching_call_is_rejected(self):
+        # No preceding function_call for call_id "call_1" — an orphaned tool result,
+        # which OpenAI itself rejects as a 400 rather than silently forwarding a
+        # dangling tool_call_id to the model.
+        with pytest.raises(UnsupportedResponsesFeatureError, match="unknown call_id"):
+            responses_request_to_chat(
+                _req(input=[{"type": "function_call_output", "call_id": "call_1", "output": "sunny"}])
+            )
+
+    def test_function_call_output_matching_an_earlier_call_in_the_same_input_is_accepted(self):
+        # Round-trip already covers this (test_function_call_and_output_round_trip),
+        # this just pins that the orphan check doesn't regress the happy path.
+        chat = responses_request_to_chat(
+            _req(
+                input=[
+                    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+                ]
+            )
+        )
+        assert chat.messages[-1] == {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+
     def test_reasoning_input_item_is_dropped(self):
         chat = responses_request_to_chat(
             _req(

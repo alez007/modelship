@@ -72,6 +72,7 @@ from modelship.openai.protocol.raw import (
     RawTranslation,
 )
 from modelship.openai.protocol.responses import (
+    TERMINAL_EVENT_TYPES,
     CompactionItem,
     CompactRequest,
     CompactResource,
@@ -94,6 +95,7 @@ from modelship.openai.protocol.responses import (
 from modelship.openai.protocol.usage import CompletionTokenUsageInfo, PromptTokenUsageInfo, UsageInfo
 
 __all__ = [
+    "TERMINAL_EVENT_TYPES",
     "AudioResponseFormat",
     "ChatCompletionLogProb",
     "ChatCompletionLogProbs",

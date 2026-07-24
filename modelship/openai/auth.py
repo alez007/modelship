@@ -4,8 +4,9 @@ import os
 import re
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
+from starlette.websockets import WebSocket
 
 from modelship.logging import get_logger
 from modelship.metrics import AUTH_FAILURES_TOTAL
@@ -79,6 +80,30 @@ def _matched_api_key(token: str, keys: set[str]) -> str | None:
     return next((key for key in keys if hmac.compare_digest(token, key)), None)
 
 
+async def check_ws_auth(websocket: WebSocket) -> bool:
+    """WebSocket counterpart of ``ApiKeyMiddleware.dispatch``.
+
+    ``BaseHTTPMiddleware`` (which ``ApiKeyMiddleware`` subclasses) never runs for a
+    websocket connection — its ``__call__`` passes any ``scope["type"] != "http"``
+    straight through — so a websocket route must enforce auth itself, before
+    ``accept()``, or inference is served unauthenticated to anyone who can reach the
+    port. Mirrors ``ApiKeyMiddleware.dispatch``'s logic exactly (``/v1/responses`` is
+    not a public path); closes with code 1008 (policy violation) without accepting on
+    failure, which Starlette surfaces as an HTTP 403 at the handshake.
+    """
+    api_keys = get_api_keys()
+    if not api_keys:
+        return True
+    auth = websocket.headers.get("authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if token and _matched_api_key(token, api_keys) is not None:
+        return True
+    AUTH_FAILURES_TOTAL.inc(tags={"reason": "missing" if not token else "invalid"})
+    logger.warning("auth failed (%s key): websocket %s", "missing" if not token else "invalid", websocket.url.path)
+    await websocket.close(code=1008)
+    return False
+
+
 def get_api_keys() -> set[str]:
     """Read allowed API keys from the ``MSHIP_API_KEYS`` environment variable (comma-separated)."""
     global _api_keys_cache
@@ -103,8 +128,12 @@ def get_trusted_identity_header() -> str | None:
     return value
 
 
-def resolve_identity(request: Request) -> tuple[str, str]:
+def resolve_identity(request: HTTPConnection) -> tuple[str, str]:
     """Resolve (identity_key, identity_tier) in one pass and cache the result on ``request.state``.
+
+    Takes an ``HTTPConnection`` rather than the narrower ``Request`` so a ``WebSocket``
+    (which subclasses the same base — both only need ``.headers``/``.state``) can call
+    this directly; no separate WS identity path needed.
 
     Not an auth check — never rejects a request. Resolution order:
 
@@ -151,12 +180,12 @@ def resolve_identity(request: Request) -> tuple[str, str]:
     return result
 
 
-def identity_key(request: Request) -> str:
+def identity_key(request: HTTPConnection) -> str:
     """Resolve a stable per-caller identity string for log correlation and future state-keying."""
     return resolve_identity(request)[0]
 
 
-def identity_tier(request: Request) -> str:
+def identity_tier(request: HTTPConnection) -> str:
     """Return which identity_key() tier resolved for *request*: "header" / "api_key" / "unscoped".
 
     For logging/observability only — lets an unexpected shift to "unscoped" (e.g. a
