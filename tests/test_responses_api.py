@@ -91,13 +91,13 @@ class TestResponsesRoute:
     @pytest.mark.asyncio
     async def test_stream_true_dispatches_and_returns_event_stream(self, api):
         # Streaming has no gateway-side translation anymore: the deployment
-        # (BaseInfer.create_response) is responsible for producing Responses SSE
-        # events directly. The route only needs to thread them through.
+        # (BaseInfer.create_response) is responsible for producing Responses event
+        # dicts directly; the route SSE-frames them (streaming.frame_sse) on the way out.
         handle = MagicMock()
 
         async def gen():
-            yield 'event: response.created\ndata: {"type": "response.created"}\n\n'
-            yield 'event: response.completed\ndata: {"type": "response.completed"}\n\n'
+            yield {"type": "response.created", "sequence_number": 0}
+            yield {"type": "response.completed", "sequence_number": 1, "response": {}}
 
         handle.respond.options.return_value.remote.return_value = gen()
         api.models = {"m": {"m-a1b2c": handle}}
@@ -325,8 +325,8 @@ class TestPersistence:
         }
 
         async def gen():
-            yield 'event: response.created\ndata: {"type": "response.created"}\n\n'
-            yield f"event: response.completed\ndata: {json.dumps(completed)}\n\n"
+            yield {"type": "response.created", "sequence_number": 0}
+            yield completed
 
         _wire(api, gen())
         result = await api.create_response(ResponsesRequest(model="m", input="hi", stream=True), _raw_request())
@@ -346,8 +346,8 @@ class TestPersistence:
         }
 
         async def gen():
-            yield 'event: response.created\ndata: {"type": "response.created"}\n\n'
-            yield f"event: response.completed\ndata: {json.dumps(completed)}\n\n"
+            yield {"type": "response.created", "sequence_number": 0}
+            yield completed
 
         _wire(api, gen())
         api._state_store = MagicMock()
@@ -358,7 +358,11 @@ class TestPersistence:
 
         assert "event: response.failed" in body
         assert "event: response.completed" not in body
-        failed = json.loads(body.split("event: response.failed\ndata: ")[1].strip())
+        # A store-write failure still ends the SSE stream cleanly, so [DONE] follows
+        # (see streaming.frame_sse) — split on the frame boundary rather than assuming
+        # the failed event is the last thing in the body.
+        failed_frame = next(part for part in body.split("\n\n") if part.startswith("event: response.failed"))
+        failed = json.loads(failed_frame.split("data: ", 1)[1])
         assert failed["response"]["status"] == "failed"
         assert failed["sequence_number"] == 3  # replaces the terminal event, not appended after it
 

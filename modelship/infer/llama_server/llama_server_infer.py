@@ -578,7 +578,7 @@ class LlamaServerInfer(BaseInfer[dict[str, Any]]):
 
     async def _create_response_stream(
         self, request: ResponsesRequest, prepared: dict[str, Any], raw_request: RawRequestProxy
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Native streaming Responses path: feeds `BaseInfer._stream_responses` directly
         from `_raw_stream_chunks`'s typed chunks, same source `_stream_chat_completion_body`
         uses — no chat SSE text round trip."""

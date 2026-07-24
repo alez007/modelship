@@ -1,11 +1,14 @@
 """Tests for the streaming Responses <-> chat-completions translator.
 
 The translator consumes typed chat stream chunks every loader emits and emits
-the Responses event protocol. These tests drive it directly with synthesized
+the Responses event protocol as plain dicts (transport-neutral — framing happens
+at the gateway edge, not here). These tests drive it directly with synthesized
 chat chunks (no Ray, no loader) and assert the event sequence/shape.
 """
 
 import json
+
+import pytest
 
 from modelship.openai.protocol import (
     ChatCompletionResponseStreamChoice,
@@ -15,8 +18,9 @@ from modelship.openai.protocol import (
     DeltaToolCall,
     ResponsesRequest,
     UsageInfo,
+    create_error_response,
 )
-from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator
+from modelship.openai.protocol.responses.streaming import ResponsesStreamTranslator, error_ws_frame, frame_sse
 
 
 def _req(**overrides) -> ResponsesRequest:
@@ -34,33 +38,24 @@ def _chunk(delta: DeltaMessage | None = None, *, finish_reason=None, usage=None)
     return ChatCompletionStreamResponse(model="m", choices=choices, usage=usage)
 
 
-def _decode(raw: list[str]) -> list[dict]:
-    out = []
-    for line in raw:
-        # each is "event: <type>\ndata: {json}\n\n"
-        data_line = next(ln for ln in line.splitlines() if ln.startswith("data:"))
-        out.append(json.loads(data_line[len("data:") :].strip()))
-    return out
-
-
 def _events(translator: ResponsesStreamTranslator, chunks) -> list[dict]:
-    """Run start -> process(chunks) -> finish and return parsed event payloads."""
-    raw: list[str] = []
-    raw.extend(translator.start())
+    """Run start -> process(chunks) -> finish and return the event dicts."""
+    events: list[dict] = []
+    events.extend(translator.start())
     for c in chunks:
-        raw.extend(translator.process(c))
-    raw.extend(translator.finish())
-    return _decode(raw)
+        events.extend(translator.process(c))
+    events.extend(translator.finish())
+    return events
 
 
 def _events_then_fail(translator: ResponsesStreamTranslator, chunks, message: str) -> list[dict]:
-    """Run start -> process(chunks) -> fail(message) and return parsed event payloads."""
-    raw: list[str] = []
-    raw.extend(translator.start())
+    """Run start -> process(chunks) -> fail(message) and return the event dicts."""
+    events: list[dict] = []
+    events.extend(translator.start())
     for c in chunks:
-        raw.extend(translator.process(c))
-    raw.extend(translator.fail(message))
-    return _decode(raw)
+        events.extend(translator.process(c))
+    events.extend(translator.fail(message))
+    return events
 
 
 def _types(events: list[dict]) -> list[str]:
@@ -280,3 +275,59 @@ class TestFailedStream:
         assert failed["output"][0]["type"] == "function_call"
         assert failed["output"][0]["arguments"] == '{"lo'
         assert failed["output"][0]["status"] == "completed"
+
+
+class TestFrameSse:
+    """Wire-format pin for the HTTP transport edge: dict -> SSE frame, `[DONE]`
+    appended only once something was actually framed."""
+
+    @staticmethod
+    async def _drain(items: list) -> list[str]:
+        async def gen():
+            for item in items:
+                yield item
+
+        return [chunk async for chunk in frame_sse(gen())]
+
+    @pytest.mark.asyncio
+    async def test_event_dict_framed_exactly_like_the_old_sse_builder(self):
+        event = {"type": "response.created", "sequence_number": 0}
+        out = await self._drain([event])
+        assert out == [f"event: response.created\ndata: {json.dumps(event)}\n\n", "data: [DONE]\n\n"]
+
+    @pytest.mark.asyncio
+    async def test_done_appended_after_a_framed_stream(self):
+        events = [
+            {"type": "response.created", "sequence_number": 0},
+            {"type": "response.completed", "sequence_number": 1, "response": {}},
+        ]
+        out = await self._drain(events)
+        assert out[-1] == "data: [DONE]\n\n"
+        assert len(out) == 3
+
+    @pytest.mark.asyncio
+    async def test_non_dict_passthrough_gets_no_done_sentinel(self):
+        # A pre-generation ErrorResponse (or a non-streaming ResponseObject) is a
+        # single-shot reply, not a stream — nothing was framed, so no [DONE].
+        out = await self._drain(["not a dict"])
+        assert out == ["not a dict"]
+
+
+class TestErrorWsFrame:
+    def test_valid_webscoket_error_event_shape(self):
+        err = create_error_response("bad request", err_type="invalid_request_error", code="previous_response_not_found")
+        frame = json.loads(error_ws_frame(err))
+        assert frame == {
+            "type": "error",
+            "status": 400,
+            "error": {
+                "message": "bad request",
+                "type": "invalid_request_error",
+                "code": "previous_response_not_found",
+            },
+        }
+
+    def test_missing_code_falls_back_to_error_type(self):
+        err = create_error_response("boom", err_type="api_error", status_code=500)
+        frame = json.loads(error_ws_frame(err))
+        assert frame["error"]["code"] == "api_error"

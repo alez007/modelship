@@ -33,11 +33,12 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from typing import Any
 
 from modelship.openai.protocol.base import random_uuid
 from modelship.openai.protocol.chat import ChatCompletionStreamResponse, DeltaToolCall
+from modelship.openai.protocol.error import ErrorResponse
 from modelship.openai.protocol.responses.adapter import (
     _status_for,
     _usage_from_chat,
@@ -52,18 +53,12 @@ from modelship.openai.protocol.responses.schemas import (
     ResponsesRequest,
 )
 
-
-def _sse(event_type: str, payload: dict[str, Any]) -> str:
-    """Format one Responses SSE event (named event line + JSON data line)."""
-    return f"event: {event_type}\ndata: {json.dumps({'type': event_type, **payload})}\n\n"
-
-
 # Terminal events carrying a complete response object. Both are continuable, so both
 # are worth persisting; ``response.failed`` deliberately is not.
 TERMINAL_EVENT_TYPES = ("response.completed", "response.incomplete")
 
 
-def store_failure_event(terminal_payload: dict[str, Any], message: str) -> str:
+def store_failure_event(terminal_payload: dict[str, Any], message: str) -> dict[str, Any]:
     """Rewrite a terminal completed/incomplete event as ``response.failed``.
 
     The gateway persists a stored response *before* forwarding its terminal event, so
@@ -77,17 +72,64 @@ def store_failure_event(terminal_payload: dict[str, Any], message: str) -> str:
         "status": "failed",
         "error": {"message": message},
     }
-    return _sse(
-        "response.failed",
-        {"sequence_number": terminal_payload.get("sequence_number", 0), "response": response},
-    )
+    return {
+        "type": "response.failed",
+        "sequence_number": terminal_payload.get("sequence_number", 0),
+        "response": response,
+    }
+
+
+def _encode_sse_event(event: dict[str, Any]) -> str:
+    """Wire-format one Responses event dict as an SSE frame (named event line + JSON
+    data line). The dict already carries its own ``type`` key."""
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+
+
+async def frame_sse(gen: AsyncIterator[Any]) -> AsyncGenerator[Any, None]:
+    """HTTP transport edge for ``/v1/responses``: SSE-frame every event dict in *gen*,
+    passing anything else (a non-streaming ``ResponseObject``, a pre-generation
+    ``ErrorResponse``) through unchanged. Appends the ``data: [DONE]\\n\\n`` sentinel
+    once the stream ends, but only if at least one event was actually framed — a bare
+    passthrough item is a single-shot reply, not a stream, and gets no sentinel.
+
+    The counterpart WS transport never sends ``[DONE]`` (see the websocket handler) —
+    framing, including whether to terminate with a sentinel at all, is a per-transport
+    decision made at this edge, not by the translator or the loader.
+    """
+    framed_any = False
+    async for item in gen:
+        if isinstance(item, dict):
+            yield _encode_sse_event(item)
+            framed_any = True
+        else:
+            yield item
+    if framed_any:
+        yield "data: [DONE]\n\n"
+
+
+def error_ws_frame(err: ErrorResponse) -> str:
+    """WS transport edge: render an ``ErrorResponse`` as a ``webSocketErrorEventSchema``
+    text frame. The WS schema requires ``error.code`` as a non-null string (stricter
+    than OpenAI's own, which allows ``None``) — fall back to the error ``type`` when we
+    haven't mapped a specific code.
+    """
+    error = err.error.model_dump(mode="json", exclude_none=True)
+    if not error.get("code"):
+        error["code"] = err.error.type
+    return json.dumps({"type": "error", "status": err._http_status, "error": error})
 
 
 class ResponsesStreamTranslator:
-    """Stateful translator from chat stream chunks to Responses SSE events.
+    """Stateful translator from chat stream chunks to Responses events.
 
     One instance per request. Emit :meth:`start` first, feed every parsed chunk
     to :meth:`process`, then emit :meth:`finish` once the chat stream ends.
+
+    Transport-neutral: every method yields plain event **dicts**
+    (``{"type": <event>, "sequence_number": ..., ...}``), not pre-framed SSE
+    strings — framing (and whether a ``[DONE]`` sentinel follows) is a per-transport
+    decision made at the gateway edge (see :func:`frame_sse` for HTTP; the WS handler
+    ``json.dumps``s the dict directly and never sends ``[DONE]``).
     """
 
     def __init__(self, request: ResponsesRequest):
@@ -118,8 +160,8 @@ class ResponsesStreamTranslator:
 
     # -- low-level helpers --------------------------------------------------
 
-    def _event(self, event_type: str, payload: dict[str, Any]) -> str:
-        out = _sse(event_type, {"sequence_number": self._seq, **payload})
+    def _event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        out = {"type": event_type, "sequence_number": self._seq, **payload}
         self._seq += 1
         return out
 
@@ -137,7 +179,7 @@ class ResponsesStreamTranslator:
         incomplete,
         error: Any | None = None,
         completed_at: int | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         response = build_response_object(
             self.request,
             status=status,
@@ -154,7 +196,7 @@ class ResponsesStreamTranslator:
         self.created_at = response.created_at
         return self._event(event_type, {"response": response.model_dump(mode="json")})
 
-    def _close_all(self) -> Iterator[str]:
+    def _close_all(self) -> Iterator[dict[str, Any]]:
         # Close every open item, in output-index (first-seen) order.
         yield from self._close_reasoning()
         yield from self._close_message()
@@ -172,11 +214,11 @@ class ResponsesStreamTranslator:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def start(self) -> Iterator[str]:
+    def start(self) -> Iterator[dict[str, Any]]:
         yield self._envelope("response.created", "in_progress", [], None, None)
         yield self._envelope("response.in_progress", "in_progress", [], None, None)
 
-    def process(self, chunk: ChatCompletionStreamResponse) -> Iterator[str]:
+    def process(self, chunk: ChatCompletionStreamResponse) -> Iterator[dict[str, Any]]:
         if chunk.model:
             self.model = chunk.model
         if chunk.usage is not None:
@@ -192,7 +234,7 @@ class ResponsesStreamTranslator:
             if choice.finish_reason is not None:
                 self.finish_reason = choice.finish_reason
 
-    def finish(self) -> Iterator[str]:
+    def finish(self) -> Iterator[dict[str, Any]]:
         yield from self._close_all()
         output = self._collect_output()
 
@@ -202,7 +244,7 @@ class ResponsesStreamTranslator:
         completed_at = int(time.time()) if status == "completed" else None
         yield self._envelope(terminal, status, output, usage, incomplete, completed_at=completed_at)
 
-    def fail(self, message: str) -> Iterator[str]:
+    def fail(self, message: str) -> Iterator[dict[str, Any]]:
         """Terminal ``response.failed`` event for a mid-stream error (a loader
         exception, not a normal completion). Still closes any already-open item
         brackets so a client sees whatever partial content was generated."""
@@ -212,7 +254,7 @@ class ResponsesStreamTranslator:
 
     # -- reasoning channel --------------------------------------------------
 
-    def _on_reasoning(self, text: str) -> Iterator[str]:
+    def _on_reasoning(self, text: str) -> Iterator[dict[str, Any]]:
         if self._reasoning is None:
             self._reasoning = ResponseReasoningItem(summary=[])
             self._reasoning_oi = self._take_oi()
@@ -240,7 +282,7 @@ class ResponsesStreamTranslator:
             },
         )
 
-    def _close_reasoning(self) -> Iterator[str]:
+    def _close_reasoning(self) -> Iterator[dict[str, Any]]:
         if self._reasoning is None:
             return
         item = self._reasoning
@@ -265,7 +307,7 @@ class ResponsesStreamTranslator:
 
     # -- message (content) channel -----------------------------------------
 
-    def _on_content(self, text: str) -> Iterator[str]:
+    def _on_content(self, text: str) -> Iterator[dict[str, Any]]:
         if self._message is None:
             self._message = ResponseOutputMessage(status="in_progress", content=[])
             self._message_oi = self._take_oi()
@@ -293,7 +335,7 @@ class ResponsesStreamTranslator:
             },
         )
 
-    def _close_message(self) -> Iterator[str]:
+    def _close_message(self) -> Iterator[dict[str, Any]]:
         if self._message is None:
             return
         item = self._message
@@ -319,7 +361,7 @@ class ResponsesStreamTranslator:
 
     # -- tool-call channel --------------------------------------------------
 
-    def _on_tool_call(self, tc: DeltaToolCall) -> Iterator[str]:
+    def _on_tool_call(self, tc: DeltaToolCall) -> Iterator[dict[str, Any]]:
         idx = tc.index
         if idx not in self._tools:
             call_id = tc.id or f"call_{random_uuid()}"
@@ -345,7 +387,7 @@ class ResponsesStreamTranslator:
                 {"item_id": item.id, "output_index": self._tool_oi[idx], "delta": tc.function.arguments},
             )
 
-    def _close_tools(self) -> Iterator[str]:
+    def _close_tools(self) -> Iterator[dict[str, Any]]:
         for idx in sorted(self._tools):
             item = self._tools[idx]
             args = self._tool_args[idx]

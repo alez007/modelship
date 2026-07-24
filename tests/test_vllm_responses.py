@@ -122,12 +122,14 @@ async def test_stream_success_produces_native_responses_events():
         mock_ops.render_and_params = AsyncMock(return_value=(MagicMock(), MagicMock()))
         mock_ops.stream_chat_completion = MagicMock(side_effect=fake_stream)
         result = await infer.create_response(request, raw_request=_FakeRawRequest())
-        body = "".join([chunk async for chunk in result])
+        events = [chunk async for chunk in result]
 
-    assert "event: response.created" in body
-    assert "event: response.output_text.delta" in body
-    assert "event: response.completed" in body
-    assert body.endswith("data: [DONE]\n\n")
+    # Plain event dicts, transport-neutral — no SSE framing and no [DONE] sentinel
+    # at this layer; those are added at the gateway edge (see streaming.frame_sse).
+    types = [e["type"] for e in events]
+    assert "response.created" in types
+    assert "response.output_text.delta" in types
+    assert types[-1] == "response.completed"
 
 
 @pytest.mark.asyncio
@@ -146,10 +148,8 @@ async def test_stream_mid_stream_exception_emits_failed_event():
         mock_ops.render_and_params = AsyncMock(return_value=(MagicMock(), MagicMock()))
         mock_ops.stream_chat_completion = MagicMock(side_effect=fake_stream)
         result = await infer.create_response(request, raw_request=_FakeRawRequest())
-        body = "".join([chunk async for chunk in result])
+        events = [chunk async for chunk in result]
 
-    assert "event: response.failed" in body
-    assert "event: response.completed" not in body
-    # A failed stream still terminates the SSE connection on its own; no [DONE]
-    # sentinel follows (that's only emitted on the clean-finish path).
-    assert "[DONE]" not in body
+    types = [e["type"] for e in events]
+    assert types[-1] == "response.failed"
+    assert "response.completed" not in types

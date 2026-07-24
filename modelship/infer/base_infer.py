@@ -232,8 +232,8 @@ class BaseInfer[Prepared](ABC):
         *,
         request_id: str,
         client_error: Callable[[Exception], str | None] = lambda _exc: None,
-    ) -> AsyncGenerator[str, None]:
-        """Drive a Responses SSE event stream from a loader's typed chat chunks.
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Drive a Responses event stream from a loader's typed chat chunks.
 
         Shared by every loader's `create_response`: each supplies its own native
         chunk source (already wrapped in `run_cancellable_stream`) and this owns
@@ -244,6 +244,10 @@ class BaseInfer[Prepared](ABC):
         Any other exception is passed to `client_error`, which returns a
         client-safe message to report via `fail()`, or `None` to log a full
         stack trace and report a generic "Internal error during generation".
+
+        Yields the translator's event dicts as-is — no `[DONE]` sentinel and no SSE
+        framing. Both are transport decisions made at the gateway edge (HTTP's
+        `frame_sse` vs. the WS handler's raw `json.dumps`), not here.
 
         The `finally` block's `chunks.aclose()` is what guarantees `chunks` (and
         transitively the native engine/subprocess stream it wraps) is torn down
@@ -275,7 +279,6 @@ class BaseInfer[Prepared](ABC):
                 return
             for event in translator.finish():
                 yield event
-            yield "data: [DONE]\n\n"
         finally:
             await chunks.aclose()
 
@@ -392,7 +395,7 @@ class BaseInfer[Prepared](ABC):
 
     async def create_response(
         self, request: ResponsesRequest, raw_request: RawRequestProxy
-    ) -> ErrorResponse | ResponseObject | AsyncGenerator[str, None]:
+    ) -> ErrorResponse | ResponseObject | AsyncGenerator[dict[str, Any], None]:
         """Responses counterpart of `create_chat_completion` — see its docstring."""
         prepared = await self._prepare_responses(request, raw_request)
         if isinstance(prepared, ErrorResponse):
@@ -432,7 +435,7 @@ class BaseInfer[Prepared](ABC):
 
     def _create_response_stream(
         self, request: ResponsesRequest, prepared: Prepared, raw_request: RawRequestProxy
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Streaming Responses seam. See `_create_chat_completion_stream`."""
         raise NotImplementedError
 

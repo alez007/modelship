@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from http import HTTPStatus
@@ -181,26 +180,6 @@ def as_input_items(input_: str | list[Any]) -> list[Any]:
     return list(input_)
 
 
-def _terminal_event_payload(chunk: Any) -> dict[str, Any] | None:
-    """The decoded event of *chunk* if it is a terminal Responses SSE event carrying a
-    complete response, else ``None``.
-
-    Recovers the response the gateway just forwarded so it can be stored. Re-parsing
-    our own output is the cost of keeping state in the gateway; it is safe because
-    `streaming._sse` is the only writer of this format. The cheap `event:` line check
-    runs first so ordinary deltas never reach `json.loads`.
-    """
-    if not isinstance(chunk, str) or not any(chunk.startswith(f"event: {t}\n") for t in TERMINAL_EVENT_TYPES):
-        return None
-    _, _, data = chunk.partition("\ndata: ")
-    try:
-        payload = json.loads(data.strip())
-    except json.JSONDecodeError:
-        logger.exception("Could not decode terminal Responses event; not storing this response.")
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 async def resolve_history_items(
     store: StateStore, identity: str, *, previous_response_id: str | None, input_: str | list[Any] | None
 ) -> list[Any]:
@@ -251,9 +230,10 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
 
     Both modes are covered by one wrapper because `_handle_response` dispatches on
     the first item's type either way: a `ResponseObject` is the whole non-streaming
-    body, while a stream arrives as SSE strings whose terminal event carries the
+    body, while a stream arrives as event dicts whose terminal event carries the
     same object. Persisting *before* yielding the terminal item is what lets a
-    store failure still change what the client is told.
+    store failure still change what the client is told. Operates on event dicts
+    directly (no SSE-string re-parsing) — `gen` is upstream of any transport framing.
     """
     async for item in gen:
         if isinstance(item, ResponseObject):
@@ -272,12 +252,11 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
             yield item
             continue
 
-        payload = _terminal_event_payload(item)
-        if payload is None:
+        if not isinstance(item, dict) or item.get("type") not in TERMINAL_EVENT_TYPES:
             yield item
             continue
 
-        response = payload.get("response")
+        response = item.get("response")
         response_id = response.get("id") if isinstance(response, dict) else None
         if not isinstance(response, dict) or not response_id:
             logger.warning("Terminal Responses event has no usable response id; not storing.")
@@ -289,7 +268,7 @@ async def persist_response(gen, store: StateStore, *, identity: str, input_items
         except StateStoreUnavailableError:
             logger.exception("State store unavailable persisting streamed response %s", response.get("id"))
             yield store_failure_event(
-                payload, "Conversation state store is unavailable; the response was generated but not stored."
+                item, "Conversation state store is unavailable; the response was generated but not stored."
             )
             return
         yield item

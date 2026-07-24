@@ -53,6 +53,7 @@ from modelship.openai.protocol import (
     TranslationRequest,
     TranslationResponse,
     create_error_response,
+    frame_sse,
 )
 from modelship.openai.protocol.responses.adapter import UnsupportedResponsesFeatureError
 from modelship.openai.utils import responses as responses_utils
@@ -612,6 +613,11 @@ class ModelshipAPI:
                 identity=identity,
                 input_items=responses_utils.as_input_items(request.input),
             )
+        # HTTP transport framing: SSE-frame event dicts (streaming) and append
+        # `[DONE]`; a non-streaming ResponseObject or a pre-generation ErrorResponse
+        # passes through unchanged. Applied last so persistence above still sees
+        # plain event dicts, not their wire format.
+        response_gen = frame_sse(response_gen)
         return await self._handle_response(response_gen, watcher, model, "create_response")
 
     @app.get("/v1/responses/{response_id}")
