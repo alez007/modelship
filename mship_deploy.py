@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> None:
     from modelship.infer.deploy_coordinator import OperatorProbe, get_or_create_coordinator
     from modelship.infer.replica_coordinator import get_or_create_replica_coordinator
     from modelship.metrics import DEPLOY_DURATION_SECONDS, DEPLOY_MODELS_CHANGED_TOTAL
+    from modelship.openai.compaction_crypto import ensure_key_seeded
     from modelship.preflight import detect_gpus
     from modelship.state import MemoryStateStore, get_state_store
 
@@ -188,6 +189,7 @@ def main(argv: list[str] | None = None) -> None:
             "survives deploys and coordinator restarts but NOT cluster loss. Set MSHIP_STATE_STORE "
             "to redis:// for self-heal after cluster loss."
         )
+    ensure_key_seeded(store)
     effective_raw = read_effective(store, gateway_name)
 
     # No --config: self-heal (reconcile) reconciles live->effective; a join or a bare

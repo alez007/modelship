@@ -30,18 +30,29 @@ _MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 
 @pytest.fixture(autouse=True)
-def _reset_ephemeral_key():
-    """Each test gets a clean slate: no leftover ephemeral key from a previous test
-    leaking in, and none left behind for the next one."""
-    compaction_crypto._ephemeral_key = None
+def _reset_compaction_key(monkeypatch):
+    """Each test gets a clean process-level cache and a fresh backing store — no
+    leftover cached key or seeded state leaking in from a previous test, and a
+    stand-in for the cluster-wide store that's actually reachable without Ray
+    (same unwrapped-actor trick the ``api`` fixture below already uses). One
+    instance per test, closed over so every ``get_state_store()`` call in a test
+    reaches the same store rather than a fresh empty one each time."""
+    compaction_crypto._cached_key = None
+    store = _MemoryStore()
+    monkeypatch.setattr("modelship.state.get_state_store", lambda: store)
     yield
-    compaction_crypto._ephemeral_key = None
+    compaction_crypto._cached_key = None
 
 
 @pytest.fixture
 def compaction_key(monkeypatch):
+    """A key that's both set as the env var and already seeded into the mocked
+    store — mirrors what the deploy driver does before any actor starts."""
     key = Fernet.generate_key().decode("ascii")
     monkeypatch.setenv("MSHIP_COMPACTION_KEY", key)
+    from modelship.state import get_state_store
+
+    compaction_crypto.ensure_key_seeded(get_state_store())
     return key
 
 
@@ -53,8 +64,15 @@ class TestCompactionCrypto:
 
     def test_wrong_key_raises_invalid_token(self, compaction_key):
         blob = compaction_crypto.encrypt_items([{"a": 1}])
+        # Simulate a different process decrypting after the shared store's key
+        # changed (e.g. a rotation) — clear this process's cache and overwrite what
+        # the store holds.
         other_key = Fernet.generate_key().decode("ascii")
-        with patch.dict("os.environ", {"MSHIP_COMPACTION_KEY": other_key}), pytest.raises(InvalidToken):
+        compaction_crypto._cached_key = None
+        from modelship.state import get_state_store
+
+        get_state_store().set("compaction/key", {"key": other_key})
+        with pytest.raises(InvalidToken):
             compaction_crypto.decrypt_items(blob)
 
     def test_tampered_blob_raises_invalid_token(self, compaction_key):
@@ -69,34 +87,55 @@ class TestCompactionCrypto:
         with pytest.raises(InvalidToken):
             compaction_crypto.decrypt_items("not-ascii-🔥")
 
-    def test_invalid_configured_key_fails_fast_with_clear_error(self, monkeypatch):
-        monkeypatch.setenv("MSHIP_COMPACTION_KEY", "not-a-valid-fernet-key")
-        with pytest.raises(ValueError, match="MSHIP_COMPACTION_KEY is not a valid Fernet key"):
+    def test_resolve_key_fails_hard_when_store_is_unseeded(self):
+        # No compaction_key fixture here — the store is empty. encrypt_items must
+        # raise rather than silently mint a per-process key, which is the exact
+        # failure mode (a gateway and a model actor diverging on separate ephemeral
+        # keys) this module exists to eliminate.
+        with pytest.raises(RuntimeError, match="no compaction key found"):
             compaction_crypto.encrypt_items([{"a": 1}])
 
-    def test_ephemeral_key_used_and_warns_when_unset(self, monkeypatch, caplog):
-        monkeypatch.delenv("MSHIP_COMPACTION_KEY", raising=False)
-        # Attach caplog's handler directly to this logger: some other test module's
-        # `configure_logging()` call sets `modelship`'s `propagate = False` for the
-        # rest of the process, which would otherwise stop the record from ever
-        # reaching caplog's root-attached handler.
-        compaction_crypto.logger.addHandler(caplog.handler)
-        try:
-            with caplog.at_level("WARNING", logger="modelship.compaction_crypto"):
-                blob = compaction_crypto.encrypt_items([{"a": 1}])
-        finally:
-            compaction_crypto.logger.removeHandler(caplog.handler)
-        assert "ephemeral" in caplog.text
-        assert compaction_crypto.decrypt_items(blob) == [{"a": 1}]
+    def test_ensure_key_seeded_validates_a_bad_configured_key(self, monkeypatch):
+        monkeypatch.setenv("MSHIP_COMPACTION_KEY", "not-a-valid-fernet-key")
+        from modelship.state import get_state_store
 
-    def test_ephemeral_key_is_stable_within_process(self, monkeypatch):
-        monkeypatch.delenv("MSHIP_COMPACTION_KEY", raising=False)
+        with pytest.raises(ValueError, match="MSHIP_COMPACTION_KEY is not a valid Fernet key"):
+            compaction_crypto.ensure_key_seeded(get_state_store())
+
+    def test_key_is_cached_after_first_resolution(self, compaction_key):
         compaction_crypto.encrypt_items([{"a": 1}])
-        key_after_first = compaction_crypto._ephemeral_key
-        # A second call must reuse the same ephemeral key, not mint a new one, or a
+        key_after_first = compaction_crypto._cached_key
+        # A second call must reuse the same cached key, not re-read the store, or a
         # blob minted earlier in the same process would stop decoding.
         compaction_crypto.encrypt_items([{"b": 2}])
-        assert compaction_crypto._ephemeral_key == key_after_first
+        assert compaction_crypto._cached_key == key_after_first
+
+    def test_two_processes_share_the_seeded_key(self, compaction_key):
+        """The actual regression this module exists to prevent: encrypting in one
+        process and decrypting in another (simulated here by clearing the
+        process-local cache) must agree, since both read the same shared store."""
+        blob = compaction_crypto.encrypt_items([{"a": 1}])
+        compaction_crypto._cached_key = None
+        assert compaction_crypto.decrypt_items(blob) == [{"a": 1}]
+
+    def test_ensure_key_seeded_is_a_noop_if_already_present(self, monkeypatch):
+        monkeypatch.delenv("MSHIP_COMPACTION_KEY", raising=False)
+        from modelship.state import get_state_store
+
+        store = get_state_store()
+        compaction_crypto.ensure_key_seeded(store)
+        first = store.get("compaction/key")
+        compaction_crypto.ensure_key_seeded(store)
+        assert store.get("compaction/key") == first
+
+    def test_ensure_key_seeded_uses_explicit_env_key(self, monkeypatch):
+        key = Fernet.generate_key().decode("ascii")
+        monkeypatch.setenv("MSHIP_COMPACTION_KEY", key)
+        from modelship.state import get_state_store
+
+        store = get_state_store()
+        compaction_crypto.ensure_key_seeded(store)
+        assert store.get("compaction/key") == {"key": key}
 
 
 class TestCompactSchemas:
