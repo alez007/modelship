@@ -1,29 +1,13 @@
 """Symmetric encryption for ``/v1/responses/compact``'s ``encrypted_content`` blobs.
 
-The compact endpoint returns an opaque, server-produced string that the client
-later replays verbatim as input — nothing about its format is spec'd or tested
-(see the compaction plan). This is one legitimate implementation: real Fernet
-encryption, so the blob is genuinely opaque to whoever holds it and tampering
-is detected rather than silently decoded.
+Real Fernet encryption keeps the blob opaque to holders and detects tampering;
+its format isn't otherwise spec'd (see the compaction plan).
 
-The key itself is resolved once by the deploy driver (``ensure_key_seeded``,
-called from ``mship_deploy.py`` before any actor starts) and stored in the
-cluster-wide ``StateStore`` — the same store the effective config and
-``/v1/responses`` conversation state already use. Every reader (the gateway's
-``encrypt_items`` call, a model actor's ``decrypt_items`` call) is a different
-Ray process, so a per-process-random key would never round-trip: encrypting
-in the gateway and decrypting in a model actor are, by construction, always
-two different processes, not a "multi-replica" edge case. Reading from the
-shared store instead of ``os.environ`` on every call means every process
-converges on the same key regardless of which node it landed on; ``redis://``
-survives a lost cluster too, exactly like ``MSHIP_RESPONSES_TTL_S``'s conversation
-state.
-
-``_resolve_key`` only ever reads the store — it does not generate a key on the
-fly. If nothing is seeded yet it fails hard with a clear error rather than
-silently minting a per-process key, which is exactly the failure mode this
-module exists to eliminate. Callers outside the normal deploy flow (tests,
-ad-hoc scripts) must call ``ensure_key_seeded`` themselves first.
+The key is resolved once by the deploy driver (``ensure_key_seeded``) and
+stored in the shared ``StateStore``, so every gateway/model-actor process reads
+the same key regardless of node. ``_resolve_key`` never generates one on the
+fly — callers outside the deploy flow (tests, scripts) must call
+``ensure_key_seeded`` first.
 """
 
 from __future__ import annotations
@@ -59,12 +43,8 @@ def _validate(raw: str) -> bytes:
 
 
 def ensure_key_seeded(store: StateStore) -> None:
-    """Resolve ``MSHIP_COMPACTION_KEY`` (or generate one) and persist it to *store*.
-
-    Called once by the deploy driver before any actor starts, so every gateway
-    and model-actor process — regardless of which node it lands on — reads the
-    same already-resolved key instead of each independently checking the env.
-    A no-op if the store already has a key (redeploys, joins, self-heal).
+    """Resolve ``MSHIP_COMPACTION_KEY`` (or generate one) and persist it to *store*,
+    so every process reads the same key. No-op if the store already has one.
     """
     if store.get(_STATE_KEY) is not None:
         return
@@ -83,8 +63,7 @@ def _resolve_key() -> bytes:
     stored = get_state_store().get(_STATE_KEY)
     raw = stored.get("key") if isinstance(stored, dict) else None
     if not isinstance(raw, str):
-        # The deploy driver seeds this before any actor starts; a caller outside
-        # that flow (a test, a script) must call ensure_key_seeded() itself first.
+        # Caller outside the deploy flow (test, script) must call ensure_key_seeded() first.
         raise RuntimeError("no compaction key found in the state store")
     key = raw.encode("ascii")
     _cached_key = key

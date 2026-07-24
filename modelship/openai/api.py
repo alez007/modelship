@@ -70,8 +70,7 @@ logger = get_logger("api")
 _DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
 # Backoff before retrying the gateway watch loop after a transient coordinator error.
 _WATCH_RETRY_S = 5.0
-# Cap on a WS connection's local store:false continuation cache — a long-lived socket
-# issuing many such turns must not grow this unboundedly. Oldest entry evicted first.
+# Cap on a WS connection's local store:false continuation cache; oldest entry evicted first.
 _WS_CONN_CACHE_MAX = 16
 
 
@@ -118,10 +117,8 @@ def build_app():
 
     @app.exception_handler(responses_utils.ResponsesApiError)
     async def log_responses_api_error(request: Request, exc: responses_utils.ResponsesApiError):
-        # More specific than the plain-HTTPException handler below — Starlette's
-        # exception-handler lookup walks the MRO, so this wins for ResponsesApiError
-        # even though it *is* an HTTPException. Renders the full OpenAI error
-        # envelope instead of the generic {"detail": ...} body.
+        # MRO-based lookup means this wins over the plain-HTTPException handler
+        # below, rendering the full OpenAI error envelope instead of {"detail": ...}.
         logger.warning("%s %s -> %s: %s", request.method, request.url.path, exc.err._http_status, exc.err.error.message)
         return _error_response(exc.err)
 
@@ -606,8 +603,7 @@ class ModelshipAPI:
                 # yet, so nothing else will cancel its polling task.
                 watcher.stop()
                 raise
-            # Already item-list-shaped (resolve_history's return type) — avoid
-            # re-normalizing what's already normalized.
+            # Already item-list-shaped (resolve_history's return type) — avoid re-normalizing.
             input_items_for_turn = request.input
         else:
             input_items_for_turn = responses_utils.as_input_items(request.input)
@@ -635,38 +631,17 @@ class ModelshipAPI:
                 identity=identity,
                 input_items=input_items_for_turn,
             )
-        # HTTP transport framing: SSE-frame event dicts (streaming) and append
-        # `[DONE]`; a non-streaming ResponseObject or a pre-generation ErrorResponse
-        # passes through unchanged. Applied last so persistence above still sees
-        # plain event dicts, not their wire format.
+        # SSE-frame + [DONE] happen here, after persistence, so persist_response still sees plain event dicts.
         response_gen = frame_sse(response_gen)
         return await self._handle_response(response_gen, watcher, model, "create_response")
 
     @app.websocket("/v1/responses")
     async def responses_ws(self, websocket: WebSocket):
         """WebSocket transport for ``/v1/responses``: one socket, many sequential
-        turns. Each text frame in is a `{"type": "response.create", ...}` body; each
-        text frame out is one Responses event dict (`json.dumps`d directly — no SSE
-        framing, and never a `[DONE]` sentinel, since a terminal event on this socket
-        doesn't mean the *connection* is done, only that turn is).
-
-        BaseHTTPMiddleware (auth, payload-size) never runs for websocket connections,
-        so auth is enforced here, before `accept()` — see `check_ws_auth`.
-
-        A single reader task owns the socket. Starlette's `WebSocket.receive()` has
-        no queueing of its own — it's a thin wrapper over the ASGI `receive`
-        callable, which uvicorn backs with the `websockets` library's `recv()`;
-        that raises `RuntimeError` outright if a second coroutine calls it while
-        one is already waiting (`websockets.legacy.protocol.recv`'s own docstring:
-        "Raises: RuntimeError: If two coroutines call recv() concurrently."). So the
-        turn loop can't just `receive_text()` for the next frame *and* separately
-        await a disconnect signal — only one task may ever call `receive()`. Routing
-        every inbound frame through a queue owned by a single reader task sidesteps
-        that, and as a bonus lets the reader notice a client disconnect *while* a
-        turn is generating (not just between turns) and propagate it through the
-        same `DisconnectRegistry` actor HTTP's `RequestWatcher` uses, so in-flight
-        loader work is cancelled the same way it is for an HTTP disconnect.
+        turns. Each frame in is a `{"type": "response.create", ...}` body; each
+        frame out is one raw event dict (`json.dumps`d, no SSE framing, no `[DONE]`).
         """
+        # BaseHTTPMiddleware skips websocket connections, so auth runs here, before accept().
         if not await check_ws_auth(websocket):
             return
         await websocket.accept()
@@ -678,6 +653,8 @@ class ModelshipAPI:
         current_req_id: str | None = None
 
         async def _reader() -> None:
+            # Only one coroutine may call websocket.receive() at a time, so a single
+            # reader task queues frames — this also lets it catch a mid-turn disconnect.
             nonlocal current_req_id
             try:
                 while True:
@@ -717,10 +694,9 @@ class ModelshipAPI:
         registry: Any,
         req_id: str,
     ) -> None:
-        """Run one `response.create` turn to completion, sending every event frame
-        directly (never buffering a whole turn) and never raising back into the
-        socket loop — any failure, at any stage, is rendered as a `webSocketErrorEventSchema`
-        frame instead so one bad turn never kills the connection."""
+        """Run one `response.create` turn to completion. Never raises back into the
+        socket loop — any failure is sent as an error frame instead, so one bad turn
+        never kills the connection."""
         self._set_request_id(req_id)
 
         try:
@@ -744,10 +720,7 @@ class ModelshipAPI:
             return
 
         body = {k: v for k, v in msg.items() if k != "type"}
-        # stream/stream_options/background aren't meaningful on a transport that's
-        # always streaming and never backgrounds a turn; OpenAIBaseModel is
-        # extra="allow", so an un-popped `type` would otherwise silently ride the
-        # Ray hop too.
+        # Not meaningful on an always-streaming transport; drop them so extra="allow" doesn't pass them through.
         for unsupported in ("stream", "stream_options", "background"):
             body.pop(unsupported, None)
         try:
@@ -762,8 +735,7 @@ class ModelshipAPI:
         prev_id = request.previous_response_id
         try:
             if prev_id is not None and prev_id in conn_cache:
-                # Connection-local state (never written to the global store) — a
-                # continuation this socket itself produced with store:false.
+                # A continuation this socket itself produced with store:false.
                 this_turn = responses_utils.as_input_items(request.input) if request.input is not None else []
                 request.input = [*responses_state.history_items(conn_cache[prev_id]), *this_turn]
                 input_items_for_turn = request.input
@@ -771,9 +743,7 @@ class ModelshipAPI:
                 request.input = await responses_utils.resolve_history(self._state_store, identity, request)
                 input_items_for_turn = request.input
             else:
-                # No resolution happened, so request.input is untouched (str or
-                # list, dispatched to the loader as-is, matching HTTP) — only the
-                # persist/cache bookkeeping below needs it item-list-shaped.
+                # request.input is left untouched here; only the persist/cache bookkeeping below needs item-list form.
                 input_items_for_turn = responses_utils.as_input_items(request.input)
         except responses_utils.ResponsesApiError as exc:
             await websocket.send_text(error_ws_frame(exc.err))
@@ -802,11 +772,8 @@ class ModelshipAPI:
                 handle.respond.options(stream=True).remote(request, headers, registry, req_id, identity),
             )
             if request.store is not False:
-                # Same helper HTTP uses: writes the terminal event to the global
-                # store *before* yielding it, so a store failure can still flip
-                # what's sent (response.failed instead of completed) — that
-                # substitution works identically whether the caller then SSE-frames
-                # the result (HTTP) or json.dumps it straight to a socket (here).
+                # Same helper HTTP uses — persists before yielding, so a store
+                # failure can still flip the terminal event to response.failed.
                 response_gen = responses_utils.persist_response(
                     response_gen, self._state_store, identity=identity, input_items=input_items_for_turn
                 )
@@ -826,11 +793,15 @@ class ModelshipAPI:
                     terminal_response = item.get("response")
         except RayTaskError as exc:
             cause = exc.cause if isinstance(exc.cause, BaseException) else None
-            err = (
-                _validation_error_from_cause(cause)
-                if isinstance(cause, ValueError | TypeError | OverflowError)
-                else create_error_response(str(exc), err_type="api_error", status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-            )
+            if isinstance(cause, ValueError | TypeError | OverflowError):
+                err = _validation_error_from_cause(cause)
+            else:
+                logger.exception("responses request %s failed over websocket", req_id)
+                err = create_error_response(
+                    "Internal error during generation",
+                    err_type="api_error",
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             await websocket.send_text(error_ws_frame(err))
             failed = True
         except Exception:
@@ -852,9 +823,7 @@ class ModelshipAPI:
         if failed:
             REQUEST_ERRORS_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "error_type": "inference_error"})
             REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "error"})
-            # A failed continuation evicts its previous_response_id: a client that
-            # retries the same previous_response_id must get a clean
-            # previous_response_not_found rather than replaying whatever broke it.
+            # Evict so a retry of the same previous_response_id gets a clean 404, not a replay of what broke it.
             if prev_id is not None:
                 conn_cache.pop(prev_id, None)
             return

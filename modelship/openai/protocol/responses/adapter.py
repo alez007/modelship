@@ -92,10 +92,8 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
         messages.append({"role": "user", "content": input_})
         return messages
 
-    # call_ids seen from a function_call in *this* input list — a function_call_output
-    # whose call_id isn't among them is orphaned (no call for it to be a result of).
-    # Scoped per call (not shared across a compaction item's nested recursive call
-    # below): a decrypted sub-history is its own coherent conversation.
+    # call_ids seen from a function_call earlier in this list; an unmatched
+    # function_call_output is orphaned. Reset per call, not shared across recursion.
     seen_call_ids: set[str] = set()
     for item in input_:
         itype = item.get("type")
@@ -125,10 +123,7 @@ def messages_from_input(input_: str | list[dict[str, Any]], instructions: str | 
                 }
             )
         elif itype == "function_call_output":
-            # call_id ties the result back to its call; required, and must reference
-            # a function_call actually present earlier in this input — an orphaned
-            # tool result is a client bug worth surfacing as a real 400 rather than
-            # silently sent to the model as a dangling tool_call_id.
+            # call_id must reference a function_call seen earlier — an orphaned tool result should 400, not silently pass through.
             call_id = item.get("call_id")
             if not call_id:
                 raise UnsupportedResponsesFeatureError("function_call_output input items require 'call_id'.")

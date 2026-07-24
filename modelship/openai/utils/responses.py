@@ -173,14 +173,9 @@ def responses_validation_error(exc: ValidationError) -> ErrorResponse:
 
 
 class ResponsesApiError(HTTPException):
-    """An ``HTTPException`` that also carries a full OpenAI-shaped ``ErrorResponse``.
-
-    Lets a shared helper (this module) serve both the HTTP route (rendered via
-    ``_error_response``) and the WS turn-runner (rendered via ``error_ws_frame``)
-    with the *same* raise, instead of each transport needing its own error type.
-    Subclasses ``HTTPException`` rather than a bare exception so existing
-    ``pytest.raises(HTTPException)`` / ``.status_code`` assertions keep working, and
-    so FastAPI still renders something sane if a route ever forgets to catch it.
+    """An ``HTTPException`` that also carries a full OpenAI-shaped ``ErrorResponse``,
+    so one raise renders correctly for both the HTTP route and the WS turn-runner.
+    Subclasses ``HTTPException`` so existing ``status_code``/``pytest.raises`` checks still work.
     """
 
     def __init__(self, err: ErrorResponse):
@@ -188,17 +183,23 @@ class ResponsesApiError(HTTPException):
         super().__init__(status_code=err._http_status, detail=err.error.message)
 
 
-def _not_found_error(previous_response_id: str) -> ResponsesApiError:
-    # "previous_response_not_found" is OpenAI's actual code for this failure —
-    # reused verbatim by load_snapshot's GET/DELETE 404s too, which fail for the
-    # same underlying reason (no such response id under this identity).
+def _not_found_error(response_id: str, *, previous: bool = False) -> ResponsesApiError:
+    if previous:
+        # "previous_response_not_found" is OpenAI's actual code for this failure.
+        return ResponsesApiError(
+            create_error_response(
+                f"Previous response with id '{response_id}' not found.",
+                err_type="invalid_request_error",
+                status_code=HTTPStatus.NOT_FOUND,
+                param="previous_response_id",
+                code="previous_response_not_found",
+            )
+        )
     return ResponsesApiError(
         create_error_response(
-            f"Previous response with id '{previous_response_id}' not found.",
+            f"Response with id '{response_id}' not found.",
             err_type="invalid_request_error",
             status_code=HTTPStatus.NOT_FOUND,
-            param="previous_response_id",
-            code="previous_response_not_found",
         )
     )
 
@@ -235,14 +236,14 @@ async def resolve_history_items(
     if previous_response_id is None:
         return this_turn
     if not RESPONSE_ID_RE.match(previous_response_id):
-        raise _not_found_error(previous_response_id)
+        raise _not_found_error(previous_response_id, previous=True)
     try:
         snapshot = await responses_state.read_async(store, identity, previous_response_id)
     except StateStoreUnavailableError:
         logger.exception("State store unavailable resolving previous_response_id=%s", previous_response_id)
         raise _store_unavailable_error() from None
     if snapshot is None:
-        raise _not_found_error(previous_response_id)
+        raise _not_found_error(previous_response_id, previous=True)
     return [*responses_state.history_items(snapshot), *this_turn]
 
 
@@ -256,16 +257,11 @@ async def resolve_history(store: StateStore, identity: str, request: ResponsesRe
 async def persist_response(gen, store: StateStore, *, identity: str, input_items: list[Any]):
     """Tee `respond`'s output, storing the snapshot as it passes.
 
-    Wraps the generator ahead of `_handle_response` so that stays generic. The
-    response id is read back off the output rather than minted here — the loader
-    already owns it, on both paths.
-
-    Both modes are covered by one wrapper because `_handle_response` dispatches on
-    the first item's type either way: a `ResponseObject` is the whole non-streaming
-    body, while a stream arrives as event dicts whose terminal event carries the
-    same object. Persisting *before* yielding the terminal item is what lets a
-    store failure still change what the client is told. Operates on event dicts
-    directly (no SSE-string re-parsing) — `gen` is upstream of any transport framing.
+    Covers both streaming and non-streaming: a `ResponseObject` is the whole
+    body, while a stream's terminal event dict carries the same object. Persists
+    *before* yielding the terminal item so a store failure can still change what
+    the client is told. Operates on plain event dicts — `gen` is upstream of any
+    transport framing.
     """
     async for item in gen:
         if isinstance(item, ResponseObject):

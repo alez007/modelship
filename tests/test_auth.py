@@ -149,10 +149,7 @@ class TestCheckWsAuth:
             assert ws.receive_text() == "ok"
 
     def test_missing_key_rejected_before_accept(self):
-        # The server closes without ever accepting, so the rejection surfaces as
-        # early as entering the connection context manager itself, not on the
-        # first receive — pytest.raises must be entered before it (order matters
-        # in a `with (a, b, c):` tuple: each is entered left to right).
+        # Rejection surfaces on entering the context manager, not on first receive.
         client = TestClient(_make_ws_app())
         with (
             patch("modelship.openai.auth.get_api_keys", return_value=KEYS),
@@ -171,8 +168,7 @@ class TestCheckWsAuth:
             pass
 
     def test_no_keys_configured_allows_unauthenticated_connection(self):
-        # Mirrors ApiKeyMiddleware's own posture: auth is opt-in via MSHIP_API_KEYS,
-        # so an empty key set means "disabled", not "reject everyone".
+        # An empty key set means auth is disabled, not "reject everyone".
         client = TestClient(_make_ws_app())
         with (
             patch("modelship.openai.auth.get_api_keys", return_value=set()),

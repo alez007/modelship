@@ -31,12 +31,7 @@ _MemoryStore = MemoryStoreActor.__ray_metadata__.modified_class
 
 @pytest.fixture(autouse=True)
 def _reset_compaction_key(monkeypatch):
-    """Each test gets a clean process-level cache and a fresh backing store — no
-    leftover cached key or seeded state leaking in from a previous test, and a
-    stand-in for the cluster-wide store that's actually reachable without Ray
-    (same unwrapped-actor trick the ``api`` fixture below already uses). One
-    instance per test, closed over so every ``get_state_store()`` call in a test
-    reaches the same store rather than a fresh empty one each time."""
+    """Clean process-level cache and a fresh backing store per test."""
     compaction_crypto._cached_key = None
     store = _MemoryStore()
     monkeypatch.setattr("modelship.state.get_state_store", lambda: store)
@@ -64,9 +59,7 @@ class TestCompactionCrypto:
 
     def test_wrong_key_raises_invalid_token(self, compaction_key):
         blob = compaction_crypto.encrypt_items([{"a": 1}])
-        # Simulate a different process decrypting after the shared store's key
-        # changed (e.g. a rotation) — clear this process's cache and overwrite what
-        # the store holds.
+        # Simulate a key rotation: clear this process's cache, overwrite the store.
         other_key = Fernet.generate_key().decode("ascii")
         compaction_crypto._cached_key = None
         from modelship.state import get_state_store
@@ -88,10 +81,7 @@ class TestCompactionCrypto:
             compaction_crypto.decrypt_items("not-ascii-🔥")
 
     def test_resolve_key_fails_hard_when_store_is_unseeded(self):
-        # No compaction_key fixture here — the store is empty. encrypt_items must
-        # raise rather than silently mint a per-process key, which is the exact
-        # failure mode (a gateway and a model actor diverging on separate ephemeral
-        # keys) this module exists to eliminate.
+        # No compaction_key fixture here — the store is empty.
         with pytest.raises(RuntimeError, match="no compaction key found"):
             compaction_crypto.encrypt_items([{"a": 1}])
 
@@ -111,9 +101,8 @@ class TestCompactionCrypto:
         assert compaction_crypto._cached_key == key_after_first
 
     def test_two_processes_share_the_seeded_key(self, compaction_key):
-        """The actual regression this module exists to prevent: encrypting in one
-        process and decrypting in another (simulated here by clearing the
-        process-local cache) must agree, since both read the same shared store."""
+        """Encrypting in one process and decrypting in another (simulated by clearing
+        the process-local cache) must agree, since both read the same shared store."""
         blob = compaction_crypto.encrypt_items([{"a": 1}])
         compaction_crypto._cached_key = None
         assert compaction_crypto.decrypt_items(blob) == [{"a": 1}]

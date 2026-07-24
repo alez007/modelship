@@ -233,30 +233,14 @@ class BaseInfer[Prepared](ABC):
         request_id: str,
         client_error: Callable[[Exception], str | None] = lambda _exc: None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Drive a Responses event stream from a loader's typed chat chunks.
+        """Drive a Responses event stream: start() -> process() per chunk ->
+        finish()/fail(). Yields plain event dicts; SSE/WS framing happens at the
+        transport edge, not here.
 
-        Shared by every loader's `create_response`: each supplies its own native
-        chunk source (already wrapped in `run_cancellable_stream`) and this owns
-        the `ResponsesStreamTranslator` lifecycle — start, one `process()` per
-        chunk, then `finish()` on a clean end or `fail()` on an error.
-        `ClientDisconnectedError` (raised by `run_cancellable_stream` once the
-        client is gone) ends the stream silently, matching every other endpoint.
-        Any other exception is passed to `client_error`, which returns a
-        client-safe message to report via `fail()`, or `None` to log a full
-        stack trace and report a generic "Internal error during generation".
-
-        Yields the translator's event dicts as-is — no `[DONE]` sentinel and no SSE
-        framing. Both are transport decisions made at the gateway edge (HTTP's
-        `frame_sse` vs. the WS handler's raw `json.dumps`), not here.
-
-        The `finally` block's `chunks.aclose()` is what guarantees `chunks` (and
-        transitively the native engine/subprocess stream it wraps) is torn down
-        even when neither of the `except` branches runs — e.g. the consumer
-        (Starlette/Ray Serve) closes *this* generator early while it's suspended
-        at one of the `yield`s below. `async for` does not propagate that closure
-        into the generator being iterated the way `yield from` would for a
-        synchronous generator, so without this `chunks` would otherwise be left
-        suspended forever, leaking its disconnect-poll task and underlying stream.
+        `client_error(exc)` returns a client-safe message for `fail()`, or None to
+        log the full trace and use a generic message. `chunks.aclose()` in `finally`
+        is required: closing this generator early doesn't propagate into `chunks`
+        via `async for` the way `yield from` would for a sync generator.
         """
         translator = ResponsesStreamTranslator(request)
         try:

@@ -307,14 +307,13 @@ class TestFrameSse:
 
     @pytest.mark.asyncio
     async def test_non_dict_passthrough_gets_no_done_sentinel(self):
-        # A pre-generation ErrorResponse (or a non-streaming ResponseObject) is a
-        # single-shot reply, not a stream — nothing was framed, so no [DONE].
+        # A single-shot reply, not a stream — nothing was framed, so no [DONE].
         out = await self._drain(["not a dict"])
         assert out == ["not a dict"]
 
 
 class TestErrorWsFrame:
-    def test_valid_webscoket_error_event_shape(self):
+    def test_valid_websocket_error_event_shape(self):
         err = create_error_response("bad request", err_type="invalid_request_error", code="previous_response_not_found")
         frame = json.loads(error_ws_frame(err))
         assert frame == {

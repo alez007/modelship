@@ -81,15 +81,9 @@ def _matched_api_key(token: str, keys: set[str]) -> str | None:
 
 
 async def check_ws_auth(websocket: WebSocket) -> bool:
-    """WebSocket counterpart of ``ApiKeyMiddleware.dispatch``.
-
-    ``BaseHTTPMiddleware`` (which ``ApiKeyMiddleware`` subclasses) never runs for a
-    websocket connection — its ``__call__`` passes any ``scope["type"] != "http"``
-    straight through — so a websocket route must enforce auth itself, before
-    ``accept()``, or inference is served unauthenticated to anyone who can reach the
-    port. Mirrors ``ApiKeyMiddleware.dispatch``'s logic exactly (``/v1/responses`` is
-    not a public path); closes with code 1008 (policy violation) without accepting on
-    failure, which Starlette surfaces as an HTTP 403 at the handshake.
+    """WebSocket counterpart of ``ApiKeyMiddleware.dispatch`` — ``BaseHTTPMiddleware``
+    never runs for websocket connections, so this must be called before ``accept()``.
+    Closes with code 1008 (policy violation) on failure, without accepting.
     """
     api_keys = get_api_keys()
     if not api_keys:
@@ -131,9 +125,7 @@ def get_trusted_identity_header() -> str | None:
 def resolve_identity(request: HTTPConnection) -> tuple[str, str]:
     """Resolve (identity_key, identity_tier) in one pass and cache the result on ``request.state``.
 
-    Takes an ``HTTPConnection`` rather than the narrower ``Request`` so a ``WebSocket``
-    (which subclasses the same base — both only need ``.headers``/``.state``) can call
-    this directly; no separate WS identity path needed.
+    Takes an ``HTTPConnection`` (not ``Request``) so ``WebSocket`` can call this directly too.
 
     Not an auth check — never rejects a request. Resolution order:
 

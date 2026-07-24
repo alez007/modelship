@@ -80,21 +80,15 @@ def store_failure_event(terminal_payload: dict[str, Any], message: str) -> dict[
 
 
 def _encode_sse_event(event: dict[str, Any]) -> str:
-    """Wire-format one Responses event dict as an SSE frame (named event line + JSON
-    data line). The dict already carries its own ``type`` key."""
+    """Wire-format one Responses event dict as an SSE frame (named event line + JSON data line)."""
     return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
 
 
 async def frame_sse(gen: AsyncIterator[Any]) -> AsyncGenerator[Any, None]:
-    """HTTP transport edge for ``/v1/responses``: SSE-frame every event dict in *gen*,
-    passing anything else (a non-streaming ``ResponseObject``, a pre-generation
-    ``ErrorResponse``) through unchanged. Appends the ``data: [DONE]\\n\\n`` sentinel
-    once the stream ends, but only if at least one event was actually framed — a bare
-    passthrough item is a single-shot reply, not a stream, and gets no sentinel.
-
-    The counterpart WS transport never sends ``[DONE]`` (see the websocket handler) —
-    framing, including whether to terminate with a sentinel at all, is a per-transport
-    decision made at this edge, not by the translator or the loader.
+    """HTTP transport edge: SSE-frame each event dict in *gen*, passing anything else
+    (a non-streaming ``ResponseObject``, a pre-generation ``ErrorResponse``) through
+    unchanged. Appends ``data: [DONE]\\n\\n`` once the stream ends, but only if
+    something was actually framed.
     """
     framed_any = False
     async for item in gen:
@@ -109,9 +103,7 @@ async def frame_sse(gen: AsyncIterator[Any]) -> AsyncGenerator[Any, None]:
 
 def error_ws_frame(err: ErrorResponse) -> str:
     """WS transport edge: render an ``ErrorResponse`` as a ``webSocketErrorEventSchema``
-    text frame. The WS schema requires ``error.code`` as a non-null string (stricter
-    than OpenAI's own, which allows ``None``) — fall back to the error ``type`` when we
-    haven't mapped a specific code.
+    text frame. Falls back to the error ``type`` for ``code`` since the WS schema requires it non-null.
     """
     error = err.error.model_dump(mode="json", exclude_none=True)
     if not error.get("code"):
@@ -125,11 +117,8 @@ class ResponsesStreamTranslator:
     One instance per request. Emit :meth:`start` first, feed every parsed chunk
     to :meth:`process`, then emit :meth:`finish` once the chat stream ends.
 
-    Transport-neutral: every method yields plain event **dicts**
-    (``{"type": <event>, "sequence_number": ..., ...}``), not pre-framed SSE
-    strings — framing (and whether a ``[DONE]`` sentinel follows) is a per-transport
-    decision made at the gateway edge (see :func:`frame_sse` for HTTP; the WS handler
-    ``json.dumps``s the dict directly and never sends ``[DONE]``).
+    Transport-neutral: every method yields plain event dicts, not pre-framed SSE
+    strings — framing happens at the gateway edge (see :func:`frame_sse`).
     """
 
     def __init__(self, request: ResponsesRequest):

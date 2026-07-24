@@ -220,9 +220,8 @@ class TestPreviousResponseIdResolution:
 
     @pytest.mark.asyncio
     async def test_reconnect_on_a_fresh_socket_misses_a_store_false_response(self, api):
-        # Socket A caches resp_1 locally (store:false, never written to the global
-        # store). Socket B is a different connection — its own, empty, conn_cache —
-        # so the same previous_response_id must miss even though it's "real".
+        # Socket B is a different connection with its own, empty, conn_cache — a miss
+        # even though resp_1 is real on socket A.
         _wire(api, "m", _events(_terminal("resp_1")))
         ws_a = _FakeWebSocket()
         conn_cache_a: dict = {}
@@ -248,9 +247,7 @@ class TestPreviousResponseIdResolution:
         await api._run_ws_turn(ws, "unscoped", {}, _frame(store=False), conn_cache, MagicMock(), "req-1")
         assert "resp_1" in conn_cache
 
-        # Turn 2 continues resp_1 (a cache hit) but the loader fails it — e.g. the
-        # orphan function_call_output rejection in the adapter surfaces here as a
-        # leading ErrorResponse, same as any other pre-generation validation failure.
+        # Turn 2 continues resp_1 (a cache hit) but the loader fails it.
         failing_gen = _events(create_error_response("orphaned function_call_output", status_code=400))
         _wire(api, "m", failing_gen)
         await api._run_ws_turn(

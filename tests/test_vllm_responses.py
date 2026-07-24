@@ -124,8 +124,7 @@ async def test_stream_success_produces_native_responses_events():
         result = await infer.create_response(request, raw_request=_FakeRawRequest())
         events = [chunk async for chunk in result]
 
-    # Plain event dicts, transport-neutral — no SSE framing and no [DONE] sentinel
-    # at this layer; those are added at the gateway edge (see streaming.frame_sse).
+    # Plain event dicts — SSE framing and [DONE] are added at the gateway edge.
     types = [e["type"] for e in events]
     assert "response.created" in types
     assert "response.output_text.delta" in types
