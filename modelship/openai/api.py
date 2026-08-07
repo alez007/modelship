@@ -54,8 +54,10 @@ from modelship.openai.protocol import (
     SpeechRequest,
     TranscriptionRequest,
     TranscriptionResponse,
+    TranscriptionResponseVerbose,
     TranslationRequest,
     TranslationResponse,
+    TranslationResponseVerbose,
     create_error_response,
     error_ws_frame,
     frame_sse,
@@ -468,7 +470,9 @@ class ModelshipAPI:
                 | ResponseObject
                 | EmbeddingResponse
                 | TranscriptionResponse
+                | TranscriptionResponseVerbose
                 | TranslationResponse
+                | TranslationResponseVerbose
                 | ImageGenerationResponse,
             ):
                 REQUEST_TOTAL.inc(tags={"model": model, "endpoint": endpoint, "status": "ok"})

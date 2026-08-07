@@ -1358,8 +1358,7 @@ dependencies = [
     { name = "colorlog" },
     { name = "espeakng-loader" },
     { name = "numpy" },
-    { name = "onnxruntime", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-mship-cuda'" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-mship-cpu' or extra != 'extra-5-mship-cuda' or (extra == 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')" },
+    { name = "onnxruntime" },
     { name = "phonemizer-fork" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/36/7c/4d74f7243f546716003bd0cfaae8f562f5d75672142f23fa731f69069efd/kokoro_onnx-0.4.9.tar.gz", hash = "sha256:08682138939f61548a7186ef5cdae79180a5dff6fa23781910eddb1583dcf30b", size = 81209, upload-time = "2025-05-10T22:49:04.758Z" }
@@ -1788,7 +1787,8 @@ dependencies = [
 cpu = [
     { name = "librosa" },
     { name = "numba" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "onnxruntime" },
+    { name = "pywhispercpp" },
     { name = "scipy" },
     { name = "soundfile" },
     { name = "stable-diffusion-cpp-python" },
@@ -1807,6 +1807,7 @@ cuda = [
     { name = "numba" },
     { name = "nvidia-ml-py" },
     { name = "onnxruntime-gpu" },
+    { name = "pywhispercpp" },
     { name = "scipy" },
     { name = "soundfile" },
     { name = "stable-diffusion-cpp-python" },
@@ -1832,7 +1833,8 @@ kokoroonnx = [
 metal = [
     { name = "librosa" },
     { name = "numba" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "onnxruntime" },
+    { name = "pywhispercpp" },
     { name = "scipy" },
     { name = "soundfile" },
     { name = "stable-diffusion-cpp-python" },
@@ -1889,6 +1891,9 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
+    { name = "pywhispercpp", marker = "extra == 'cpu'", specifier = ">=1.5.0" },
+    { name = "pywhispercpp", marker = "extra == 'cuda'", specifier = ">=1.5.0" },
+    { name = "pywhispercpp", marker = "extra == 'metal'", specifier = ">=1.5.0" },
     { name = "ray", extras = ["data", "default", "serve-grpc"], specifier = ">=2.54.0,<2.55.0" },
     { name = "redis", specifier = ">=8.0.0" },
     { name = "requests", specifier = ">=2.32.5" },
@@ -2352,74 +2357,13 @@ wheels = [
 
 [[package]]
 name = "onnxruntime"
-version = "1.24.4"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'darwin'",
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-]
-dependencies = [
-    { name = "flatbuffers", marker = "extra == 'extra-5-mship-cuda'" },
-    { name = "numpy", marker = "extra == 'extra-5-mship-cuda'" },
-    { name = "packaging", marker = "extra == 'extra-5-mship-cuda'" },
-    { name = "protobuf", marker = "extra == 'extra-5-mship-cuda'" },
-    { name = "sympy", marker = "extra == 'extra-5-mship-cuda'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/38/31db1b232b4ba960065a90c1506ad7a56995cd8482033184e97fadca17cc/onnxruntime-1.24.4-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:cad1c2b3f455c55678ab2a8caa51fb420c25e6e3cf10f4c23653cdabedc8de78", size = 17341875, upload-time = "2026-03-17T22:05:51.669Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/60/c4d1c8043eb42f8a9aa9e931c8c293d289c48ff463267130eca97d13357f/onnxruntime-1.24.4-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1a5c5a544b22f90859c88617ecb30e161ee3349fcc73878854f43d77f00558b5", size = 15172485, upload-time = "2026-03-17T22:03:32.182Z" },
-    { url = "https://files.pythonhosted.org/packages/6d/ab/5b68110e0460d73fad814d5bd11c7b1ddcce5c37b10177eb264d6a36e331/onnxruntime-1.24.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0d640eb9f3782689b55cfa715094474cd5662f2f137be6a6f847a594b6e9705c", size = 17244912, upload-time = "2026-03-17T22:04:37.251Z" },
-    { url = "https://files.pythonhosted.org/packages/8b/f4/6b89e297b93704345f0f3f8c62229bee323ef25682a3f9b4f89a39324950/onnxruntime-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:535b29475ca42b593c45fbb2152fbf1cdf3f287315bf650e6a724a0a1d065cdb", size = 12596856, upload-time = "2026-03-17T22:05:41.224Z" },
-    { url = "https://files.pythonhosted.org/packages/43/06/8b8ec6e9e6a474fcd5d772453f627ad4549dfe3ab8c0bf70af5afcde551b/onnxruntime-1.24.4-cp312-cp312-win_arm64.whl", hash = "sha256:e6214096e14b7b52e3bee1903dc12dc7ca09cb65e26664668a4620cc5e6f9a90", size = 12270275, upload-time = "2026-03-17T22:05:31.132Z" },
-]
-
-[[package]]
-name = "onnxruntime"
 version = "1.28.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "(platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "(platform_machine == 's390x' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "(platform_machine == 's390x' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "platform_machine == 'aarch64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "(platform_machine == 's390x' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "(platform_machine == 's390x' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "(platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "platform_machine == 'aarch64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "platform_machine == 'aarch64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "platform_machine == 'aarch64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "(platform_machine == 'ppc64le' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "(platform_machine == 'ppc64le' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "(platform_machine != 'aarch64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'ppc64le' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal') or (platform_machine == 'riscv64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal')",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform == 'emscripten' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "platform_machine != 'aarch64' and platform_machine != 'ppc64le' and platform_machine != 'riscv64' and platform_machine != 's390x' and platform_machine != 'x86_64' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "sys_platform == 'win32' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "sys_platform == 'emscripten' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal'",
-    "sys_platform == 'win32' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "sys_platform == 'emscripten' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-5-mship-cpu' and extra != 'extra-5-mship-cuda' and extra != 'extra-5-mship-metal'",
-]
 dependencies = [
-    { name = "flatbuffers", marker = "extra == 'extra-5-mship-cpu' or extra != 'extra-5-mship-cuda' or (extra == 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')" },
-    { name = "numpy", marker = "extra == 'extra-5-mship-cpu' or extra != 'extra-5-mship-cuda' or (extra == 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')" },
-    { name = "packaging", marker = "extra == 'extra-5-mship-cpu' or extra != 'extra-5-mship-cuda' or (extra == 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')" },
-    { name = "protobuf", marker = "extra == 'extra-5-mship-cpu' or extra != 'extra-5-mship-cuda' or (extra == 'extra-5-mship-cuda' and extra == 'extra-5-mship-metal')" },
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/f8/dcbe7700dca82fa540035abd3c868fe5ad0f86af00b9a3db7c2e27d15c7d/onnxruntime-1.28.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:26ff0fdd06efb6c155bae95387a09db1a2be89c7a03e4d0bffd5a171cc2826da", size = 19141362, upload-time = "2026-07-25T01:22:36.965Z" },
@@ -3298,7 +3242,7 @@ wheels = [
 
 [[package]]
 name = "pywhispercpp"
-version = "1.4.1"
+version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
@@ -3306,15 +3250,15 @@ dependencies = [
     { name = "requests" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/7d/fe4b2b190d6cdcf0d5e4ca2b946d73bc449a586606a24d25ff50ffec5a5c/pywhispercpp-1.4.1.tar.gz", hash = "sha256:520ce9275bb6fc81e0daa2e08144a80ee006b117a18058a77860c5b1c9c122f4", size = 1812704, upload-time = "2025-12-30T03:02:12.54Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/43/8778f0685a4d32d74efdfa78fc5f745ca9998d96f8121dbf7793db2da5d3/pywhispercpp-1.5.0.tar.gz", hash = "sha256:5aa54c73ec96617d97aa519dbbf817e44255eddd9bd52ee1243be61028dbd018", size = 2333262, upload-time = "2026-05-30T03:43:37.398Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/81/a4ca043b96a1cd05659af556223de31ce336f5c88f1decd9ca4def8b8f42/pywhispercpp-1.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:92168783736e23e9e274e4496024a7a25d670601a130a35befd627b6f717a98a", size = 2207307, upload-time = "2025-12-30T03:01:22.876Z" },
-    { url = "https://files.pythonhosted.org/packages/77/63/7f3f7af598bfaa0fd4836cbd16716a7098c521a76404d5f7bac6211ec725/pywhispercpp-1.4.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ed46e7469feaad4a03e25a9f75fe54da791d161489ca02c160540135f21ac481", size = 2378182, upload-time = "2025-12-30T03:01:24.115Z" },
-    { url = "https://files.pythonhosted.org/packages/b0/5f/6ad9e807bf705c053a87078aec118f1d154247418a592a2ac0a7622b0539/pywhispercpp-1.4.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:aef812596e4726a76c8b5a090d3e4f0ad9e2ebc70f004164ec754a60aaf56446", size = 2630413, upload-time = "2025-12-30T03:01:25.915Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/06/9dac4ebee6fb436650965161082e7de674c68a959fd4ee530cbb231eb4f4/pywhispercpp-1.4.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b0dd76b28359f7cb82b999627acd4b6a6c1f7aa8106810601d80712d873e3f90", size = 3285003, upload-time = "2025-12-30T03:01:27.676Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/91/72c3b3f85239816d5414b12b190b474e9e7e37472fb0b1cfdff75d42448b/pywhispercpp-1.4.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:8f7f2cd5a0f876134d7ee85c7603e55d0df830ca2e8d910cc11d7e8c0423b739", size = 3556791, upload-time = "2025-12-30T03:01:29.417Z" },
-    { url = "https://files.pythonhosted.org/packages/c0/77/bc7c07353afcf31c81817fcced7a09457aadfe2f825d6243664189955715/pywhispercpp-1.4.1-cp312-cp312-win32.whl", hash = "sha256:dfe69c89c830aad506685c460d5115e6a52159150b86ee2b9a2618e7786767be", size = 1041447, upload-time = "2025-12-30T03:01:30.686Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/b0/ffcb3e797d80b02e77a174e60f80cd94e851491647e64227ca76b4e2bcf8/pywhispercpp-1.4.1-cp312-cp312-win_amd64.whl", hash = "sha256:4beb57ec35dc0457188470ab4ef673620ce9a49a99ddecd0ae76567986dba908", size = 1222302, upload-time = "2025-12-30T03:01:32.631Z" },
+    { url = "https://files.pythonhosted.org/packages/78/22/e944ab33c3daf6c78f30d6dd943d84ececf3eb4625da2a3eedacff5590cd/pywhispercpp-1.5.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:24602b8d0329a224fe6eb1c1e455853e983a5e04a63d4cb759ae2f275e254f5f", size = 3963140, upload-time = "2026-05-30T03:42:50.93Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/a3/e1daeb58fc76b9cd5f108708ecbeb4e1175ee9d366502033066eae71c51b/pywhispercpp-1.5.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a839b738936a8cd72cdd55c59a83a462820532bee78e233241bf9a3503e92144", size = 3962387, upload-time = "2026-05-30T03:42:52.536Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/a7/d8b196d1fa83ec6072c32e021f1987079bbeb25009a4fe7a10967d02b249/pywhispercpp-1.5.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6ad4071772eb9dad59a741611e44e3819e6249c46e295ab8468609d03c6e4232", size = 4437117, upload-time = "2026-05-30T03:42:53.842Z" },
+    { url = "https://files.pythonhosted.org/packages/45/8e/28069ac89a08ebc3e56616a07a36c1628d61fa679a45ea3f507da7f5cb13/pywhispercpp-1.5.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:22f9ddf12f6fb0fe3c43465d976b554e8928fcc113c902127e94c792d85f0631", size = 4736369, upload-time = "2026-05-30T03:42:55.283Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/c8/2e63aaf0c1c6f9a3e4f05db9c2c6f8f922937f0b508f5f9e338b2ac5e58a/pywhispercpp-1.5.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3f825942067da3b0c48fc5b552b816fcee1761e955b9fdfdc911f0ab2d6fff11", size = 5211824, upload-time = "2026-05-30T03:42:56.735Z" },
+    { url = "https://files.pythonhosted.org/packages/97/15/bf1ff8b4fbc777fa2bfc89ff8cddff103ee251807f3f440a518184da7570/pywhispercpp-1.5.0-cp312-cp312-win32.whl", hash = "sha256:03025227d0da211e382db6b6b16d910a267c663b6b2c57092b1200965ec45393", size = 1170123, upload-time = "2026-05-30T03:42:58.197Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/88/fb11006f84b0af46cedf1f66a6190bb78cafb29c0d89d5a73d5ba25ffc43/pywhispercpp-1.5.0-cp312-cp312-win_amd64.whl", hash = "sha256:f9b1cd9dd4c3eb7fb2b777529eb62618e58a6bb05be20f82b7b1afe3d0b12274", size = 1318389, upload-time = "2026-05-30T03:42:59.28Z" },
 ]
 
 [[package]]

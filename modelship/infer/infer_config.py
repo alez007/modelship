@@ -53,6 +53,7 @@ class ModelLoader(StrEnum):
     diffusers = "diffusers"
     llama_server = "llama_server"
     stable_diffusion_cpp = "stable_diffusion_cpp"
+    whispercpp = "whispercpp"
     custom = "custom"
 
 
@@ -144,6 +145,17 @@ class LlamaServerConfig(BaseModel):
     cache_ram_mib: int | None = Field(default=None, ge=-1)
     # Escape hatch for launch flags not otherwise surfaced, appended verbatim.
     extra_args: list[str] = Field(default_factory=list)
+
+
+class WhispercppConfig(BaseModel):
+    """Tunables for the ``whispercpp`` loader, which runs whisper.cpp in-process
+    via `pywhispercpp` bindings (no subprocess)."""
+
+    # None keeps pywhispercpp's own default (min(4, hardware_concurrency())).
+    n_threads: int | None = None
+    flash_attn: bool = False
+    # Only used for a bare pywhispercpp model name. None -> `<cache_root>/whispercpp`.
+    models_dir: str | None = None
 
 
 class StableDiffusionCppConfig(BaseModel):
@@ -241,6 +253,7 @@ class ModelshipModelConfig(BaseModel):
     diffusers_config: DiffusersConfig | None = None
     llama_server_config: LlamaServerConfig | None = None
     stable_diffusion_cpp_config: StableDiffusionCppConfig | None = None
+    whispercpp_config: WhispercppConfig | None = None
     plugin_config: dict[str, Any] | None = None  # plugin devs parse this themselves
     # Extra variables forwarded verbatim into the chat-template Jinja render on
     # every text loader (e.g. `enable_thinking: false` for Qwen3). Only does
@@ -279,14 +292,14 @@ class ModelshipModelConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_llama_server_num_gpus(self):
-        # llama.cpp has no VRAM-fraction knob, so a fractional GPU share can't be
-        # honored — require whole GPUs (or 0 for CPU).
-        if self.loader == ModelLoader.llama_server and self.num_gpus != int(self.num_gpus):
+    def validate_whole_gpu_only_loaders_num_gpus(self):
+        # Neither backend has a VRAM-fraction knob — require whole GPUs (or 0).
+        whole_gpu_loaders = (ModelLoader.llama_server, ModelLoader.whispercpp)
+        if self.loader in whole_gpu_loaders and self.num_gpus != int(self.num_gpus):
             raise ValueError(
                 f"num_gpus={self.num_gpus!r} is not allowed for the {self.loader.value} loader: "
                 f"use an integer number of whole GPUs, or 0 for CPU. Fractional GPU "
-                f"sharing isn't supported (llama.cpp has no GPU-memory fraction control)."
+                f"sharing isn't supported (no GPU-memory fraction control for this loader)."
             )
         return self
 

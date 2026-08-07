@@ -115,10 +115,13 @@ class PinnedSource(NamedTuple):
     def resolves_to_gguf(self) -> bool:
         """Whether this source resolves to a single `.gguf` file, without
         downloading it."""
+        return self._resolves_to_extension(".gguf")
+
+    def _resolves_to_extension(self, suffix: str) -> bool:
         if self.resolved_path is not None:
-            return self.resolved_path.lower().endswith(".gguf")
+            return self.resolved_path.lower().endswith(suffix)
         filename = self.download_filename or self.first_shard
-        return bool(filename and filename.lower().endswith(".gguf"))
+        return bool(filename and filename.lower().endswith(suffix))
 
 
 def check_model_source(model_ref: str, trust_remote_code: bool = False) -> PinnedSource:

@@ -26,6 +26,7 @@ LOADER_MODULES = {
     "vllm": "vllm",
     "diffusers": "diffusers",
     "stable_diffusion_cpp": "stable_diffusion_cpp",
+    "whispercpp": "pywhispercpp",
 }
 
 _LLAMA_SERVER_LOADER = "llama_server"

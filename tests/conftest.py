@@ -175,6 +175,21 @@ MODEL_CONFIGS: dict[str, dict] = {
             "trust_remote_code": True,
         },
     },
+    "stt-cpp-model": {
+        "name": "stt-cpp-model",
+        "model": "tiny.en",
+        "usecase": "transcription",
+        "loader": "whispercpp",
+        "num_cpus": 1,
+    },
+    "stt-cpp-multilingual": {
+        "name": "stt-cpp-multilingual",
+        # Multilingual counterpart of stt-cpp-model: exercises auto-detection and translate.
+        "model": "tiny",
+        "usecase": "transcription",
+        "loader": "whispercpp",
+        "num_cpus": 1,
+    },
     "tts-model": {
         "name": "tts-model",
         "model": "hexgrad/Kokoro-82M",

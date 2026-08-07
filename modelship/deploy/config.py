@@ -69,6 +69,12 @@ def resolve_all_plugin_wheels(yml_conf: ModelshipConfig) -> dict[str, Path]:
     return wheels
 
 
+def _is_whispercpp_builtin_ref(model: str) -> bool:
+    """A bare pywhispercpp built-in name (e.g. `base.en`) — no repo or path
+    separator. Validated in the actor; the driver may lack pywhispercpp."""
+    return "/" not in model and not os.path.exists(model)
+
+
 def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
     """Pre-flight: check every built-in-loader model's source, without
     downloading any weight bytes.
@@ -87,6 +93,10 @@ def resolve_all_model_sources(yml_conf: ModelshipConfig) -> None:
     """
     for cfg in yml_conf.models:
         if cfg.loader == ModelLoader.custom:
+            continue
+        if cfg.loader == ModelLoader.whispercpp and cfg.model and _is_whispercpp_builtin_ref(cfg.model):
+            # pywhispercpp resolves/downloads its own built-in models; nothing to pin here.
+            logger.info("Skipping source check for '%s': pywhispercpp built-in model %r", cfg.name, cfg.model)
             continue
         assert cfg.model is not None  # validator guarantees this for built-in loaders
         trust_remote_code = bool(cfg.vllm_engine_kwargs and cfg.vllm_engine_kwargs.trust_remote_code)

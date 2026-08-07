@@ -59,6 +59,9 @@ def build_cache_env_vars() -> dict[str, str]:
         "TRITON_CACHE_DIR": os.environ.get("TRITON_CACHE_DIR", f"{base_cache}/triton"),
         # vLLM's usage-stats thread writes usage_stats.json/do_not_track here
         "VLLM_CONFIG_ROOT": os.environ.get("VLLM_CONFIG_ROOT", f"{base_cache}/vllm-config"),
+        # Default download dir for the whispercpp loader's pywhispercpp-managed
+        # built-in model names (a bare `model:` like `base.en`).
+        "MSHIP_WHISPERCPP_CACHE_DIR": os.environ.get("MSHIP_WHISPERCPP_CACHE_DIR", f"{base_cache}/whispercpp"),
     }
     for var in ("HF_TOKEN", "HF_HUB_OFFLINE"):
         if os.environ.get(var) is not None:
@@ -140,16 +143,16 @@ def build_deployment_options(config: ModelshipModelConfig, plugin_wheel: Path | 
 
     capability_resources = deployment_capability_resources(config)
 
-    if config.loader == ModelLoader.stable_diffusion_cpp and platform.system() != "Darwin":
-        # Off Darwin the loader's ggml backend genuinely is CPU-only. On Darwin,
-        # ggml's runtime device registry picks up Metal automatically — forcing
-        # 0 here wouldn't stop the actor from using the GPU, it would just make
-        # Ray believe it isn't, letting it co-schedule another GPU actor onto it.
+    if config.loader in (ModelLoader.stable_diffusion_cpp, ModelLoader.whispercpp) and platform.system() != "Darwin":
+        # Off Darwin both loaders' ggml backends are CPU-only; on Darwin ggml
+        # picks up Metal on its own, so forcing 0 there would just mislead Ray
+        # into co-scheduling another GPU actor onto the same device.
         if config.num_gpus > 0:
             logger.warning(
-                "num_gpus=%s is ignored for model '%s': stable_diffusion_cpp loader only supports GPU on Metal.",
+                "num_gpus=%s is ignored for model '%s': %s loader only supports GPU on Metal (Apple Silicon).",
                 config.num_gpus,
                 config.name,
+                config.loader.value,
             )
         opts: dict = {
             "ray_actor_options": {

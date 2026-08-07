@@ -95,7 +95,7 @@ If `MSHIP_TRUSTED_IDENTITY_HEADER` is unset (the default), modelship falls back 
 | `name` | string | Model identifier used in API requests |
 | `model` | string | HuggingFace repo ID, local path, or `repo:filename` (see [Model source](#model-source)). Required for built-in loaders; optional for `loader: custom` |
 | `usecase` | string | `generate`, `embed`, `transcription`, `translation`, `tts`, or `image` |
-| `loader` | string | `vllm`, `diffusers`, `llama_server`, `stable_diffusion_cpp`, or `custom` |
+| `loader` | string | `vllm`, `diffusers`, `llama_server`, `stable_diffusion_cpp`, `whispercpp`, or `custom` |
 | `plugin` | string | Plugin module name (required when `loader: custom`); automatically loaded from wheels when referenced |
 | `num_gpus` | float \| int | GPU allocation. Fractional `< 1` shares one GPU (also sets vLLM `gpu_memory_utilization`); integer `≥ 1` requests that many whole GPUs (for `vllm`, this auto-sets `tensor_parallel_size = num_gpus` unless tp/pp is already specified). |
 | `num_cpus` | float | CPU units to allocate (default `0.1`) |
@@ -440,6 +440,31 @@ models:
       cfg_scale: 1.0
 ```
 
+## whispercpp Loader
+
+The `whispercpp` loader runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) speech-to-text in-process via [`pywhispercpp`](https://github.com/absadiki/pywhispercpp) bindings — no subprocess, unlike `llama_server`. It's CPU-only on Linux; on Apple Silicon (`num_gpus: 1`) it also gets Metal offload via the same wheel. `num_gpus` must be `0` or a whole integer — fractional is rejected, same as `llama_server`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `n_threads` | int | pywhispercpp's own default (`min(4, cores)`) | Compute thread count |
+| `flash_attn` | bool | `false` | ggml flash attention |
+| `models_dir` | string | `<cache_root>/whispercpp` | Only used when `model:` is a bare pywhispercpp built-in name (see below) — where it downloads/caches that model |
+
+`model:` accepts three forms:
+- A pywhispercpp built-in name (e.g. `base.en`, `large-v3-turbo` — see [pywhispercpp's model list](https://github.com/absadiki/pywhispercpp/blob/main/pywhispercpp/constants.py)). pywhispercpp resolves and downloads these itself; modelship does not pre-validate or pin a source.
+- A local path or HF `repo:filename` pointing at a `ggml-*.bin` file, resolved the same way as every other loader (see [Model source](#model-source)). GGUF and safetensors are both rejected with a pointer at the right form (whisper.cpp needs the legacy ggml format; a `.gguf` isn't it).
+
+```yaml
+models:
+  - name: "whisper-cpp-base"
+    model: "base.en"
+    usecase: "transcription"
+    loader: "whispercpp"
+    num_cpus: 2
+```
+
+See `config/examples/whispercpp.yaml` for every `model:` form and a Metal example.
+
 ## Custom Loader (Plugins)
 
 The `custom` loader delegates to a plugin module. The `plugin` field is required and must match an installed plugin package. Plugin-specific options are passed via `plugin_config`.
@@ -447,7 +472,7 @@ The `custom` loader delegates to a plugin module. The `plugin` field is required
 See each plugin's README for configuration details:
 - [Kokoro ONNX TTS](https://github.com/modelship-ai/modelship/blob/main/plugins/kokoroonnx/README.md)
 - [Orpheus TTS](https://github.com/modelship-ai/modelship/blob/main/plugins/orpheus/README.md)
-- [whisper.cpp STT](https://github.com/modelship-ai/modelship/blob/main/plugins/whispercpp/README.md)
+- whisper.cpp STT: superseded by [`loader: whispercpp`](#whispercpp-loader) above; the plugin still exists but the loader is the supported path going forward.
 
 For writing your own plugin, see [Plugin Development](plugins.md).
 

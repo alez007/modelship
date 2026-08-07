@@ -49,6 +49,9 @@ _WHISPER_SAMPLE_RATE = 16000
 class ModelPlugin(BasePlugin):
     def __init__(self, model_config: ModelshipModelConfig):
         self.model_config = model_config
+        if not model_config.model:
+            raise ValueError(f"whispercpp plugin requires `model:` (deployment '{model_config.name}')")
+        model_name = model_config.model
         plugin_config = model_config.plugin_config or {}
 
         models_dir = plugin_config.get("models_dir", f"{plugins_dir()}/whispercpp")
@@ -58,8 +61,8 @@ class ModelPlugin(BasePlugin):
         if (n_threads := plugin_config.get("n_threads")) is not None:
             kwargs["n_threads"] = n_threads
 
-        logger.info("loading whisper.cpp model: %s (dir=%s)", model_config.model, models_dir)
-        self.model = Model(model_config.model, **kwargs)
+        logger.info("loading whisper.cpp model: %s (dir=%s)", model_name, models_dir)
+        self.model = Model(model_name, **kwargs)
 
     async def start(self):
         pass
